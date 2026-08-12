@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.capacity-search.v1",
+  "title": "Capacity search",
+  "description": "The capacity-search.json recording the rate ladder a search walked for one subject and where it stopped. Capacity is the highest offered rate at which the subject still meets its objectives, so the objectives are carried here beside the answer, and every probe stays in the document with the reasons it failed and the digest of the bundle it came from - a search that reported only its answer would be asking a reader to trust the search. Confirmation probes are separate from the ladder: they are repetitions at the settled rate, run after the bracket closed. Documentation mirror of the CapacitySearch serde type in crates/bench-schema/src/capacity.rs, which is the source of truth.",
+  "type": "object",
+  "required": ["schema", "subject", "slo", "probes", "resolution", "confirmation", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.capacity-search.v1"
+    },
+    "subject": {
+      "type": "string",
+      "description": "The subject whose capacity was searched for. A capacity is always a capacity of something."
+    },
+    "slo": {
+      "type": "object",
+      "description": "The objectives every probe was judged against, in the SloSpec shape kafkars.experiment.v1 carries. Durations are whole milliseconds and slopes are whole percent.",
+      "additionalProperties": false,
+      "properties": {
+        "corrected_p99_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "schedule_delay_p99_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "drain_tail_ms": { "type": ["integer", "null"], "minimum": 0 },
+        "queue_slope_percent": { "type": ["integer", "null"], "minimum": 0 },
+        "queue_slope_floor_records_per_second": { "type": ["integer", "null"], "minimum": 0 },
+        "minimum_queue_samples": { "type": ["integer", "null"], "minimum": 0 },
+        "native_retries": { "type": ["integer", "null"], "minimum": 0 },
+        "native_timeouts": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "probes": {
+      "type": "array",
+      "description": "Every probe the search offered, in the order it offered them.",
+      "items": { "$ref": "#/$defs/probe" }
+    },
+    "bracket_low": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Highest rate known to satisfy the objectives. Absent until one is known."
+    },
+    "bracket_high": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Lowest rate known to violate them. Absent until one is known; never below bracket_low."
+    },
+    "resolution": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Bracket width, in records per second, the search narrows to. A bracket that narrows to zero never closes."
+    },
+    "confirmed_rate": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "The confirmed capacity. Present if and only if status is converged: an unconverged or invalid search that carried a rate would be stating a capacity nobody established."
+    },
+    "confirmation": {
+      "type": "array",
+      "description": "Repetitions at confirmed_rate, run after the bracket closed. These are what turn 'the search stopped here' into 'this rate holds'.",
+      "items": { "$ref": "#/$defs/probe" }
+    },
+    "status": {
+      "enum": ["converged", "unconverged", "invalid"],
+      "description": "converged: the bracket closed within the resolution and the rate was confirmed. unconverged: bounds, budget, or probes ran out first. invalid: the probes cannot support any conclusion, for example because every run was invalid."
+    }
+  },
+  "$defs": {
+    "probe": {
+      "type": "object",
+      "title": "One offered rate",
+      "required": [
+        "offered_records_per_second",
+        "attempt_id",
+        "bundle_digest",
+        "satisfied",
+        "reasons"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "offered_records_per_second": { "type": "integer", "minimum": 0 },
+        "attempt_id": {
+          "type": "string",
+          "description": "Attempt id of the run that offered this rate."
+        },
+        "bundle_digest": {
+          "type": "string",
+          "description": "Digest of the sealed bundle that run produced."
+        },
+        "satisfied": {
+          "type": "boolean",
+          "description": "Whether every objective held at this rate."
+        },
+        "reasons": {
+          "type": "array",
+          "description": "One reason per objective that did not hold; empty when satisfied.",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -132,6 +132,7 @@ fn balanced_1k() -> ResolvedExperiment {
                     "target/release/kafkars-benchmark-adapter".to_owned(),
                     "--adapter-protocol".to_owned(),
                 ],
+                role: None,
             },
             SubjectSpec {
                 name: "librdkafka-c".to_owned(),
@@ -142,6 +143,7 @@ fn balanced_1k() -> ResolvedExperiment {
                     "--binary".to_owned(),
                     "target/librdkafka/librdkafka-producer-benchmark".to_owned(),
                 ],
+                role: None,
             },
         ],
         runtime: Some(RuntimeBinding {

@@ -31,10 +31,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{SchemaError, SchemaResult};
 use crate::experiment::LoadMode;
 use crate::histogram::EncodedHistogram;
-use crate::schema_id::require_schema;
-
-/// The schema id of this document.
-pub const PRODUCER_BENCHMARK_V2: &str = "kafkars.producer-benchmark.v2";
+use crate::schema_id::{PRODUCER_BENCHMARK_V2, require_schema};
 
 /// What the adapter actually did in the measured path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

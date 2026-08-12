@@ -39,7 +39,7 @@
 //! # Layout
 //!
 //! - `error` — the single failure type, a kind plus context.
-//! - `schema_id` — the 26 schema ids and [`require_schema`].
+//! - `schema_id` — the 31 schema ids and [`require_schema`].
 //! - `canon` — canonical and pretty JSON bytes; float rejection.
 //! - `identity` — [`ExperimentId`], the two-key exclusion, sha-256 helpers.
 //! - `experiment` — `kafkars.experiment.v1` and its cross-field rules.
@@ -51,11 +51,19 @@
 //! - `environment` — the machine, repository-agnostic, identity-bearing.
 //! - `classify` — validity, claim eligibility, and comparison ratios.
 //! - `legacy` — lenient views of the documents today's adapters write.
+//! - `histogram` — the log-linear layout every latency is carried in.
+//! - `result_v2` — `kafkars.producer-benchmark.v2`, the four-timestamp offer
+//!   model and its accounting invariants.
+//! - `suite` — medians, paired ratios, dispersion, and gates over repetitions.
+//! - `capacity` — the rate ladder a capacity search walked.
+//! - `packet` — the deterministic analysis input, and the [`Verdict`].
+//! - `llm` — prose over a packet, checked against it.
 #![forbid(unsafe_code)]
 
 mod adapter;
 mod bundle;
 mod canon;
+mod capacity;
 mod classify;
 mod environment;
 mod error;
@@ -63,11 +71,14 @@ mod experiment;
 mod histogram;
 mod identity;
 mod legacy;
+mod llm;
 mod lock;
+mod packet;
 mod result_v2;
 mod schema_id;
 mod source;
 mod status;
+mod suite;
 
 pub use adapter::{
     AdapterCapabilities, AdapterDescription, AdapterFailure, AdapterOutcome, AdapterStatus,
@@ -80,13 +91,15 @@ pub use canon::{
     canonical_bytes, canonical_bytes_of_value, parse_json_slice, parse_json_str, pretty_bytes,
     pretty_bytes_of_value, reject_floats, to_canonical_value,
 };
+pub use capacity::{CapacityProbe, CapacitySearch, CapacityStatus};
 pub use classify::{Classification, Comparison, ComparisonPair, SubjectValidity};
 pub use environment::{BrokerFacts, EnvironmentDocument, HostFacts, RepositoryState, UNAVAILABLE};
 pub use error::{SchemaError, SchemaErrorKind, SchemaResult};
 pub use experiment::{
     ApplicationSpec, ArrivalModel, BudgetSpec, ClusterSpec, ExperimentKind, LoadMode,
     MAX_SUBJECT_NAME_LENGTH, MAX_TOPIC_NAME_LENGTH, PayloadSpec, ProducerSpec, ResolvedExperiment,
-    RuntimeBinding, SloSpec, SubjectSpec, TopicPair, is_topic_charset_safe,
+    RuntimeBinding, SUBJECT_ROLE_ANCHOR, SUBJECT_ROLE_BASE, SUBJECT_ROLE_HEAD, SUBJECT_ROLES,
+    SloSpec, SubjectSpec, TopicPair, is_subject_role, is_topic_charset_safe,
 };
 pub use histogram::{
     EncodedHistogram, HISTOGRAM_LAYOUT_V1, Histogram, SUB_BUCKET_BITS, SUB_BUCKET_COUNT,
@@ -97,21 +110,27 @@ pub use identity::{
     identity_document, is_digest_hex, sha256_hex,
 };
 pub use legacy::{KnownProducerResult, LegacyLatency, LegacyPercentiles, VerifierReport};
+pub use llm::{Confidence, LlmFinding, LlmHypothesis, LlmSummary};
 pub use lock::{SubjectLockEntry, SubjectsLock};
+pub use packet::{
+    AnalysisPacket, PacketFinding, PacketMetric, PacketSource, PacketSubject, PacketValidity,
+    Verdict,
+};
 pub use result_v2::{
-    DeclaredExecution, MeasuredThroughput, OfferOutcomes, OfferTiming, PRODUCER_BENCHMARK_V2,
-    ProcessResources, ProducerBenchmarkV2, QueueObservation,
+    DeclaredExecution, MeasuredThroughput, OfferOutcomes, OfferTiming, ProcessResources,
+    ProducerBenchmarkV2, QueueObservation,
 };
 pub use schema_id::{
-    ADAPTER_STATUS_V1, ADAPTER_V1, ADAPTER_VALIDATE_V1, BENCHMARK_ADAPTER_CONFIG_V1,
-    BENCHMARK_ENVIRONMENT_V1, BENCHMARK_ENVIRONMENT_V2, BUNDLE_V1, CLASSIFICATION_V1,
-    COMPARISON_V1, ENGINE_SCHEMA_IDS, EXECUTION_ORDER_V1, EXPERIMENT_V1, LEGACY_SCHEMA_IDS,
-    LIBRDKAFKA_CAPACITY_CURVE_V2, LIBRDKAFKA_CAPACITY_PROBE_V2, LIBRDKAFKA_NATIVE_METRICS_V1,
-    LIBRDKAFKA_STATISTICS_V1, PROCESS_RESOURCES_V2, PRODUCER_BENCHMARK_V1,
-    PRODUCER_COMPARISON_SUITE_V1, PRODUCER_COMPARISON_V1, PRODUCER_FIXED_COMPARISON_SUITE_V2,
-    PRODUCER_FIXED_COMPARISON_V2, PRODUCER_FIXED_LOAD_V1, PRODUCER_FIXED_MATRIX_V2,
-    PRODUCER_VERIFICATION_V1, RUN_STATUS_V1, SCHEMA_FILE_SUFFIX, SUBJECTS_LOCK_V1, is_registered,
-    registered_schema_ids, require_schema, schema_file_name, schema_id_from_file_name,
+    ADAPTER_STATUS_V1, ADAPTER_V1, ADAPTER_VALIDATE_V1, ANALYSIS_PACKET_V1,
+    BENCHMARK_ADAPTER_CONFIG_V1, BENCHMARK_ENVIRONMENT_V1, BENCHMARK_ENVIRONMENT_V2, BUNDLE_V1,
+    CAPACITY_SEARCH_V1, CLASSIFICATION_V1, COMPARISON_V1, ENGINE_SCHEMA_IDS, EXECUTION_ORDER_V1,
+    EXPERIMENT_V1, LEGACY_SCHEMA_IDS, LIBRDKAFKA_CAPACITY_CURVE_V2, LIBRDKAFKA_CAPACITY_PROBE_V2,
+    LIBRDKAFKA_NATIVE_METRICS_V1, LIBRDKAFKA_STATISTICS_V1, LLM_SUMMARY_V1, PROCESS_RESOURCES_V2,
+    PRODUCER_BENCHMARK_V1, PRODUCER_BENCHMARK_V2, PRODUCER_COMPARISON_SUITE_V1,
+    PRODUCER_COMPARISON_V1, PRODUCER_FIXED_COMPARISON_SUITE_V2, PRODUCER_FIXED_COMPARISON_V2,
+    PRODUCER_FIXED_LOAD_V1, PRODUCER_FIXED_MATRIX_V2, PRODUCER_VERIFICATION_V1, RUN_STATUS_V1,
+    SCHEMA_FILE_SUFFIX, SUBJECTS_LOCK_V1, SUITE_SUMMARY_V1, is_registered, registered_schema_ids,
+    require_schema, schema_file_name, schema_id_from_file_name,
 };
 pub use source::{
     ClusterProfile, ClusterTools, SourceApplication, SourceApplicationApi, SourceCluster,
@@ -122,6 +141,10 @@ pub use status::{
     ExecutionOrder, ExecutionStatus, PhaseOutcome, PhaseRecord, ProcessExit, RunStatus,
     SubjectExecution, SubjectVerification, VerificationOutcome,
 };
+pub use suite::{
+    GateOutcome, PairedRatio, SubjectDispersion, SubjectMedians, SuiteAttempt,
+    SuiteSubjectObservation, SuiteSummary,
+};
 
 #[cfg(test)]
 mod adapter_test;
@@ -129,6 +152,8 @@ mod adapter_test;
 mod bundle_test;
 #[cfg(test)]
 mod canon_test;
+#[cfg(test)]
+mod capacity_test;
 #[cfg(test)]
 mod classify_test;
 #[cfg(test)]
@@ -144,7 +169,11 @@ mod identity_test;
 #[cfg(test)]
 mod legacy_test;
 #[cfg(test)]
+mod llm_test;
+#[cfg(test)]
 mod lock_test;
+#[cfg(test)]
+mod packet_test;
 #[cfg(test)]
 mod result_v2_test;
 #[cfg(test)]
@@ -153,3 +182,5 @@ mod schema_id_test;
 mod source_test;
 #[cfg(test)]
 mod status_test;
+#[cfg(test)]
+mod suite_test;

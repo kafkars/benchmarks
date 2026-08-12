@@ -10,7 +10,8 @@ use std::collections::BTreeMap;
 use crate::{
     ApplicationSpec, ArrivalModel, BudgetSpec, ClusterSpec, ExperimentKind, LoadMode,
     MAX_SUBJECT_NAME_LENGTH, PayloadSpec, ProducerSpec, ResolvedExperiment, RuntimeBinding,
-    SchemaErrorKind, SloSpec, SubjectSpec, TopicPair, canonical_bytes, is_topic_charset_safe,
+    SUBJECT_ROLE_ANCHOR, SUBJECT_ROLE_BASE, SUBJECT_ROLE_HEAD, SUBJECT_ROLES, SchemaErrorKind,
+    SloSpec, SubjectSpec, TopicPair, canonical_bytes, is_subject_role, is_topic_charset_safe,
     parse_json_slice,
 };
 
@@ -77,12 +78,14 @@ pub(crate) fn sample_experiment() -> ResolvedExperiment {
                 adapter_name: "kafkars".to_owned(),
                 adapter_version: "0.1.0".to_owned(),
                 command: vec!["target/release/kafkars-benchmark-adapter".to_owned()],
+                role: None,
             },
             SubjectSpec {
                 name: "librdkafka-c".to_owned(),
                 adapter_name: "librdkafka-c".to_owned(),
                 adapter_version: "2.15.0".to_owned(),
                 command: vec!["target/release/bench-adapter-librdkafka".to_owned()],
+                role: None,
             },
         ],
         runtime: Some(sample_runtime()),
@@ -441,4 +444,70 @@ fn a_subject_is_found_by_name() {
         "2.15.0"
     );
     assert!(experiment.subject("nobody").is_none());
+}
+
+#[test]
+fn the_three_subject_roles_are_accepted() {
+    for role in SUBJECT_ROLES {
+        let mut experiment = sample_experiment();
+        experiment.subjects[0].role = Some(role.to_owned());
+
+        assert!(
+            experiment.validate().is_ok(),
+            "{role:?} should be a legal subject role"
+        );
+        assert!(is_subject_role(role));
+    }
+    assert_eq!(SUBJECT_ROLES, ["base", "head", "anchor"]);
+    assert_eq!(SUBJECT_ROLE_BASE, "base");
+    assert_eq!(SUBJECT_ROLE_HEAD, "head");
+    assert_eq!(SUBJECT_ROLE_ANCHOR, "anchor");
+}
+
+#[test]
+fn an_unknown_subject_role_is_refused() {
+    for role in ["baseline", "Base", "", "control"] {
+        let mut experiment = sample_experiment();
+        experiment.subjects[1].role = Some(role.to_owned());
+
+        let error = experiment.validate().unwrap_err();
+
+        assert_eq!(error.kind(), SchemaErrorKind::InvalidField);
+        assert!(error.context().starts_with("subjects[1].role"), "{error}");
+        assert!(!is_subject_role(role));
+    }
+}
+
+#[test]
+fn an_absent_role_leaves_the_bytes_untouched() {
+    let unlabeled = canonical_bytes(&sample_experiment()).unwrap();
+
+    assert!(
+        !String::from_utf8(unlabeled.clone())
+            .unwrap()
+            .contains("role"),
+        "an unlabeled subject list must not mention roles at all"
+    );
+
+    let mut labeled = sample_experiment();
+    labeled.subjects[0].role = Some(SUBJECT_ROLE_BASE.to_owned());
+
+    assert_ne!(
+        canonical_bytes(&labeled).unwrap(),
+        unlabeled,
+        "a role is identity-relevant when present"
+    );
+}
+
+#[test]
+fn a_role_survives_a_round_trip_through_json() {
+    let mut labeled = sample_experiment();
+    labeled.subjects[0].role = Some(SUBJECT_ROLE_BASE.to_owned());
+    labeled.subjects[1].role = Some(SUBJECT_ROLE_HEAD.to_owned());
+
+    let bytes = serde_json::to_vec(&labeled).unwrap();
+    let parsed: ResolvedExperiment = parse_json_slice(&bytes).unwrap();
+
+    assert_eq!(parsed, labeled);
+    assert_eq!(parsed.subjects[1].role.as_deref(), Some("head"));
 }

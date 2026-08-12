@@ -162,6 +162,54 @@ command = ["target/release/bench-adapter-librdkafka", "--binary", "target/librdk
     assert_eq!(subjects.subjects.len(), 2);
     assert_eq!(subjects.subjects[0].name, "kafkars");
     assert_eq!(subjects.subjects[1].command.len(), 3);
+    assert!(subjects.subjects[0].role.is_none());
+    assert!(subjects.validate().is_ok());
+}
+
+#[test]
+fn a_subjects_file_carries_roles_when_it_declares_them() {
+    let subjects = SubjectsFile::from_toml_str(
+        r#"
+[[subjects]]
+name = "kafkars"
+command = ["target/release/kafkars-benchmark-adapter"]
+role = "head"
+
+[[subjects]]
+name = "librdkafka-c"
+command = ["target/release/bench-adapter-librdkafka"]
+role = "base"
+
+[[subjects]]
+name = "anchor-c"
+command = ["target/release/bench-adapter-librdkafka"]
+role = "anchor"
+"#,
+    )
+    .unwrap();
+
+    subjects.validate().unwrap();
+    assert_eq!(subjects.subjects[0].role.as_deref(), Some("head"));
+    assert_eq!(subjects.subjects[1].role.as_deref(), Some("base"));
+    assert_eq!(subjects.subjects[2].role.as_deref(), Some("anchor"));
+}
+
+#[test]
+fn a_subjects_file_with_an_unknown_role_is_refused() {
+    let subjects = SubjectsFile::from_toml_str(
+        r#"
+[[subjects]]
+name = "kafkars"
+command = ["target/release/kafkars-benchmark-adapter"]
+role = "candidate"
+"#,
+    )
+    .unwrap();
+
+    let error = subjects.validate().unwrap_err();
+
+    assert_eq!(error.kind(), SchemaErrorKind::InvalidField);
+    assert!(error.context().starts_with("subjects[0].role"), "{error}");
 }
 
 #[test]

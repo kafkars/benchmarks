@@ -22,14 +22,16 @@ use crate::{
 /// copies of a list look like duplication, and are: the point is that a change
 /// to the vocabulary has to be made in both places, by a person, in a diff a
 /// reviewer sees.
-const CANONICAL_SCHEMA_IDS: [&str; 26] = [
+const CANONICAL_SCHEMA_IDS: [&str; 31] = [
     "kafkars.adapter-status.v1",
     "kafkars.adapter-validate.v1",
     "kafkars.adapter.v1",
+    "kafkars.analysis-packet.v1",
     "kafkars.benchmark-adapter-config.v1",
     "kafkars.benchmark-environment.v1",
     "kafkars.benchmark-environment.v2",
     "kafkars.bundle.v1",
+    "kafkars.capacity-search.v1",
     "kafkars.classification.v1",
     "kafkars.comparison.v1",
     "kafkars.execution-order.v1",
@@ -38,8 +40,10 @@ const CANONICAL_SCHEMA_IDS: [&str; 26] = [
     "kafkars.librdkafka-capacity-probe.v2",
     "kafkars.librdkafka-native-metrics.v1",
     "kafkars.librdkafka-statistics.v1",
+    "kafkars.llm-summary.v1",
     "kafkars.process-resources.v2",
     "kafkars.producer-benchmark.v1",
+    "kafkars.producer-benchmark.v2",
     "kafkars.producer-comparison-suite.v1",
     "kafkars.producer-comparison.v1",
     "kafkars.producer-fixed-comparison-suite.v2",
@@ -49,6 +53,7 @@ const CANONICAL_SCHEMA_IDS: [&str; 26] = [
     "kafkars.producer-verification.v1",
     "kafkars.run-status.v1",
     "kafkars.subjects-lock.v1",
+    "kafkars.suite-summary.v1",
 ];
 
 fn registry() -> BTreeSet<&'static str> {
@@ -64,10 +69,10 @@ fn the_registry_is_exactly_the_canonical_vocabulary() {
 
 #[test]
 fn the_registry_has_no_duplicates_and_two_families() {
-    assert_eq!(ENGINE_SCHEMA_IDS.len(), 11);
+    assert_eq!(ENGINE_SCHEMA_IDS.len(), 16);
     assert_eq!(LEGACY_SCHEMA_IDS.len(), 15);
-    assert_eq!(registered_schema_ids().len(), 26);
-    assert_eq!(registry().len(), 26);
+    assert_eq!(registered_schema_ids().len(), 31);
+    assert_eq!(registry().len(), 31);
 }
 
 #[test]

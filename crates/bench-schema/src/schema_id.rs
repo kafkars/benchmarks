@@ -44,6 +44,17 @@ pub const CLASSIFICATION_V1: &str = "kafkars.classification.v1";
 pub const COMPARISON_V1: &str = "kafkars.comparison.v1";
 /// Order the subjects were executed in, and what decided it.
 pub const EXECUTION_ORDER_V1: &str = "kafkars.execution-order.v1";
+/// Producer measurement written by the adapter protocol's `run` verb, under the
+/// four-timestamp offer model.
+pub const PRODUCER_BENCHMARK_V2: &str = "kafkars.producer-benchmark.v2";
+/// Repeated-attempt summary: medians, paired ratios, dispersion, and gates.
+pub const SUITE_SUMMARY_V1: &str = "kafkars.suite-summary.v1";
+/// The rate ladder a capacity search walked, and where it stopped.
+pub const CAPACITY_SEARCH_V1: &str = "kafkars.capacity-search.v1";
+/// Deterministic analysis input: numbered metrics, findings, evidence pointers.
+pub const ANALYSIS_PACKET_V1: &str = "kafkars.analysis-packet.v1";
+/// Prose written over an analysis packet, bound to that packet's numbers.
+pub const LLM_SUMMARY_V1: &str = "kafkars.llm-summary.v1";
 
 /// Legacy environment capture written by `legacy/benchctl/environment.mjs`.
 pub const BENCHMARK_ENVIRONMENT_V1: &str = "kafkars.benchmark-environment.v1";
@@ -83,7 +94,7 @@ pub const LIBRDKAFKA_STATISTICS_V1: &str = "kafkars.librdkafka-statistics.v1";
 pub const LIBRDKAFKA_NATIVE_METRICS_V1: &str = "kafkars.librdkafka-native-metrics.v1";
 
 /// Every schema id minted by the Rust engine.
-pub const ENGINE_SCHEMA_IDS: [&str; 11] = [
+pub const ENGINE_SCHEMA_IDS: [&str; 16] = [
     EXPERIMENT_V1,
     ADAPTER_V1,
     ADAPTER_STATUS_V1,
@@ -95,6 +106,11 @@ pub const ENGINE_SCHEMA_IDS: [&str; 11] = [
     CLASSIFICATION_V1,
     COMPARISON_V1,
     EXECUTION_ORDER_V1,
+    PRODUCER_BENCHMARK_V2,
+    SUITE_SUMMARY_V1,
+    CAPACITY_SEARCH_V1,
+    ANALYSIS_PACKET_V1,
+    LLM_SUMMARY_V1,
 ];
 
 /// Every schema id inherited from the legacy Node harness.

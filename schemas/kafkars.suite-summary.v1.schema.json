@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.suite-summary.v1",
+  "title": "Repeated-experiment suite summary",
+  "description": "The suite-summary.json written over a set of repetitions of one experiment id: every attempt's observations, the medians derived from them, the paired ratios with bootstrap intervals, the dispersion beside every central value, and the gates that were checked. The per-attempt observations stay in the document so a reader can recompute every summary statistic from the same bytes that state it. Floats are allowed here because a summary is evidence, never an identity. Documentation mirror of the SuiteSummary serde type in crates/bench-schema/src/suite.rs, which is the source of truth.",
+  "type": "object",
+  "required": [
+    "schema",
+    "experiment_id",
+    "scenario_name",
+    "repetitions",
+    "seed",
+    "resamples",
+    "practical_threshold",
+    "attempts",
+    "medians",
+    "pairs",
+    "dispersion",
+    "gates",
+    "claim_eligible",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.suite-summary.v1"
+    },
+    "experiment_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "The experiment every attempt below is an attempt of. This is what aggregation is keyed by; the bundle digests identify the individual attempts."
+    },
+    "scenario_name": {
+      "type": "string",
+      "description": "Scenario name, carried for readers who do not resolve ids."
+    },
+    "repetitions": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Repetitions the suite was asked for. A measurement without its repetition count is not a result."
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Seed behind every deterministic choice, including the bootstrap resampling below."
+    },
+    "resamples": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Bootstrap resamples behind every interval in pairs."
+    },
+    "practical_threshold": {
+      "type": "number",
+      "minimum": 0,
+      "description": "The relative difference the suite was set up to care about, stated next to the intervals so that an interval excluding zero is never mistaken for a difference that matters."
+    },
+    "attempts": {
+      "type": "array",
+      "description": "Every attempt, valid or not, in execution order. Invalid attempts stay in the list: a median over a set nobody can reconstruct is not auditable, and what was discarded is the first thing a sceptical reader asks for.",
+      "items": {
+        "type": "object",
+        "required": ["attempt_id", "bundle_digest", "execution_status", "run_valid", "subjects"],
+        "additionalProperties": false,
+        "properties": {
+          "attempt_id": {
+            "type": "string",
+            "description": "<yyyymmddThhmmssZ>-<8 hex>, which also names the bundle directory."
+          },
+          "bundle_digest": {
+            "type": "string",
+            "description": "Digest of the sealed bundle, so the attempt can be fetched and checked."
+          },
+          "execution_status": {
+            "enum": ["complete", "partial", "crashed", "timed_out"],
+            "description": "Did the machinery do what it was told. Not validity."
+          },
+          "run_valid": {
+            "type": "boolean",
+            "description": "Does the attempt's evidence mean anything. Not execution status."
+          },
+          "subjects": {
+            "type": "array",
+            "description": "One entry per subject the attempt measured.",
+            "items": { "$ref": "#/$defs/observation" }
+          }
+        }
+      }
+    },
+    "medians": {
+      "type": "array",
+      "description": "Per-subject medians over the valid attempts, field for field with the observations above. Medians rather than means: one stalled attempt should not move the reported number.",
+      "items": { "$ref": "#/$defs/observation" }
+    },
+    "pairs": {
+      "type": "array",
+      "description": "Directed ratios between subjects, each naming its own denominator. A ratio with an unnamed denominator is decoration.",
+      "items": {
+        "type": "object",
+        "required": [
+          "numerator_subject",
+          "denominator_subject",
+          "metric",
+          "ratio_of_medians",
+          "ci_low",
+          "ci_high"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "numerator_subject": { "type": "string" },
+          "denominator_subject": { "type": "string" },
+          "metric": {
+            "type": "string",
+            "description": "Which median field the ratio is over, for example acknowledged_records_per_second."
+          },
+          "ratio_of_medians": { "type": "number" },
+          "ci_low": {
+            "type": "number",
+            "description": "Lower end of the bootstrap interval; never above ci_high."
+          },
+          "ci_high": { "type": "number" }
+        }
+      }
+    },
+    "dispersion": {
+      "type": "array",
+      "description": "Per-subject, per-metric spread across the repetitions. A measurement without its dispersion is not a result.",
+      "items": {
+        "type": "object",
+        "required": ["name", "metric"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "metric": { "type": "string" },
+          "coefficient_of_variation": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "Standard deviation over the mean. Null when it could not be computed - which is a different claim from zero spread."
+          }
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "description": "Conditions the suite checked, in the order it checked them. Each carries the sentence it enforces, so a failing gate is readable without the code that ran it.",
+      "items": {
+        "type": "object",
+        "required": ["name", "description", "passed", "detail"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "passed": { "type": "boolean" },
+          "detail": {
+            "type": "string",
+            "description": "What was actually observed, pass or fail."
+          }
+        }
+      }
+    },
+    "claim_eligible": {
+      "const": false,
+      "description": "Always false in this milestone: no calibrated stable-runner thresholds and no limiting-resource classification, so no suite may support a published claim."
+    },
+    "notes": {
+      "type": "array",
+      "description": "Anything a reader must know that the numbers do not say.",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "observation": {
+      "type": "object",
+      "title": "One subject's numbers",
+      "description": "The same field set for a single attempt and for the median over attempts, so that reading a median and reading the observations behind it is the same act. Every latency is in nanoseconds and every one of them is an intended_to_terminal percentile, so a subject cannot look faster by spending longer refusing to accept work.",
+      "required": [
+        "name",
+        "acknowledged_records_per_second",
+        "p50_intended_to_terminal_ns",
+        "p99_intended_to_terminal_ns",
+        "p999_intended_to_terminal_ns",
+        "p99_admission_wait_ns"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "role": {
+          "enum": ["base", "head", "anchor"],
+          "description": "The subject's role in this comparison; absent when the subject list is unlabeled."
+        },
+        "acknowledged_records_per_second": { "type": "number", "minimum": 0 },
+        "p50_intended_to_terminal_ns": { "type": "integer", "minimum": 0 },
+        "p99_intended_to_terminal_ns": { "type": "integer", "minimum": 0 },
+        "p999_intended_to_terminal_ns": { "type": "integer", "minimum": 0 },
+        "p99_admission_wait_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "99th percentile of admission wait alone, reported beside the end-to-end percentiles so backpressure is visible rather than merely included."
+        },
+        "max_rss_bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Absent when the platform did not report it."
+        },
+        "cpu_core_seconds": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Absent when the platform did not report it."
+        }
+      }
+    }
+  }
+}

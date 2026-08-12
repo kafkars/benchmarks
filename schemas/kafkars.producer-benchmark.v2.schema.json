@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.producer-benchmark.v2",
+  "title": "Producer measurement (four-timestamp offer model)",
+  "description": "The result.json an adapter writes from `run --experiment --output` once every offer carries one immutable identity and four timestamps - intended, call_start, accepted, terminal - none of which is ever reset because a queue was full. Backpressure is therefore inside every latency this document reports, which is the defect kafkars.producer-benchmark.v1 cannot fix under its own id. Distributions are bounded log-linear histograms rather than run-sized arrays, so evidence memory does not scale with run length, and readers derive every percentile; the writer never computes one. Documentation mirror of the ProducerBenchmarkV2 serde type in crates/bench-schema/src/result_v2.rs, which is the source of truth.",
+  "type": "object",
+  "required": [
+    "schema",
+    "adapter",
+    "adapter_version",
+    "run_id",
+    "load_mode",
+    "declared",
+    "outcomes",
+    "timing",
+    "throughput",
+    "queue",
+    "valid"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.producer-benchmark.v2"
+    },
+    "adapter": {
+      "type": "string",
+      "description": "Adapter name as declared by `describe --json`."
+    },
+    "adapter_version": {
+      "type": "string",
+      "description": "Adapter version as declared by `describe --json`."
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$",
+      "description": "The attempt's sixteen lowercase hex run id, matching the runtime binding."
+    },
+    "load_mode": {
+      "enum": ["closed-loop", "scheduled-open-loop-fixed-rate"],
+      "description": "The resolved load mode this measurement ran under."
+    },
+    "declared": {
+      "type": "object",
+      "description": "What the adapter actually did in the measured path, declared up front so a reader can refuse to compare unlike work.",
+      "required": ["payload_construction", "ownership", "completion_mode", "serialization"],
+      "additionalProperties": false,
+      "properties": {
+        "payload_construction": {
+          "type": "string",
+          "description": "How payload bytes came to exist, for example prebuilt-pool."
+        },
+        "ownership": {
+          "type": "string",
+          "description": "Who owned the bytes across the client boundary, for example copy-in."
+        },
+        "completion_mode": {
+          "type": "string",
+          "description": "How completion was observed, for example public-future or delivery-callback."
+        },
+        "serialization": {
+          "type": "string",
+          "description": "Whether serialization work was inside the measured interval; the harness contract is excluded."
+        }
+      }
+    },
+    "outcomes": {
+      "type": "object",
+      "description": "Where every offer ended. offered >= accepted, and accepted == acknowledged + failed + timed_out + unknown.",
+      "required": ["offered", "accepted", "acknowledged", "failed", "timed_out", "unknown"],
+      "additionalProperties": false,
+      "properties": {
+        "offered": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offers whose public-API attempt began."
+        },
+        "accepted": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offers the client took ownership of."
+        },
+        "acknowledged": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "timed_out": { "type": "integer", "minimum": 0 },
+        "unknown": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Accepted offers with no terminal by the drain deadline. These have no terminal latency, which is why the terminal histograms exclude them."
+        }
+      }
+    },
+    "timing": {
+      "type": "object",
+      "description": "Bounded latency distributions, all in nanoseconds on a monotonic clock.",
+      "required": [
+        "clock",
+        "intended_to_terminal",
+        "accepted_to_terminal",
+        "call_start_to_accepted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "clock": {
+          "const": "monotonic-ns",
+          "description": "Wall clocks name things; monotonic clocks measure them."
+        },
+        "intended_to_terminal": {
+          "$ref": "#/$defs/histogram",
+          "description": "terminal - intended for every offer that reached a terminal. This is the number a comparison uses: it cannot be improved by refusing work."
+        },
+        "accepted_to_terminal": {
+          "$ref": "#/$defs/histogram",
+          "description": "terminal - accepted for every offer that reached a terminal; the client-internal portion only."
+        },
+        "call_start_to_accepted": {
+          "$ref": "#/$defs/histogram",
+          "description": "accepted - call_start: admission wait, including every retry of the same immutable offer. total equals outcomes.accepted."
+        },
+        "intended_to_call_start": {
+          "$ref": "#/$defs/histogram",
+          "description": "call_start - intended: scheduler lateness. Present if and only if load_mode is scheduled-open-loop-fixed-rate, with total equal to outcomes.offered."
+        }
+      }
+    },
+    "throughput": {
+      "type": "object",
+      "description": "Goodput over the measured interval. Floats are allowed: a measurement document is evidence, never an identity.",
+      "required": [
+        "measured_duration_ns",
+        "acknowledged_records_per_second",
+        "acknowledged_payload_bytes_per_second"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "measured_duration_ns": { "type": "integer", "minimum": 0 },
+        "acknowledged_records_per_second": { "type": "number", "minimum": 0 },
+        "acknowledged_payload_bytes_per_second": { "type": "number", "minimum": 0 }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "description": "What the application-side queue did. A final_outstanding above zero means the run did not drain, which is a validity question rather than an execution one.",
+      "required": ["max_outstanding_observed", "final_outstanding"],
+      "additionalProperties": false,
+      "properties": {
+        "max_outstanding_observed": { "type": "integer", "minimum": 0 },
+        "final_outstanding": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "resources": {
+      "type": ["object", "null"],
+      "description": "Self-reported process resources, when the platform exposes them safely. Absent rather than zero when it does not.",
+      "required": ["max_rss_bytes", "user_cpu_ns", "system_cpu_ns"],
+      "additionalProperties": false,
+      "properties": {
+        "max_rss_bytes": { "type": "integer", "minimum": 0 },
+        "user_cpu_ns": { "type": "integer", "minimum": 0 },
+        "system_cpu_ns": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "native_metrics_path": {
+      "type": ["string", "null"],
+      "description": "Bundle-relative path of native client metrics, when the client emits them, for example librdkafka statistics JSONL."
+    },
+    "valid": {
+      "type": "boolean",
+      "description": "The adapter's verdict on its own measurement. This is a self-report, never the validity verdict: kafkars.classification.v1 decides that, from the verifier's evidence."
+    },
+    "invalid_reason": {
+      "type": ["string", "null"],
+      "description": "Why the adapter declared the measurement invalid. Required when valid is false."
+    }
+  },
+  "$defs": {
+    "histogram": {
+      "type": "object",
+      "title": "Log-linear histogram (kafkars.log-linear.v1)",
+      "description": "An embedded object, never a standalone document. 128 linear sub-buckets per power of two give a worst-case relative error of 2^-7; percentiles report a bucket's inclusive upper bound, so derived latencies err conservative rather than flattering. min, max, and sum are exact and tracked outside the buckets. counts is sparse, strictly ascending by index, and carries no zero counts, and the compact serde output of this object is the byte-exact encoding the C adapter must reproduce. Documentation mirror of EncodedHistogram in crates/bench-schema/src/histogram.rs, which is the source of truth.",
+      "required": ["layout", "unit", "sub_bucket_bits", "total", "min", "max", "sum", "counts"],
+      "additionalProperties": false,
+      "properties": {
+        "layout": { "const": "kafkars.log-linear.v1" },
+        "unit": { "const": "ns" },
+        "sub_bucket_bits": { "const": 7 },
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of recorded values; equals the sum of the counts."
+        },
+        "min": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Exact smallest recorded value; null only when total is zero."
+        },
+        "max": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Exact largest recorded value; null only when total is zero."
+        },
+        "sum": { "type": "integer", "minimum": 0 },
+        "counts": {
+          "type": "array",
+          "description": "Sparse [index, count] pairs, strictly ascending by index, no zero counts.",
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [
+              { "type": "integer", "minimum": 0 },
+              { "type": "integer", "exclusiveMinimum": 0 }
+            ]
+          }
+        }
+      }
+    }
+  }
+}

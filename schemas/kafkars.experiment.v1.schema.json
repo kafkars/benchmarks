@@ -166,6 +166,10 @@
             "type": ["array", "string"],
             "description": "Adapter argv prefix. Excluded from the experiment identity.",
             "items": { "type": "string" }
+          },
+          "role": {
+            "enum": ["base", "head", "anchor"],
+            "description": "What this subject is for: the denominator of the comparison, the subject under test, or the anchor held fixed across attempts. Absent means unlabeled. Unlike command, role is included in the experiment identity when present - two experiments that disagree about which subject is the baseline are asking different questions - and omitting it entirely leaves every pre-role identity unchanged."
           }
         }
       }
