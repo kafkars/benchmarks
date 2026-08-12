@@ -109,6 +109,11 @@ jobs:
       # cached bytes, so there are deliberately no restore-keys. A miss is never
       # fatal — the bootstrap script re-downloads and re-verifies the checksum,
       # which remains the actual trust boundary.
+      # Same key, same reasoning, and the same guard as the CI workflow: it
+      # duplicates the pin in scripts/bootstrap-librdkafka, and
+      # scripts/check-librdkafka-pin is what asserts the two still agree. No
+      # restore-keys, because a partial match would mean measuring a build of
+      # unreviewed source and reporting it under the reviewed version.
       - name: Restore the reviewed librdkafka build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:

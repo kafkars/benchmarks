@@ -6,6 +6,19 @@ The executable workload, fairness, verification, statistical, and evidence
 design is specified in
 [`BENCHMARK_HARNESS_DESIGN.md`](BENCHMARK_HARNESS_DESIGN.md).
 
+> **What this document is.** It states the target — the lanes, the matrix, and
+> the gates a claim would have to clear — and it is deliberately written in the
+> present tense of a finished harness. It is not a description of what runs
+> today. The Java lane in particular does not exist: there is no Java adapter in
+> this repository, so every gate below that mentions Java is a specification
+> waiting on one.
+>
+> For what is actually covered right now, and the specific mechanism refusing
+> each row that is not, read [`scenarios/DEFERRED.md`](../scenarios/DEFERRED.md)
+> and [`ROADMAP.md`](ROADMAP.md). Those two are current; this one is the
+> destination. Where they disagree, they are not in conflict — this document has
+> not moved.
+
 ## Fair-comparison rule
 
 Every competitor uses matched semantics:

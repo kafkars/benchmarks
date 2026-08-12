@@ -13,10 +13,12 @@
 #
 #   workspace             Proves the Rust control plane compiles at the MSRV,
 #                         is formatted, is clippy-clean under -D warnings, its
-#                         unit tests pass, and every schema file parses and is
-#                         registered. Proves NOTHING about the adapters, which
-#                         are separate workspaces, or about any run against a
-#                         real broker.
+#                         unit tests pass, every schema file parses and is
+#                         registered, and the librdkafka pin reads the same in
+#                         all seven places it is written down — including the
+#                         cache key this file uses below. Proves NOTHING about
+#                         the adapters, which are separate workspaces, or about
+#                         any run against a real broker.
 #
 #   control-plane         Proves the migrated Node control plane's own tests
 #                         pass under the pinned Node, and that the model-summary
@@ -103,6 +105,11 @@ jobs:
         run: scripts/check-workspace
       - name: Validate the schema registry
         run: scripts/check-schemas
+      # Cheap, needs no toolchain, and guards the cache key used by the two
+      # jobs below: the librdkafka version and checksum are written down in
+      # seven places and nothing else notices when a bump misses one.
+      - name: Validate the librdkafka pin
+        run: scripts/check-librdkafka-pin
 
   control-plane:
     name: control-plane
@@ -165,6 +172,12 @@ jobs:
       # the key must change with it. A cache miss is never fatal: the bootstrap
       # script re-downloads and re-verifies the checksum, which remains the
       # actual trust boundary.
+      #
+      # The key duplicates the pin in scripts/bootstrap-librdkafka, and that
+      # duplication is what scripts/check-librdkafka-pin exists to guard: it
+      # asserts this key still tracks the bootstrap pin, so a bump that changes
+      # the script but not this line fails the workspace lane instead of
+      # silently serving a build of the previous source.
       - name: Restore the reviewed librdkafka build
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:

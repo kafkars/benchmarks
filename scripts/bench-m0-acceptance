@@ -19,7 +19,11 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
 bootstrap=${1:-127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094}
-work="$repo_root/target/m0-acceptance"
+# Cargo writes to CARGO_TARGET_DIR when it is set, so a script that hard-codes
+# ./target looks for binaries cargo never put there. Everything below derives
+# from this one variable for that reason.
+target_dir=${CARGO_TARGET_DIR:-$repo_root/target}
+work="$target_dir/m0-acceptance"
 results_root="$work/results"
 scenario="$repo_root/scenarios/producer/legacy-balanced-1k.toml"
 
@@ -48,8 +52,8 @@ done
 
 echo "==> building the control plane"
 cargo build --locked -p benchctl -p bench-adapter-librdkafka --release
-benchctl="$repo_root/target/release/benchctl"
-shim="$repo_root/target/release/bench-adapter-librdkafka"
+benchctl="$target_dir/release/benchctl"
+shim="$target_dir/release/bench-adapter-librdkafka"
 
 echo "==> writing the generated inputs under $work"
 rm -rf "$work"
@@ -102,13 +106,19 @@ if [ "$run_status" -ne 0 ]; then
 fi
 
 echo "==> locating the sealed bundle"
-sealed_count=$(find "$results_root" -mindepth 3 -maxdepth 3 -type f -name status.json | wc -l | tr -d ' ')
-if [ "$sealed_count" != "1" ]; then
-  echo "expected exactly one sealed bundle under $results_root, found $sealed_count" >&2
+# -print0 and a read loop rather than word splitting: a results root under a
+# path containing a space is a developer-machine accident, not a reason for the
+# acceptance script to report a different failure than the one that happened.
+sealed=()
+while IFS= read -r -d '' status_json; do
+  sealed+=("$(dirname "$status_json")")
+done < <(find "$results_root" -mindepth 3 -maxdepth 3 -type f -name status.json -print0)
+if [ "${#sealed[@]}" != "1" ]; then
+  echo "expected exactly one sealed bundle under $results_root, found ${#sealed[@]}" >&2
   exit 70
 fi
-status_json=$(find "$results_root" -mindepth 3 -maxdepth 3 -type f -name status.json)
-bundle=$(dirname "$status_json")
+bundle="${sealed[0]}"
+status_json="$bundle/status.json"
 
 echo "==> checking the sealed evidence"
 if ! grep -q '"execution_status": "complete"' "$status_json"; then

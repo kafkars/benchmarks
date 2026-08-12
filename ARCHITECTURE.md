@@ -28,11 +28,14 @@ scenario TOML + profile + cluster + seed
                                      sealed, checksummed, immutable
                                             │
                                             ▼
-                                report ── one sealed bundle, rendered
-                                packet ── suite summary → analysis-packet.v1
+                    suite ──── suite-summary.v1 → analysis-packet.v1
+                    report ─── one sealed bundle, rendered as markdown
                                             │
                                             ▼
                                           prose
+                                            │
+                                            ▼
+                    packet ─── prose vs. the packet: agree, or exit 65
 ```
 
 `run` is one attempt. `suite` and `capacity` are loops over attempts that
@@ -96,12 +99,19 @@ bound, so a derived latency errs conservative.
 **The control plane seals a bundle**, which is where the measurement stops
 changing. Nothing rewrites it, including to fix it.
 
-**`report` produces `kafkars.analysis-packet.v1`**, the boundary between
-measurement and interpretation. Every quantity lives under a stable key with its
-own name and unit; findings cite keys rather than restating values; the verdict
-is computed from the intervals and gates and no downstream prose may contradict
-it. A summary that says *improved* about a packet that says *inconclusive* is
-caught mechanically rather than by a reader noticing.
+**`suite` derives `kafkars.analysis-packet.v1`**, the boundary between
+measurement and interpretation. It is written alongside the suite summary as the
+repetitions aggregate, not by a later verb: every quantity lives under a stable
+key with its own name and unit, findings cite keys rather than restating values,
+and the verdict is computed from the intervals and gates.
+
+Two verbs read that output back and neither can move it. **`report`** renders
+one sealed bundle as markdown, which is how a single attempt is read after the
+fact. **`packet`** is the guardrail on the prose: it checks a model-written
+summary against the packet the suite derived, exits 0 when the summary's verdict
+is the packet's and every citation resolves, and 65 when it is not. A summary
+that says *improved* about a packet that says *inconclusive* is caught
+mechanically rather than by a reader noticing.
 
 ## Two identities
 
@@ -164,3 +174,26 @@ intervals, suite orchestration, native-metric gates, and librdkafka statistics
 summaries. Where both exist, they must agree; where only the legacy plane
 exists, the Rust classification records the check as deferred rather than
 pretending it passed.
+
+### The one deliberate deviation
+
+"Close to verbatim" has exactly one exception, in
+`legacy/benchctl/environment.mjs` and `legacy/benchctl/seal.mjs`.
+
+Upstream, this control plane lived *inside* the client repository, so its
+environment capture read the client's git state out of its own repository root.
+Here the client is a sibling checkout, so both capture sites resolve it through
+the `KAFKA_BENCH_CLIENT_ROOT` environment variable, falling back to
+`../kafka-client` when it is unset. Setting that variable points a legacy run at
+a client checkout somewhere else — a worktree, a bisect, a second clone —
+without editing the harness.
+
+This is the kind of edit a later reader would plausibly and well-meaningly
+revert in the name of fidelity with upstream, and reverting it would not break a
+test. The capture would still succeed and the document would still validate; it
+would simply record *this* repository's commit as the client's, attributing the
+harness's own git state to the client under measurement, in every bundle sealed
+afterwards. `scripts/check-control-plane` therefore asserts both files still
+mention `KAFKA_BENCH_CLIENT_ROOT` and still do not capture the repository root
+as the client, so a fidelity restore fails the gate instead of quietly
+mislabelling evidence.

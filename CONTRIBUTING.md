@@ -18,9 +18,24 @@ For each patch:
 5. Keep the patch narrow enough to review as one decision.
 6. Run `scripts/check` and inspect the complete diff.
 
-Adapter work also runs `scripts/check-benchmarks`, which builds the adapters
-against the pinned siblings and checks the conformance vectors three ways: the
-Rust adapter, the C adapter, and the committed goldens must agree.
+`scripts/check` runs on a clean clone of this repository alone. It needs the
+pinned Rust and Node toolchains and nothing else: the workspace, schema,
+librdkafka-pin, control-plane, and model-summary lanes all work without the
+sibling checkouts, and the provenance lane reports absent siblings as an
+advisory and exits 0 rather than failing. Nothing in this workspace depends on
+them.
+
+Work that builds or runs a real subject does need them, cloned beside this
+repository as `../kafka-client`, `../kafka-driver`, and `../kafka-protocol`.
+Adapter work runs `scripts/check-benchmarks`, which builds the adapters against
+the pinned siblings and checks the conformance vectors three ways: the Rust
+adapter, the C adapter, and the committed goldens must agree. The acceptance
+scripts additionally need a broker, and exit 69 without touching anything when
+none is listening.
+
+Provenance is advisory locally on purpose — a developer checkout is routinely on
+another branch — so it never blocks the gate. It is strict in CI, and strict
+before a tag; see [`RELEASING.md`](RELEASING.md).
 
 The repository declares Rust 1.88 as its MSRV and requires Node.js 22.18 or
 newer for the control-plane lanes. Both are pinned rather than "whatever is

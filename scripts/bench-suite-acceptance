@@ -19,7 +19,11 @@ cd "$repo_root"
 
 bootstrap=${1:-127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094}
 repetitions=${2:-3}
-work="$repo_root/target/suite-acceptance"
+# Cargo writes to CARGO_TARGET_DIR when it is set, so a script that hard-codes
+# ./target looks for binaries cargo never put there. Everything below derives
+# from this one variable for that reason.
+target_dir=${CARGO_TARGET_DIR:-$repo_root/target}
+work="$target_dir/suite-acceptance"
 results_root="$work/results"
 reports_root="$work/reports"
 scenario="$repo_root/scenarios/producer/legacy-balanced-1k.toml"
@@ -40,7 +44,7 @@ fi
 # against the same tools rather than two copies of one heredoc.
 rm -rf "$work"
 "$repo_root/scripts/generate-subject-config" "$work" "$bootstrap"
-benchctl="$repo_root/target/release/benchctl"
+benchctl="$target_dir/release/benchctl"
 
 echo "==> running $repetitions repetitions"
 set +e
@@ -117,7 +121,17 @@ echo "==> checking the packet round-trips through the prose guardrail"
 # cites nothing is exactly the document the guardrail must accept; one that
 # disagrees is exactly the document it must reject. Testing both directions is
 # what makes the check a guardrail rather than a formality.
-verdict=$(sed -n 's/.*"verdict": "\([a-z_]*\)".*/\1/p' "$report_dir/analysis-packet.json" | head -n 1)
+# awk with an explicit `exit` rather than `sed ... | head -n 1`: under the
+# `set -o pipefail` in force here, head closing the pipe after the first line
+# sends sed a SIGPIPE, and the resulting 141 fails the assignment and aborts the
+# script for a read that actually succeeded.
+verdict=$(awk 'match($0, /"verdict": *"[a-z_]+"/) {
+    value = substr($0, RSTART, RLENGTH)
+    sub(/^"verdict": *"/, "", value)
+    sub(/"$/, "", value)
+    print value
+    exit
+  }' "$report_dir/analysis-packet.json")
 if [ -z "$verdict" ]; then
   echo "the analysis packet states no verdict" >&2
   exit 70
@@ -152,7 +166,10 @@ if [ "$wrong_status" != "65" ]; then
 fi
 
 echo "==> rendering one repetition's bundle on its own"
-bundle=$(dirname "$(find "$results_root" -mindepth 3 -maxdepth 3 -type f -name status.json | head -n 1)")
+# -print -quit stops find at the first hit inside find itself, so there is no
+# pipe for `head` to close and no SIGPIPE for pipefail to turn into a failure.
+bundle=$(dirname "$(find "$results_root" \
+  -mindepth 3 -maxdepth 3 -type f -name status.json -print -quit)")
 "$benchctl" report --bundle "$bundle" --out "$work/bundle-report.md"
 if [ ! -s "$work/bundle-report.md" ]; then
   echo "benchctl report wrote nothing for $bundle" >&2
@@ -160,7 +177,10 @@ if [ ! -s "$work/bundle-report.md" ]; then
 fi
 
 echo "==> verifying every bundle's checksums with the system tool"
-for status_json in $(find "$results_root" -mindepth 3 -maxdepth 3 -type f -name status.json); do
+# -print0 into a read loop rather than word splitting over $(find ...): the
+# unquoted form re-splits on whitespace, so one results root under a path with a
+# space in it would silently check a directory that does not exist and pass.
+while IFS= read -r -d '' status_json; do
   sealed=$(dirname "$status_json")
   if command -v shasum >/dev/null 2>&1; then
     (cd "$sealed" && shasum -a 256 -c checksums.txt >/dev/null)
@@ -170,7 +190,7 @@ for status_json in $(find "$results_root" -mindepth 3 -maxdepth 3 -type f -name 
     echo "neither shasum nor sha256sum is available to verify the bundles" >&2
     exit 70
   fi
-done
+done < <(find "$results_root" -mindepth 3 -maxdepth 3 -type f -name status.json -print0)
 
 echo "bench-suite-acceptance: ok"
 printf '%s\n' "$report_dir"

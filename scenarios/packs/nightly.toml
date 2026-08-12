@@ -34,9 +34,10 @@
 # entry. It goes last so that a pack that runs out of time still produced every
 # fixed point.
 #
-# Entry order otherwise walks the payload axis upward, so the cheap scenarios
-# fail fast: a broken build surfaces on the 128-byte floor rather than after
-# the 900 KB run has written a gigabyte.
+# Entry order otherwise walks the payload axis upward, so the cheapest scenario
+# fails fast: a broken build surfaces on the 128-byte floor — 50,000 records and
+# a few megabytes — rather than after three repetitions of a 300,000-record
+# 1 KiB scenario have produced most of a gigabyte.
 
 name = "nightly"
 cadence = "nightly"

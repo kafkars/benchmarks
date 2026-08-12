@@ -59,8 +59,8 @@
       "description": "Required if and only if load_mode is scheduled-open-loop-fixed-rate, enforced by ResolvedExperiment::validate()."
     },
     "arrival": {
-      "type": "string",
-      "description": "Arrival process for the offered schedule. Required if and only if load_mode is scheduled-open-loop-fixed-rate."
+      "enum": ["deterministic", "poisson"],
+      "description": "Arrival process the scheduled load mode draws its intended offsets from. Required if and only if load_mode is scheduled-open-loop-fixed-rate, and absent otherwise. Only deterministic has an implementation in this milestone; an adapter handed poisson declines it in its validate report rather than silently substituting the schedule it does implement."
     },
     "seed": {
       "type": "integer",
@@ -69,12 +69,25 @@
     },
     "application": {
       "type": "object",
-      "description": "ApplicationSpec: how the benchmark application drives the client.",
+      "description": "ApplicationSpec: how the benchmark application offers records - instance count, concurrency, and the shape of the admission and completion surfaces it uses. The application-boundary budgets live here, not under `budget`: they bound what the client is allowed to hold, which is part of the workload, whereas `budget` bounds how long the control plane will wait.",
       "additionalProperties": true,
       "properties": {
         "producer_instances": { "type": "integer", "exclusiveMinimum": 0 },
         "callers_per_producer": { "type": "integer", "exclusiveMinimum": 0 },
-        "backpressure": { "type": "string" },
+        "backpressure": {
+          "type": "string",
+          "description": "What the application does when admission is refused, as a vocabulary the adapter interprets - for example block-within-original-offer."
+        },
+        "queue_bytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Bytes the client may hold in its own queues."
+        },
+        "max_outstanding_records": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Records the application allows to be outstanding at once."
+        },
         "admission_shape": { "type": "string" },
         "completion_shape": { "type": "string" },
         "batch_records": { "type": "integer", "exclusiveMinimum": 0 }
@@ -82,13 +95,22 @@
     },
     "payload": {
       "type": "object",
-      "description": "PayloadSpec: record body shape and its deterministic generator.",
+      "description": "PayloadSpec: record body shape and its deterministic generator. There is no per-payload seed and no keyed flag - the experiment's single top-level `seed` drives every deterministic choice, and keyed records are a deferred workload row (see scenarios/DEFERRED.md).",
       "additionalProperties": true,
       "properties": {
-        "bytes": { "type": "integer", "exclusiveMinimum": 0 },
-        "keyed": { "type": "boolean" },
-        "profile": { "type": "string" },
-        "seed": { "type": "integer", "minimum": 0 }
+        "bytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Payload size in bytes, identical for every record."
+        },
+        "profile": {
+          "type": "string",
+          "description": "Generator vocabulary - for example deterministic-ascii-envelope."
+        },
+        "identity": {
+          "type": "string",
+          "description": "Human description of the self-check envelope, when the profile has one - for example 'KFB1 plus 16-byte run ID plus 64-bit sequence'. Absent when the profile has no envelope."
+        }
       }
     },
     "producer": {
@@ -107,16 +129,43 @@
         "delivery_timeout_ms": { "type": "integer", "exclusiveMinimum": 0 },
         "partitioning": { "type": "string" },
         "retry_max_replacements": { "type": "integer", "minimum": 0 },
-        "retry_backoff_ms": { "type": "integer", "minimum": 0 }
+        "retry_backoff_ms": { "type": "integer", "minimum": 0 },
+        "warmup_partitioning": {
+          "type": "string",
+          "description": "Partition assignment for the warmup phase, when it differs from the measured phase. Absent when it does not."
+        },
+        "warmup_serialized_partition_primer_records": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Records the warmup sends serially to prime every partition leader, so the measured phase does not pay for metadata discovery. Absent when the warmup does no priming."
+        }
       }
     },
     "budget": {
       "type": "object",
-      "description": "BudgetSpec: application-boundary queue and outstanding-record bounds applied identically to every subject.",
+      "description": "BudgetSpec: the ceilings the attempt declares for itself. These are part of the intent rather than an operational detail - a run that needed twice the wall clock to finish did not measure the same thing - so they are hashed into the experiment id along with everything else. Application-boundary queue and outstanding-record bounds are NOT here; they live under `application`.",
       "additionalProperties": true,
       "properties": {
-        "queue_bytes": { "type": "integer", "exclusiveMinimum": 0 },
-        "max_outstanding_records": { "type": "integer", "exclusiveMinimum": 0 }
+        "run_timeout_seconds": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Seconds one subject may run before the control plane kills it."
+        },
+        "tool_timeout_seconds": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Seconds a configured tool - topic creation, verification - may run."
+        },
+        "probe_timeout_seconds": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Seconds an adapter probe (describe, validate) may run."
+        },
+        "max_captured_output_bytes": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Bytes of a probe's output the control plane will read before giving up."
+        }
       }
     },
     "cluster": {
@@ -175,8 +224,8 @@
       }
     },
     "runtime": {
-      "type": ["object", "null"],
-      "description": "RuntimeBinding: the concrete cluster and naming this attempt used. Excluded from the experiment identity, so the same intent keeps one identity across attempts and clusters.",
+      "type": "object",
+      "description": "RuntimeBinding: the concrete cluster and naming this attempt used. Excluded from the experiment identity, so the same intent keeps one identity across attempts and clusters. Omitted entirely - not null - in the output of a bare `resolve`, which describes intent that has not been run yet.",
       "required": ["bootstrap", "run_id", "topic_prefix", "topics", "execution_order"],
       "additionalProperties": false,
       "properties": {

@@ -52,11 +52,33 @@ not permitted and appears instead as a new schema id.
   summary, the latter emitting `kafkars.analysis-packet.v1` — the
   numbered-metric, referenced-finding boundary between measurement and prose,
   whose verdict downstream summaries may narrow but never contradict;
-- the headline producer set under `scenarios/producer/headline/`: a latency
-  floor, the balanced fixed-rate default, a 96-partition fanout point, 16 KiB,
-  256 KiB and default-compatible 900 KB payload points, a deliberate overload
-  with a declared SLO, and a balanced capacity search — each stating the design
-  question it answers, and each sized to complete on a developer host;
+- the headline producer set under `scenarios/producer/headline/`: a 128-byte
+  latency floor, the balanced 1 KiB fixed-rate default, a 96-partition fanout
+  point, a 16 KiB payload point, a deliberate overload with a declared SLO, and
+  a balanced capacity search — each stating the design question it answers, and
+  each sized to complete on a developer host;
+- the v2 measured path in both adapters, which is what makes
+  `kafkars.producer-benchmark.v2` an observation rather than a schema. The
+  librdkafka adapter grew a byte-exact C implementation of the log-linear
+  histogram; the kafkars adapter grew pooled payloads and bounded slabs so that
+  the offer path does not allocate per record after warmup and the harness
+  measures the client rather than its own allocator;
+- the histogram conformance vector under `conformance/histogram/`, the third
+  cross-adapter byte contract alongside the payload and the schedule. Its input
+  is a table of edge cases rather than a sample — the exact-bucket region, the
+  first scale change, `2^40` and `2^63`, and `u64::MAX` twice so that `sum` must
+  saturate rather than wrap, which is the case a straight `+=` in C gets
+  silently wrong;
+- paired bootstrap confidence intervals over repeated blocks, computed from a
+  hand-rolled seeded `xoshiro256**` generator so that a resampling result is
+  reconstructible from a seed in the sealed output rather than dependent on a
+  dependency version;
+- request economics: produce requests, wire bytes, batches, retries, and
+  timeouts spent per subject, read from the librdkafka statistics stream. Two
+  clients can post the same goodput and the same p99 while spending very
+  different amounts of broker traffic to do it, which a latency histogram does
+  not show;
+- markdown and HTML renderers over a suite summary, with committed goldens;
 - `scenarios/packs/pr.toml` and `scenarios/packs/nightly.toml`, declaring which
   scenarios belong to which cadence and at how many repetitions, plus
   `scenarios/DEFERRED.md` naming every matrix row that cannot run yet and what
@@ -87,7 +109,19 @@ not permitted and appears instead as a new schema id.
 - `scripts/generate-subject-config`, the one place the per-machine subject list
   and cluster profile are written, shared by `scripts/bench-suite-acceptance`
   and the nightly workflow so the two cannot drift into measuring different
-  subjects.
+  subjects;
+- `scripts/check-librdkafka-pin`, a gate lane asserting that the reviewed
+  librdkafka version and archive checksum read the same in all seven places
+  they are written down — the bootstrap script, the adapter's describe
+  constant, both workflow cache keys, the environment schema's consts, and the
+  two legacy capture sites. A bump that missed one produced a bundle naming one
+  version while another ran, which is evidence that is internally consistent and
+  wrong;
+- a tripwire in `scripts/check-control-plane` over the one deliberate deviation
+  in `legacy/`: both environment capture sites must still resolve the client
+  through `KAFKA_BENCH_CLIENT_ROOT`. Restoring the upstream shape in the name of
+  fidelity would break no test and would attribute this repository's git state
+  to the client under measurement in every bundle sealed afterwards.
 
 ### Changed
 
@@ -96,4 +130,33 @@ not permitted and appears instead as a new schema id.
   does, which is the claim that mattered and is still true; the prompt now names
   the script that calls a model after sealing, and the guardrail that decides
   whether the reply is evidence. The prompt's own rules are unchanged, so the
-  version is unchanged.
+  version is unchanged;
+- the declared payload-construction vocabulary is unified across the scenario
+  TOMLs, the resolved experiment, and both adapters, so that one workload shape
+  has one name everywhere it is written down;
+- `scripts/check-dependency-provenance` treats an **absent** sibling checkout as
+  an advisory rather than a hard failure when it is not in strict mode. No crate
+  in this workspace depends on the siblings — only the out-of-workspace adapter
+  does — so `scripts/check` now runs green on a clean clone with nothing beside
+  it, which is what the quickstart claims. Strict mode (`CI=true` or
+  `KAFKA_BENCH_PROVENANCE=strict`) still refuses, and `RELEASING.md` now names
+  the strict invocation explicitly because the plain gate does not perform it;
+- the two large-record headline scenarios moved to
+  `scenarios/producer/deferred/`. They are authored and validate cleanly, and
+  they cannot yet produce a valid kafkars measurement; `scenarios/DEFERRED.md`
+  records both sealed findings.
+
+### Fixed
+
+- the kafkars adapter reported a failed measurement phase as the session-close
+  error it caused, so the diagnosis a reader saw first was a symptom. The
+  measurement's own failure now leads, and producer-admission fencing after a
+  failure terminal is reported accurately instead of being masked;
+- the documentation mirrors under `schemas/` for `run-status.v1`,
+  `execution-order.v1`, `comparison.v1`, `classification.v1`, `experiment.v1`,
+  and `subjects-lock.v1` described fields the serde types do not have and
+  required fields the types omit — three of them rejected documents the harness
+  really writes. The wire format did not move; only the description of it was
+  wrong. Corrected against real sealed bundles, and `AGENTS.md` now records that
+  fixing a mirror of an unchanged format is a documentation change rather than a
+  schema-affecting one.

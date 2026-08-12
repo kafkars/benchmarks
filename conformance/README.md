@@ -1,9 +1,15 @@
 # Conformance vectors
 
-Committed goldens for the two cross-adapter contracts that every producer
-benchmark depends on: the deterministic record payload and the canonical
-open-loop admission schedule. `scripts/check-benchmarks` asserts
-**Rust == C == golden**, byte for byte.
+Committed goldens for the three cross-adapter contracts that every producer
+benchmark depends on: the deterministic record payload, the canonical open-loop
+admission schedule, and the `kafkars.log-linear.v1` histogram encoding.
+`scripts/check-benchmarks` asserts **Rust == C == golden**, byte for byte, for
+all three.
+
+The payload and schedule vectors are documented below. The histogram vector has
+its own directory and its own README, because what makes its input interesting
+is a table of edge cases rather than a naming convention — see
+[`histogram/README.md`](histogram/README.md).
 
 ## What these files are
 
@@ -22,6 +28,8 @@ move, not that a human can read them. Do not hand-edit a vector, and do not
   `batch_index,caller,first_sequence,count,intended_ns`. The three cases cover a
   clean multiple, a ragged tail (`3-17-4-2`), and a rate high enough that
   `intended_ns` lands in the sub-microsecond range (`1000000000-513-256-4`).
+- `histogram/mixed.input` and `histogram/mixed.vector` — the histogram encoding,
+  documented in [`histogram/README.md`](histogram/README.md).
 
 ## Why the goldens exist
 

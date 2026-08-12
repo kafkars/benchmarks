@@ -71,12 +71,19 @@ Build and conformance-check both adapters with:
 scripts/check-benchmarks
 ```
 
+Every command below takes the bootstrap list as its first argument. The
+addresses used here are the ones `clusters/dev-compose/compose.yml` publishes on
+the host — `127.0.0.1:39092`, `:39093`, and `:39094`, one per broker. Port 19092
+appears inside that compose file too, but it is the brokers' container-internal
+listener and is not reachable from the host; pointing a run at it produces a
+connection failure that reads like a broker problem.
+
 Run five balanced diagnostic paired blocks against an already-running
 three-broker plaintext cluster with:
 
 ```bash
 KAFKARS_BENCH_BROKER_VERSION=4.3.1 \
-  scripts/bench-producer-suite localhost:19092,localhost:29092,localhost:39092
+  scripts/bench-producer-suite 127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094
 ```
 
 The suite alternates which client runs first, validates every pair, and seals
@@ -93,7 +100,7 @@ KAFKARS_BENCH_RECORDS=100000 \
 KAFKARS_BENCH_WARMUP_RECORDS=10000 \
 KAFKARS_BENCH_OFFERED_RATE=100000 \
   scripts/bench-producer-fixed-suite \
-    localhost:19092,localhost:29092,localhost:39092
+    127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094
 ```
 
 The fixed-load suite applies the same alternating order, exact append/fetch
@@ -107,7 +114,7 @@ and SLO contract:
 
 ```bash
 scripts/bench-producer-reference-capacity \
-  localhost:19092,localhost:29092,localhost:39092
+  127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094
 ```
 
 The runner expands or contracts to bracket a pass and failure, refines the
@@ -124,7 +131,7 @@ restating or choosing their rates:
 
 ```bash
 scripts/bench-producer-fixed-matrix \
-  localhost:19092,localhost:29092,localhost:39092 \
+  127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094 \
   target/benchmark-results/reference-capacity-<id>/capacity-summary.json
 ```
 
