@@ -29,19 +29,19 @@
 #![forbid(unsafe_code)]
 
 mod attempt;
-mod checksum;
-mod cli;
-mod environment;
+pub mod checksum;
+pub mod cli;
+pub mod environment;
 mod error;
-mod interrupt;
-mod probe;
-mod resolve;
-mod results;
-mod seal;
-mod supervise;
+pub mod interrupt;
+pub mod probe;
+pub mod resolve;
+pub mod results;
+pub mod seal;
+pub mod supervise;
 mod time;
-mod topics;
-mod verify;
+pub mod topics;
+pub mod verify;
 
 pub use attempt::{AttemptId, AttemptPaths, PENDING_DIR};
 pub use error::{
@@ -54,6 +54,28 @@ pub use time::{utc_compact_seconds, utc_rfc3339_millis};
 #[cfg(test)]
 mod attempt_test;
 #[cfg(test)]
+mod checksum_test;
+#[cfg(test)]
+mod cli_test;
+#[cfg(test)]
+mod environment_test;
+#[cfg(test)]
 mod error_test;
 #[cfg(test)]
+mod interrupt_test;
+#[cfg(test)]
+mod probe_test;
+#[cfg(test)]
+mod resolve_test;
+#[cfg(test)]
+mod results_test;
+#[cfg(test)]
+mod seal_test;
+#[cfg(test)]
+mod supervise_test;
+#[cfg(test)]
 mod time_test;
+#[cfg(test)]
+mod topics_test;
+#[cfg(test)]
+mod verify_test;
