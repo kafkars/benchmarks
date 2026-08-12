@@ -11,9 +11,10 @@
 <p class="banner">Diagnostic only — never claim-eligible. These numbers describe the machine and configuration they were measured on, and support no published comparison between clients.</p>
 <dl class="facts"><dt>experiment</dt><dd><code>74283dc35de37b3a6e2714c29a6c7fd176866332afdf2c5c8ccef2388dc698dd</code></dd><dt>attempts</dt><dd>5 requested, 5 valid</dd><dt>practical threshold</dt><dd>0.0500</dd><dt>bootstrap</dt><dd>1000 resamples, seed <code>20240601</code></dd><dt>claim eligible</dt><dd>false</dd></dl>
 <h2>Scorecard</h2>
-<table><thead><tr><th>Subject</th><th>Role</th><th class="n">Goodput (records/s)</th><th class="n">p50 (ms)</th><th class="n">p99 (ms)</th><th class="n">p99.9 (ms)</th><th class="n">Admission p99 (ms)</th><th class="n">CPU (core-s)</th><th class="n">Peak RSS (MiB)</th></tr></thead><tbody>
-<tr><td>librdkafka</td><td>base</td><td class="n">100200.0</td><td class="n">12.100</td><td class="n">12.100</td><td class="n">12.100</td><td class="n">0.001</td><td class="n">5.000</td><td class="n">64.0</td></tr>
-<tr><td>kafkars</td><td>head</td><td class="n">118500.0</td><td class="n">9.050</td><td class="n">9.050</td><td class="n">9.050</td><td class="n">0.001</td><td class="n">not reported</td><td class="n">not reported</td></tr>
+<p>Latency is offer-to-terminal, so it includes admission wait. Lateness and accepted-to-terminal are attribution: they locate a difference inside a subject and cannot establish one, because both are improved by refusing work.</p>
+<table><thead><tr><th>Subject</th><th>Role</th><th class="n">Goodput (records/s)</th><th class="n">p50 (ms)</th><th class="n">p99 (ms)</th><th class="n">p99.9 (ms)</th><th class="n">Admission p99 (ms)</th><th class="n">Lateness p99 (ms)</th><th class="n">Accepted-to-terminal p99 (ms)</th><th class="n">CPU (core-s)</th><th class="n">CPU per 1M ack (core-s)</th><th class="n">Peak RSS (MiB)</th></tr></thead><tbody>
+<tr><td>librdkafka</td><td>base</td><td class="n">100200.0</td><td class="n">12.100</td><td class="n">12.100</td><td class="n">12.100</td><td class="n">0.001</td><td class="n">not reported</td><td class="n">6.050</td><td class="n">5.000</td><td class="n">5000.000</td><td class="n">64.0</td></tr>
+<tr><td>kafkars</td><td>head</td><td class="n">118500.0</td><td class="n">9.050</td><td class="n">9.050</td><td class="n">9.050</td><td class="n">0.001</td><td class="n">not reported</td><td class="n">4.525</td><td class="n">not reported</td><td class="n">not reported</td><td class="n">not reported</td></tr>
 </tbody></table>
 <h2>Paired comparisons</h2>
 <p>Ratios are numerator over denominator of the medians; the bar shows the confidence interval against parity and the practical threshold.</p>
@@ -23,12 +24,14 @@
 <tr><td>kafkars / librdkafka</td><td>p99 offer-to-terminal</td><td class="n">0.7479</td><td class="n">0.7408</td><td class="n">0.7517</td><td><svg class="bar" viewBox="0 0 200 24" width="200" height="24" role="img" aria-label="interval 0.7408 to 0.7517"><line class="axis" x1="0" y1="12.0" x2="200" y2="12.0"/><line class="tick" x1="90.0" y1="2" x2="90.0" y2="24"/><line class="tick" x1="110.0" y1="2" x2="110.0" y2="24"/><line class="parity" x1="100.0" y1="0" x2="100.0" y2="24"/><rect class="interval good" x="48.2" y="8.0" width="2.2" height="8" rx="2"/><circle class="point good" cx="49.6" cy="12.0" r="3"/></svg></td><td>yes</td></tr>
 <tr><td>kafkars / librdkafka</td><td>p99.9 offer-to-terminal</td><td class="n">0.7479</td><td class="n">0.7408</td><td class="n">0.7517</td><td><svg class="bar" viewBox="0 0 200 24" width="200" height="24" role="img" aria-label="interval 0.7408 to 0.7517"><line class="axis" x1="0" y1="12.0" x2="200" y2="12.0"/><line class="tick" x1="90.0" y1="2" x2="90.0" y2="24"/><line class="tick" x1="110.0" y1="2" x2="110.0" y2="24"/><line class="parity" x1="100.0" y1="0" x2="100.0" y2="24"/><rect class="interval good" x="48.2" y="8.0" width="2.2" height="8" rx="2"/><circle class="point good" cx="49.6" cy="12.0" r="3"/></svg></td><td>yes</td></tr>
 <tr><td>kafkars / librdkafka</td><td>p99 admission wait</td><td class="n">1.0000</td><td class="n">1.0000</td><td class="n">1.0000</td><td><svg class="bar" viewBox="0 0 200 24" width="200" height="24" role="img" aria-label="interval 1.0000 to 1.0000"><line class="axis" x1="0" y1="12.0" x2="200" y2="12.0"/><line class="tick" x1="90.0" y1="2" x2="90.0" y2="24"/><line class="tick" x1="110.0" y1="2" x2="110.0" y2="24"/><line class="parity" x1="100.0" y1="0" x2="100.0" y2="24"/><rect class="interval flat" x="100.0" y="8.0" width="1.0" height="8" rx="2"/><circle class="point flat" cx="100.0" cy="12.0" r="3"/></svg></td><td>unresolved</td></tr>
+<tr><td>kafkars / librdkafka</td><td>p99 accepted-to-terminal (client-internal portion, locating not claiming)</td><td class="n">0.7479</td><td class="n">0.7408</td><td class="n">0.7517</td><td><svg class="bar" viewBox="0 0 200 24" width="200" height="24" role="img" aria-label="interval 0.7408 to 0.7517"><line class="axis" x1="0" y1="12.0" x2="200" y2="12.0"/><line class="tick" x1="90.0" y1="2" x2="90.0" y2="24"/><line class="tick" x1="110.0" y1="2" x2="110.0" y2="24"/><line class="parity" x1="100.0" y1="0" x2="100.0" y2="24"/><rect class="interval good" x="48.2" y="8.0" width="2.2" height="8" rx="2"/><circle class="point good" cx="49.6" cy="12.0" r="3"/></svg></td><td>yes</td></tr>
 </tbody></table>
 <h2>Gates</h2>
 <table><thead><tr><th>Gate</th><th>Result</th><th>Rule</th><th>Observed</th></tr></thead><tbody>
 <tr><td><code>attempts-valid</code></td><td class="pass">pass</td><td>at least one attempt has to be usable evidence</td><td>5 valid attempts</td></tr>
 <tr><td><code>paired-repetitions</code></td><td class="pass">pass</td><td>a comparison needs at least 5 valid paired attempts</td><td>5 of 5 required</td></tr>
 <tr><td><code>dispersion-within-budget</code></td><td class="pass">pass</td><td>every compared pair&#39;s goodput and p99 ratio must vary by no more than 0.05 of its mean, over the same per-attempt ratios the interval is drawn from</td><td>every gated ratio dispersion is inside the budget</td></tr>
+<tr><td><code>matched-execution-surface</code></td><td class="pass">pass</td><td>both sides of a comparison must declare the same payload construction and the same serialization placement, because a ratio across unlike work is not a comparison</td><td>5 compared pairs declare the same measured work</td></tr>
 <tr><td><code>kafkars-over-librdkafka:acknowledged_records_per_second</code></td><td class="pass">pass</td><td>acknowledged goodput improves only when the whole confidence interval is above 1.050 (larger is better)</td><td>ratio of medians 1.1826, interval [1.1780, 1.1850]</td></tr>
 <tr><td><code>kafkars-over-librdkafka:p50_intended_to_terminal_ns</code></td><td class="pass">pass</td><td>p50 offer-to-terminal improves only when the whole confidence interval is below 0.950 (smaller is better)</td><td>ratio of medians 0.7479, interval [0.7408, 0.7517]</td></tr>
 <tr><td><code>kafkars-over-librdkafka:p99_intended_to_terminal_ns</code></td><td class="pass">pass</td><td>p99 offer-to-terminal improves only when the whole confidence interval is below 0.950 (smaller is better)</td><td>ratio of medians 0.7479, interval [0.7408, 0.7517]</td></tr>
@@ -42,6 +45,7 @@
 <tr><td>librdkafka</td><td>p99_intended_to_terminal_ns</td><td class="n">0.0214</td><td>no</td></tr>
 <tr><td>librdkafka</td><td>p999_intended_to_terminal_ns</td><td class="n">0.0214</td><td>no</td></tr>
 <tr><td>librdkafka</td><td>p99_admission_wait_ns</td><td class="n">0.0000</td><td>no</td></tr>
+<tr><td>librdkafka</td><td>p99_accepted_to_terminal_ns</td><td class="n">0.0214</td><td>no</td></tr>
 <tr><td>librdkafka</td><td>cpu_core_seconds</td><td class="n">0.0000</td><td>no</td></tr>
 <tr><td>librdkafka</td><td>max_rss_bytes</td><td class="n">0.0000</td><td>no</td></tr>
 <tr><td>kafkars</td><td>acknowledged_records_per_second</td><td class="n">0.0081</td><td>no</td></tr>
@@ -49,11 +53,13 @@
 <tr><td>kafkars</td><td>p99_intended_to_terminal_ns</td><td class="n">0.0124</td><td>no</td></tr>
 <tr><td>kafkars</td><td>p999_intended_to_terminal_ns</td><td class="n">0.0124</td><td>no</td></tr>
 <tr><td>kafkars</td><td>p99_admission_wait_ns</td><td class="n">0.0000</td><td>no</td></tr>
+<tr><td>kafkars</td><td>p99_accepted_to_terminal_ns</td><td class="n">0.0124</td><td>no</td></tr>
 <tr><td>kafkars/librdkafka</td><td>acknowledged_records_per_second</td><td class="n">0.0038</td><td>yes</td></tr>
 <tr><td>kafkars/librdkafka</td><td>p50_intended_to_terminal_ns</td><td class="n">0.0091</td><td>no</td></tr>
 <tr><td>kafkars/librdkafka</td><td>p99_intended_to_terminal_ns</td><td class="n">0.0091</td><td>yes</td></tr>
 <tr><td>kafkars/librdkafka</td><td>p999_intended_to_terminal_ns</td><td class="n">0.0091</td><td>no</td></tr>
 <tr><td>kafkars/librdkafka</td><td>p99_admission_wait_ns</td><td class="n">0.0000</td><td>no</td></tr>
+<tr><td>kafkars/librdkafka</td><td>p99_accepted_to_terminal_ns</td><td class="n">0.0091</td><td>no</td></tr>
 </tbody></table>
 <p>Ratio series are gated against the noise budget. Per-subject rows are informational: they say whether the machine was steady, which is a different question from whether the comparison was.</p>
 <h2>Request economics</h2>

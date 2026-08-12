@@ -199,8 +199,10 @@ int bench_write_v2_report(const bench_config_t *config,
         failed |= write_throughput(output, config, phase) != 0;
         failed |= fprintf(output,
                           "\"queue\":{\"max_outstanding_observed\":%" PRIu64
+                          ",\"max_outstanding_bytes_observed\":%" PRIu64
                           ",\"final_outstanding\":%" PRIu64 "},",
                           phase->max_outstanding_observed,
+                          phase->max_outstanding_bytes_observed,
                           phase->outstanding) < 0;
         failed |= write_resources(output) != 0;
         failed |= fprintf(output, "\"native_metrics_path\":\"%s\",\"valid\":%s",

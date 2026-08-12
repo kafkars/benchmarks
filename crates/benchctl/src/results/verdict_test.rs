@@ -152,3 +152,103 @@ fn an_impossible_bucket_classifies_and_compares_without_panicking() {
     );
     assert!(!classify(&[baseline, hostile], &[]).run_valid);
 }
+
+/// One subject with a declared role, otherwise healthy.
+fn with_role(name: &str, role: &str, goodput: f64, p99: u64) -> SubjectOutcome {
+    let mut subject = healthy(name, goodput, p99);
+    subject.role = Some(role.to_owned());
+    subject
+}
+
+#[test]
+fn a_three_subject_rotation_always_divides_by_the_base() {
+    // `benchctl suite` alternates which subject runs first across repetitions,
+    // which is the whole point of paired blocking. Under an execution-order
+    // baseline the same suite would seal `head/base` in one repetition and
+    // `base/head` in the next, and a reader comparing two comparison.json files
+    // from one suite would see the ratio invert for no reason the documents
+    // explain. This is the reproduction of that, in both directions.
+    let subjects = || {
+        vec![
+            with_role("librdkafka-c", "base", 100_000.0, 2_000_000),
+            with_role("kafkars", "head", 150_000.0, 1_000_000),
+            with_role("anchor-c", "anchor", 90_000.0, 2_500_000),
+        ]
+    };
+    let rotations = [
+        vec![
+            "librdkafka-c".to_owned(),
+            "kafkars".to_owned(),
+            "anchor-c".to_owned(),
+        ],
+        vec![
+            "kafkars".to_owned(),
+            "anchor-c".to_owned(),
+            "librdkafka-c".to_owned(),
+        ],
+        vec![
+            "anchor-c".to_owned(),
+            "librdkafka-c".to_owned(),
+            "kafkars".to_owned(),
+        ],
+    ];
+
+    for order in rotations {
+        let comparison = compare(&order, &subjects());
+
+        assert!(comparison.comparable, "{:?}", comparison.reasons);
+        assert_eq!(comparison.pairs.len(), 2, "{order:?}");
+        for pair in &comparison.pairs {
+            assert_eq!(
+                pair.baseline, "librdkafka-c",
+                "the denominator is the declared base whatever ran first: {order:?}"
+            );
+        }
+        let head = comparison
+            .pairs
+            .iter()
+            .find(|pair| pair.candidate == "kafkars")
+            .unwrap_or_else(|| panic!("{order:?} lost the head pair"));
+        assert_eq!(
+            head.acknowledged_goodput_ratio,
+            Some(1.5),
+            "the ratio never inverts across the rotation: {order:?}"
+        );
+        // The anchor says whether the machine moved; it is never the thing a
+        // ratio divides by when a base exists.
+        assert!(
+            comparison
+                .pairs
+                .iter()
+                .all(|pair| pair.baseline != "anchor-c")
+        );
+    }
+}
+
+#[test]
+fn an_unlabeled_subject_list_still_falls_back_to_execution_order() {
+    let order = vec!["first".to_owned(), "second".to_owned()];
+    let comparison = compare(
+        &order,
+        &[
+            healthy("second", 150_000.0, 1_000_000),
+            healthy("first", 100_000.0, 2_000_000),
+        ],
+    );
+
+    assert_eq!(comparison.pairs.len(), 1);
+    assert_eq!(comparison.pairs[0].baseline, "first");
+}
+
+#[test]
+fn the_two_unevaluated_slo_objectives_are_named_as_deferred() {
+    let classification = classify(&[healthy("kafkars", 100_000.0, 1_000_000)], &[]);
+
+    for check in ["slo-drain-tail", "slo-queue-growth-slope"] {
+        assert!(
+            classification.deferred_checks.contains(&check.to_owned()),
+            "{:?}",
+            classification.deferred_checks
+        );
+    }
+}

@@ -10,12 +10,12 @@
 
 ## Scorecard
 
-Medians over the valid attempts. Latency is offer-to-terminal, so it includes admission wait.
+Medians over the valid attempts. Latency is offer-to-terminal, so it includes admission wait. Lateness and accepted-to-terminal are attribution: they locate a difference inside a subject and cannot establish one, because both are improved by refusing work.
 
-| Subject | Role | Goodput (records/s) | p50 (ms) | p99 (ms) | p99.9 (ms) | Admission p99 (ms) | CPU (core-s) | Peak RSS (MiB) |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| librdkafka | base | 100200.0 | 12.100 | 12.100 | 12.100 | 0.001 | 5.000 | 64.0 |
-| kafkars | head | 118500.0 | 9.050 | 9.050 | 9.050 | 0.001 | not reported | not reported |
+| Subject | Role | Goodput (records/s) | p50 (ms) | p99 (ms) | p99.9 (ms) | Admission p99 (ms) | Lateness p99 (ms) | Accepted-to-terminal p99 (ms) | CPU (core-s) | CPU per 1M ack (core-s) | Peak RSS (MiB) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| librdkafka | base | 100200.0 | 12.100 | 12.100 | 12.100 | 0.001 | not reported | 6.050 | 5.000 | 5000.000 | 64.0 |
+| kafkars | head | 118500.0 | 9.050 | 9.050 | 9.050 | 0.001 | not reported | 4.525 | not reported | not reported | not reported |
 
 ## Paired comparisons
 
@@ -28,6 +28,7 @@ Ratios are numerator over denominator of the medians. The interval is the paired
 | kafkars / librdkafka | p99 offer-to-terminal | 0.7479 | 0.7408 | 0.7517 | smaller is better | yes |
 | kafkars / librdkafka | p99.9 offer-to-terminal | 0.7479 | 0.7408 | 0.7517 | smaller is better | yes |
 | kafkars / librdkafka | p99 admission wait | 1.0000 | 1.0000 | 1.0000 | smaller is better | unresolved |
+| kafkars / librdkafka | p99 accepted-to-terminal (client-internal portion, locating not claiming) | 0.7479 | 0.7408 | 0.7517 | smaller is better | yes |
 
 ## Gates
 
@@ -36,6 +37,7 @@ Ratios are numerator over denominator of the medians. The interval is the paired
 | `attempts-valid` | pass | at least one attempt has to be usable evidence | 5 valid attempts |
 | `paired-repetitions` | pass | a comparison needs at least 5 valid paired attempts | 5 of 5 required |
 | `dispersion-within-budget` | pass | every compared pair's goodput and p99 ratio must vary by no more than 0.05 of its mean, over the same per-attempt ratios the interval is drawn from | every gated ratio dispersion is inside the budget |
+| `matched-execution-surface` | pass | both sides of a comparison must declare the same payload construction and the same serialization placement, because a ratio across unlike work is not a comparison | 5 compared pairs declare the same measured work |
 | `kafkars-over-librdkafka:acknowledged_records_per_second` | pass | acknowledged goodput improves only when the whole confidence interval is above 1.050 (larger is better) | ratio of medians 1.1826, interval [1.1780, 1.1850] |
 | `kafkars-over-librdkafka:p50_intended_to_terminal_ns` | pass | p50 offer-to-terminal improves only when the whole confidence interval is below 0.950 (smaller is better) | ratio of medians 0.7479, interval [0.7408, 0.7517] |
 | `kafkars-over-librdkafka:p99_intended_to_terminal_ns` | pass | p99 offer-to-terminal improves only when the whole confidence interval is below 0.950 (smaller is better) | ratio of medians 0.7479, interval [0.7408, 0.7517] |
@@ -51,6 +53,7 @@ Ratios are numerator over denominator of the medians. The interval is the paired
 | librdkafka | p99_intended_to_terminal_ns | 0.0214 | no |
 | librdkafka | p999_intended_to_terminal_ns | 0.0214 | no |
 | librdkafka | p99_admission_wait_ns | 0.0000 | no |
+| librdkafka | p99_accepted_to_terminal_ns | 0.0214 | no |
 | librdkafka | cpu_core_seconds | 0.0000 | no |
 | librdkafka | max_rss_bytes | 0.0000 | no |
 | kafkars | acknowledged_records_per_second | 0.0081 | no |
@@ -58,11 +61,13 @@ Ratios are numerator over denominator of the medians. The interval is the paired
 | kafkars | p99_intended_to_terminal_ns | 0.0124 | no |
 | kafkars | p999_intended_to_terminal_ns | 0.0124 | no |
 | kafkars | p99_admission_wait_ns | 0.0000 | no |
+| kafkars | p99_accepted_to_terminal_ns | 0.0124 | no |
 | kafkars/librdkafka | acknowledged_records_per_second | 0.0038 | yes |
 | kafkars/librdkafka | p50_intended_to_terminal_ns | 0.0091 | no |
 | kafkars/librdkafka | p99_intended_to_terminal_ns | 0.0091 | yes |
 | kafkars/librdkafka | p999_intended_to_terminal_ns | 0.0091 | no |
 | kafkars/librdkafka | p99_admission_wait_ns | 0.0000 | no |
+| kafkars/librdkafka | p99_accepted_to_terminal_ns | 0.0091 | no |
 
 Ratio series are gated against the noise budget. Per-subject rows are informational: they say whether the machine was steady, which is a different question from whether the comparison was.
 

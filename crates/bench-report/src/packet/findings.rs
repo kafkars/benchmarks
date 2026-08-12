@@ -11,10 +11,25 @@
 //! | condition | verdict |
 //! | --- | --- |
 //! | no valid attempt | `invalid` |
+//! | fewer than [`MINIMUM_PAIRED_REPETITIONS`] valid attempts | `inconclusive` |
 //! | no comparable pair, or `F == 0 && U == 0` | `inconclusive` |
 //! | `F > 0 && U == 0` | `improved` |
 //! | `U > 0 && F == 0` | `regressed` |
 //! | `F > 0 && U > 0` | `mixed` |
+//!
+//! Only a [claimable](crate::SuiteMetric::claimable) metric's pair is counted.
+//! Scheduler lateness and the accepted-to-terminal portion are attribution, and
+//! a verdict drawn from either would be a claim the evidence cannot carry.
+//!
+//! # Too few repetitions is inconclusive, and says which way it leaned
+//!
+//! A run below the repetition minimum has an interval, and that interval can
+//! sit entirely past the threshold — but a bootstrap over two paired blocks is
+//! an interval over two numbers, and calling it `improved` states more than the
+//! evidence supports. The verdict is therefore `inconclusive`, and the
+//! directional read is not discarded: it moves into a deterministic finding
+//! that names the direction *and* the repetition count in the same sentence, so
+//! a reader gets the signal without the document asserting it.
 //!
 //! Unresolved pairs never decide a verdict, and they are never silent either:
 //! each one is listed in `anomalies`, so `improved` alongside four unresolved
@@ -25,9 +40,13 @@
 
 use bench_schema::{PacketFinding, SuiteSummary, Verdict};
 
-use crate::suite::{SubjectEconomics, SuiteMetric, metric_of_field, pair_passes, pair_regresses};
+use crate::suite::{
+    MATCHED_EXECUTION_SURFACE, SubjectEconomics, SuiteMetric, metric_of_field, pair_passes,
+    pair_regresses,
+};
 use crate::summary::{COEFFICIENT_OF_VARIATION_BUDGET, MINIMUM_PAIRED_REPETITIONS};
 
+use super::costs::economics_findings;
 use super::metrics::{EconomicsIds, PairIds, extreme};
 
 /// The statements the deterministic layer is willing to make.
@@ -46,6 +65,7 @@ pub(super) fn findings(
         ),
         metric_refs: Vec::new(),
     }];
+    findings.extend(unmatched_surface_finding(summary));
     let favorable: Vec<&PairIds> = pair_ids
         .iter()
         .filter(|entry| pair_passes(&entry.pair, entry.metric, summary.practical_threshold))
@@ -60,8 +80,59 @@ pub(super) fn findings(
     if let Some(worst) = extreme(&unfavorable) {
         findings.push(worst.finding("breaks", summary.practical_threshold));
     }
+    findings.extend(under_repeated_finding(
+        pair_ids,
+        summary.practical_threshold,
+        runs_valid as usize,
+    ));
     findings.extend(economics_findings(economics_ids, economics));
     findings
+}
+
+/// The finding a packet carries when the compared subjects declared unlike work.
+///
+/// It is stated as a finding rather than only as an anomaly because it changes
+/// what every other finding in the packet means: a ratio between unlike
+/// measurements is not a weak comparison, it is not a comparison.
+fn unmatched_surface_finding(summary: &SuiteSummary) -> Option<PacketFinding> {
+    let gate = summary
+        .gates
+        .iter()
+        .find(|gate| gate.name == MATCHED_EXECUTION_SURFACE && !gate.passed)?;
+    Some(PacketFinding {
+        text: format!(
+            "The compared subjects did not declare the same measured work, so every ratio in \
+             this packet is between unlike measurements: {}.",
+            gate.detail
+        ),
+        metric_refs: Vec::new(),
+    })
+}
+
+/// The directional read a run below the repetition minimum is not allowed to
+/// state as a verdict.
+fn under_repeated_finding(
+    pairs: &[PairIds],
+    threshold: f64,
+    valid_attempts: usize,
+) -> Option<PacketFinding> {
+    if valid_attempts == 0 || valid_attempts >= MINIMUM_PAIRED_REPETITIONS {
+        return None;
+    }
+    let direction = match directional(pairs, threshold) {
+        Verdict::Improved => "improved",
+        Verdict::Regressed => "regressed",
+        Verdict::Mixed => "mixed",
+        Verdict::Inconclusive | Verdict::Invalid => return None,
+    };
+    Some(PacketFinding {
+        text: format!(
+            "Directionally {direction} on n={valid_attempts}; below the \
+             {MINIMUM_PAIRED_REPETITIONS} paired repetitions a comparison needs, so the verdict \
+             is inconclusive rather than {direction}."
+        ),
+        metric_refs: Vec::new(),
+    })
 }
 
 /// Everything a reader has to weigh before believing the verdict.
@@ -133,6 +204,16 @@ pub(super) fn verdict(valid_attempts: usize, pairs: &[PairIds], threshold: f64) 
     if valid_attempts == 0 {
         return Verdict::Invalid;
     }
+    if valid_attempts < MINIMUM_PAIRED_REPETITIONS {
+        // The direction is not lost — `under_repeated_finding` states it, with
+        // the repetition count attached so it cannot be quoted without one.
+        return Verdict::Inconclusive;
+    }
+    directional(pairs, threshold)
+}
+
+/// Which way the intervals lean, before the repetition minimum is applied.
+fn directional(pairs: &[PairIds], threshold: f64) -> Verdict {
     let favorable = pairs
         .iter()
         .filter(|entry| pair_passes(&entry.pair, entry.metric, threshold))
@@ -147,88 +228,4 @@ pub(super) fn verdict(valid_attempts: usize, pairs: &[PairIds], threshold: f64) 
         (0, _) => Verdict::Regressed,
         _ => Verdict::Mixed,
     }
-}
-
-/// Findings comparing what each reporting subject spent per record.
-///
-/// Only subjects that actually reported are compared, and the comparison names
-/// both sides. A subject whose client emits no native statistics produces no
-/// finding here at all, rather than a finding about a zero.
-fn economics_findings(ids: &[EconomicsIds], economics: &[SubjectEconomics]) -> Vec<PacketFinding> {
-    let mut findings = Vec::new();
-    for entry in ids {
-        let Some(subject) = economics
-            .iter()
-            .find(|candidate| candidate.subject == entry.subject)
-        else {
-            continue;
-        };
-        let mut refs = Vec::new();
-        let mut parts = Vec::new();
-        if let (Some(id), Some(value)) = (
-            entry.per_million.clone(),
-            subject.totals.produce_requests_per_million_acknowledged,
-        ) {
-            parts.push(format!("{value:.1} produce requests per million records"));
-            refs.push(id);
-        }
-        if let (Some(id), Some(value)) = (
-            entry.records_per_request.clone(),
-            subject.totals.records_per_produce_request,
-        ) {
-            parts.push(format!("{value:.2} records per request"));
-            refs.push(id);
-        }
-        if let (Some(id), Some(value)) = (
-            entry.payload_share.clone(),
-            subject.totals.payload_bytes_per_transmitted_byte,
-        ) {
-            parts.push(format!("{value:.4} of transmitted bytes were payload"));
-            refs.push(id);
-        }
-        if parts.is_empty() {
-            continue;
-        }
-        findings.push(PacketFinding {
-            text: format!("{} spent {}.", entry.subject, parts.join(", ")),
-            metric_refs: refs,
-        });
-    }
-    if ids.len() >= 2 {
-        let mut pairs = Vec::new();
-        for entry in ids.windows(2) {
-            let (Some(first), Some(second)) = (entry.first(), entry.get(1)) else {
-                continue;
-            };
-            let values = |name: &str| {
-                economics
-                    .iter()
-                    .find(|candidate| candidate.subject == name)
-                    .and_then(|candidate| {
-                        candidate.totals.produce_requests_per_million_acknowledged
-                    })
-            };
-            let (Some(left), Some(right)) = (values(&first.subject), values(&second.subject))
-            else {
-                continue;
-            };
-            if left <= 0.0 {
-                continue;
-            }
-            let mut refs = Vec::new();
-            refs.extend(first.per_million.clone());
-            refs.extend(second.per_million.clone());
-            pairs.push(PacketFinding {
-                text: format!(
-                    "{} spent {:.4} times as many produce requests per acknowledged record as {}.",
-                    second.subject,
-                    right / left,
-                    first.subject
-                ),
-                metric_refs: refs,
-            });
-        }
-        findings.extend(pairs);
-    }
-    findings
 }

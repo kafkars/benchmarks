@@ -51,18 +51,25 @@ if [[ "${CI:-}" == "true" || "${KAFKA_BENCH_PROVENANCE:-}" == "strict" ]]; then
 fi
 
 missing_siblings=0
+unreadable_checks=0
 soft_failures=0
 
-# missing = a sibling checkout that is not there at all.
-# soft    = provenance mismatch against a sibling that is.
-# Both fail in strict mode and warn in advisory mode; they are counted
-# separately only so that the advisory summary can say which one happened, since
-# "absent" and "on the wrong commit" call for different fixes.
+# missing    = a sibling checkout that is not there at all.
+# unreadable = a cross-check whose input could not be read, which on a bare
+#              clone is simply the downstream consequence of `missing`.
+# soft       = provenance mismatch against a sibling that is there.
+# All three fail in strict mode and warn in advisory mode; they are counted
+# separately only so that the summary can say which one happened, since "absent",
+# "could not be checked", and "on the wrong commit" call for different fixes —
+# and because reporting the first as the third told a reader on a bare clone
+# that two revisions disagreed when nothing had been compared at all.
 report() {
   local severity=$1
   shift
   if [[ "$severity" == missing ]]; then
     missing_siblings=$((missing_siblings + 1))
+  elif [[ "$severity" == unreadable ]]; then
+    unreadable_checks=$((unreadable_checks + 1))
   else
     soft_failures=$((soft_failures + 1))
   fi
@@ -198,8 +205,8 @@ check_client_declared_siblings() {
     git -C "$client_root" show \
       "$KAFKA_CLIENT_REVISION:dependencies/sibling-revisions.env" 2>/dev/null
   ) || {
-    report soft \
-      "could not read dependencies/sibling-revisions.env from kafka-client revision $KAFKA_CLIENT_REVISION"
+    report unreadable \
+      "could not read dependencies/sibling-revisions.env from kafka-client revision $KAFKA_CLIENT_REVISION; nothing was compared"
     return 0
   }
   declared_driver=$(
@@ -238,7 +245,8 @@ check_driver_protocol_revision() {
   local driver_policy="$driver_root/guardrails.toml"
 
   if [[ ! -f "$driver_policy" ]]; then
-    report soft "kafka-driver protocol revision policy is missing at $driver_policy"
+    report unreadable \
+      "kafka-driver protocol revision policy is missing at $driver_policy; nothing was compared"
     return 0
   fi
   while IFS= read -r declaration; do
@@ -269,18 +277,23 @@ check_client_declared_siblings
 check_driver_protocol_revision
 
 if [[ "$mode" == strict ]] &&
-  { [[ "$missing_siblings" -gt 0 ]] || [[ "$soft_failures" -gt 0 ]]; }; then
-  echo "provenance: $missing_siblings absent and $soft_failures mismatched sibling check(s) in strict mode" >&2
+  { [[ "$missing_siblings" -gt 0 ]] || [[ "$unreadable_checks" -gt 0 ]] ||
+    [[ "$soft_failures" -gt 0 ]]; }; then
+  echo "provenance: $missing_siblings absent, $unreadable_checks uncheckable, and $soft_failures mismatched sibling check(s) in strict mode" >&2
   exit 1
 fi
 if [[ "$missing_siblings" -gt 0 ]]; then
   echo "provenance advisory: sibling checkouts absent; adapter builds and check-benchmarks require them" >&2
   echo "provenance advisory: the workspace, schema, control-plane, and summary lanes do not, so scripts/check is still meaningful here" >&2
 fi
+if [[ "$unreadable_checks" -gt 0 ]]; then
+  echo "provenance advisory: $unreadable_checks cross-check(s) had nothing to read, so they are unchecked rather than mismatched" >&2
+fi
 if [[ "$soft_failures" -gt 0 ]]; then
   echo "provenance advisory: $soft_failures mismatch(es); measurements taken now are diagnostic only, never claim-eligible" >&2
 fi
-if [[ "$missing_siblings" -eq 0 ]] && [[ "$soft_failures" -eq 0 ]]; then
+if [[ "$missing_siblings" -eq 0 ]] && [[ "$unreadable_checks" -eq 0 ]] &&
+  [[ "$soft_failures" -eq 0 ]]; then
   echo "provenance: siblings match dependencies/sibling-revisions.env"
 fi
 exit 0

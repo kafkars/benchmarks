@@ -29,6 +29,7 @@ fn llm_summary(verdict: Verdict) -> Vec<u8> {
         hypotheses: Vec::new(),
         next_experiments: Vec::new(),
         caveats: vec!["This summary interprets nothing.".to_owned()],
+        provenance: None,
     })
     .unwrap()
 }

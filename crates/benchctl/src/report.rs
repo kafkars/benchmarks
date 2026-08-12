@@ -63,13 +63,16 @@ pub fn execute_report(command: &ReportCommand) -> i32 {
 fn render(command: &ReportCommand) -> CtlResult<()> {
     let paths = AttemptPaths::at(command.bundle.clone());
     if !paths.status_json().is_file() {
-        return Err(CtlError::invalid(format!(
-            "{} does not look like a sealed bundle: no status.json",
-            command.bundle.display()
-        )));
+        return Err(CtlError::invalid_input(
+            "bundle",
+            format!(
+                "{} does not look like a sealed bundle: no status.json",
+                command.bundle.display()
+            ),
+        ));
     }
     let markdown = bench_report::render_markdown_bundle(paths.root())
-        .map_err(|error| CtlError::invalid(format!("render the bundle: {error}")))?;
+        .map_err(|error| CtlError::invalid_input("bundle", error))?;
     write_out(command.out.as_deref(), markdown.as_bytes())
 }
 
@@ -119,17 +122,28 @@ pub fn execute_packet(command: &PacketCommand) -> i32 {
 }
 
 /// The check itself: build the packet, then bind the prose to it.
+///
+/// Every failure names the flag that carried the file it is about. A summary
+/// that fails the guardrail and a summary file that does not exist are
+/// different problems, and reporting both as an invalid experiment would send a
+/// reader to look at their scenario — the one input that was fine.
 fn validate(command: &PacketCommand) -> CtlResult<()> {
-    let summary = SuiteSummary::from_slice(&read(&command.suite)?)?;
+    let summary = SuiteSummary::from_slice(&read("suite", &command.suite)?)
+        .map_err(|error| CtlError::invalid_input("suite", error))?;
     let packet = bench_report::build_packet(&summary);
-    packet.validate()?;
-    let written = LlmSummary::from_slice(&read(&command.llm_summary)?)?;
-    written.validate_against(&packet)?;
+    packet
+        .validate()
+        .map_err(|error| CtlError::invalid_input("suite", error))?;
+    let written = LlmSummary::from_slice(&read("llm-summary", &command.llm_summary)?)
+        .map_err(|error| CtlError::invalid_input("llm-summary", error))?;
+    written
+        .validate_against(&packet)
+        .map_err(|error| CtlError::invalid_input("llm-summary", error))?;
     Ok(())
 }
 
-/// Reads a document's bytes, naming the file in the error.
-fn read(path: &Path) -> CtlResult<Vec<u8>> {
+/// Reads a document's bytes, naming the flag and the file in the error.
+fn read(flag: &str, path: &Path) -> CtlResult<Vec<u8>> {
     std::fs::read(path)
-        .map_err(|error| CtlError::invalid(format!("read {}: {error}", path.display())))
+        .map_err(|error| CtlError::invalid_input(flag, format!("read {}: {error}", path.display())))
 }

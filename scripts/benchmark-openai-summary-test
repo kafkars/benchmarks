@@ -850,4 +850,130 @@ if document["model"] != "gpt-5.5-mini" or document["reasoningEffort"] != "medium
     raise SystemExit(f"error: --model and --reasoning-effort did not reach the request: {document['model']} {document['reasoningEffort']}")
 PY
 
+echo "==> a replayed reply lands with its provenance embedded, and renders nothing"
+# The one path that exercises the reply handling with no network and no key.
+# The reply deliberately states a verdict the packet does not, so the outcome is
+# the same wherever this runs: where a benchctl exists the guardrail rejects the
+# summary, where none exists it cannot spawn, and both are nonzero with no
+# markdown. That is the invariant worth pinning — prose is rendered only for a
+# summary something checked — and the embed is asserted beside it.
+replay="$work/reply.json"
+python3 - "$replay" <<'PY'
+import json
+import pathlib
+import sys
+
+summary = {
+    "schema": "kafkars.llm-summary.v1",
+    "verdict": "improved",
+    "executive_summary": (
+        "A fixed reply, so the contract test exercises the reply path without a "
+        "network. Its verdict disagrees with the packet on purpose."
+    ),
+    "findings": [],
+    "hypotheses": [],
+    "next_experiments": [],
+    "caveats": ["Written by a contract test; it interprets nothing."],
+}
+pathlib.Path(sys.argv[1]).write_text(
+    json.dumps({"id": "resp_offline_contract_test", "output_text": json.dumps(summary)}, indent=2),
+    encoding="utf-8",
+)
+PY
+
+replay_out="$work/replay"
+mkdir -p "$replay_out"
+if scripts/benchmark-openai-summary \
+  --reports "$reports" \
+  --output-json "$replay_out/llm-summary.json" \
+  --offline-reply "$replay" \
+  --dry-run >/dev/null 2>&1; then
+  fail "--dry-run and --offline-reply were accepted together"
+fi
+
+set +e
+scripts/benchmark-openai-summary \
+  --reports "$reports" \
+  --output-json "$replay_out/llm-summary.json" \
+  --output-markdown "$replay_out/llm-summary.md" \
+  --offline-reply "$replay" >"$work/replay.log" 2>&1
+replay_status=$?
+set -e
+
+if [ "$replay_status" -eq 0 ]; then
+  fail "a summary that overrules the packet's verdict was accepted"
+fi
+[[ -f "$replay_out/llm-summary.json" ]] \
+  || fail "the replay did not write a summary: $(cat "$work/replay.log")"
+[[ -f "$replay_out/llm-provenance.json" ]] \
+  || fail "the replay did not keep the provenance sidecar"
+[[ ! -e "$replay_out/llm-summary.md" ]] \
+  || fail "markdown was rendered for a summary the guardrail never accepted"
+
+python3 - "$replay_out/llm-summary.json" "$replay_out/llm-provenance.json" \
+  "$reports/analysis-packet.json" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+summary_path, sidecar_path, packet_path = (pathlib.Path(part) for part in sys.argv[1:4])
+summary = json.loads(summary_path.read_text(encoding="utf-8"))
+sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+
+embedded = summary.get("provenance")
+if embedded is None:
+    raise SystemExit("error: the summary carries no embedded provenance")
+if embedded != sidecar:
+    raise SystemExit(
+        "error: the embedded provenance and the sidecar disagree.\n"
+        f"  embedded: {embedded}\n  sidecar:  {sidecar}"
+    )
+for field in (
+    "model",
+    "prompt_version",
+    "reasoning_effort",
+    "response_id",
+    "input_sha256",
+    "output_sha256",
+    "created_at",
+):
+    if not embedded.get(field):
+        raise SystemExit(f"error: the embedded provenance has no {field}")
+if embedded["prompt_version"] != "producer-comparison.v1":
+    raise SystemExit("error: the embedded prompt version is not the committed one")
+if embedded["response_id"] != "resp_offline_contract_test":
+    raise SystemExit("error: the response id did not come from the reply")
+if embedded["input_sha256"] != hashlib.sha256(packet_path.read_bytes()).hexdigest():
+    raise SystemExit("error: input_sha256 is not the digest of the packet that was sent")
+
+# The digest covers the model's own bytes, before the provenance block was
+# added, because a digest cannot cover the field that carries it. Dropping the
+# field and rehashing is exactly what a reader checking this document does, so
+# the test does it too.
+del summary["provenance"]
+recomputed = hashlib.sha256((json.dumps(summary, indent=2) + "\n").encode("utf-8")).hexdigest()
+if recomputed != embedded["output_sha256"]:
+    raise SystemExit(
+        "error: output_sha256 does not cover the summary with the provenance removed"
+    )
+PY
+
+echo "==> the model is never asked to write its own provenance"
+python3 - "$request" <<'PY'
+import json
+import pathlib
+import sys
+
+schema = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))["request"]["text"][
+    "format"
+]["schema"]
+if "provenance" in schema["properties"] or "provenance" in schema["required"]:
+    raise SystemExit(
+        "error: the strict output schema offers the model a provenance field. "
+        "Provenance is stamped by the script from what it actually did; a model "
+        "that could write it could write anything."
+    )
+PY
+
 printf 'benchmark-openai-summary contract test passed\n'

@@ -18,7 +18,7 @@ use super::bar::ratio_bar;
 use super::economics::html_economics;
 use super::format::{
     dispersion_role, escape, format_mib, format_ms, format_rate, format_ratio, format_seconds,
-    pass_word, valid_count, verdict_word,
+    optional_ms, pass_word, valid_count, verdict_word,
 };
 use super::style::STYLE;
 use super::{DIAGNOSTIC_BANNER, NOT_REPORTED};
@@ -97,16 +97,22 @@ fn html_scorecard(out: &mut String, summary: &SuiteSummary) {
     }
     let _ = writeln!(
         out,
-        "<table><thead><tr><th>Subject</th><th>Role</th>\
+        "<p>Latency is offer-to-terminal, so it includes admission wait. Lateness and \
+         accepted-to-terminal are attribution: they locate a difference inside a subject and \
+         cannot establish one, because both are improved by refusing work.</p>\n\
+         <table><thead><tr><th>Subject</th><th>Role</th>\
          <th class=\"n\">Goodput (records/s)</th><th class=\"n\">p50 (ms)</th>\
          <th class=\"n\">p99 (ms)</th><th class=\"n\">p99.9 (ms)</th>\
-         <th class=\"n\">Admission p99 (ms)</th><th class=\"n\">CPU (core-s)</th>\
+         <th class=\"n\">Admission p99 (ms)</th><th class=\"n\">Lateness p99 (ms)</th>\
+         <th class=\"n\">Accepted-to-terminal p99 (ms)</th><th class=\"n\">CPU (core-s)</th>\
+         <th class=\"n\">CPU per 1M ack (core-s)</th>\
          <th class=\"n\">Peak RSS (MiB)</th></tr></thead><tbody>"
     );
     for median in &summary.medians {
         let _ = writeln!(
             out,
             "<tr><td>{}</td><td>{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td>\
+             <td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td>\
              <td class=\"n\">{}</td><td class=\"n\">{}</td><td class=\"n\">{}</td>\
              <td class=\"n\">{}</td><td class=\"n\">{}</td></tr>",
             escape(&median.name),
@@ -116,8 +122,13 @@ fn html_scorecard(out: &mut String, summary: &SuiteSummary) {
             format_ms(median.p99_intended_to_terminal_ns),
             format_ms(median.p999_intended_to_terminal_ns),
             format_ms(median.p99_admission_wait_ns),
+            optional_ms(median.p99_intended_to_call_start_ns),
+            format_ms(median.p99_accepted_to_terminal_ns),
             median
                 .cpu_core_seconds
+                .map_or_else(|| NOT_REPORTED.to_owned(), format_seconds),
+            median
+                .cpu_core_seconds_per_million_acknowledged
                 .map_or_else(|| NOT_REPORTED.to_owned(), format_seconds),
             median
                 .max_rss_bytes

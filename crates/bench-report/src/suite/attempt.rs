@@ -150,9 +150,14 @@ impl LoadedAttempt {
             else {
                 continue;
             };
+            let lateness = match &result.timing.intended_to_call_start {
+                Some(histogram) => histogram_percentile(histogram, 0.99)?,
+                None => None,
+            };
             observations.push(SuiteSubjectObservation {
                 name: subject.name.clone(),
                 role: subject.role.clone(),
+                declared: Some(result.declared.clone()),
                 acknowledged_records_per_second: result.throughput.acknowledged_records_per_second,
                 p50_intended_to_terminal_ns: percentile(result, 0.50)?,
                 p99_intended_to_terminal_ns: percentile(result, 0.99)?,
@@ -162,8 +167,18 @@ impl LoadedAttempt {
                     0.99,
                 )?
                 .unwrap_or(0),
+                p99_intended_to_call_start_ns: lateness,
+                p99_accepted_to_terminal_ns: histogram_percentile(
+                    &result.timing.accepted_to_terminal,
+                    0.99,
+                )?
+                .unwrap_or(0),
                 max_rss_bytes: result.resources.map(|resources| resources.max_rss_bytes),
                 cpu_core_seconds: result.resources.map(core_seconds),
+                cpu_core_seconds_per_million_acknowledged: result
+                    .resources
+                    .map(core_seconds)
+                    .and_then(|seconds| per_million(seconds, result.outcomes.acknowledged)),
             });
         }
         Ok(SuiteAttempt {
@@ -227,4 +242,23 @@ fn core_seconds(resources: bench_schema::ProcessResources) -> f64 {
         .user_cpu_ns
         .saturating_add(resources.system_cpu_ns) as f64
         / 1_000_000_000.0
+}
+
+/// CPU core-seconds normalized to a million acknowledged records.
+///
+/// Total CPU is not comparable between subjects that moved different amounts of
+/// traffic — the subject that acknowledged more records should have spent more
+/// CPU, and reading the raw totals side by side rewards the one that did less
+/// work. Absent, never zero, when there is nothing to divide by: a run that
+/// acknowledged nothing has no per-record cost, which is a different statement
+/// from a cost of nothing.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "reporting statistic over a record count, not identity arithmetic"
+)]
+fn per_million(core_seconds: f64, acknowledged: u64) -> Option<f64> {
+    if acknowledged == 0 || !core_seconds.is_finite() {
+        return None;
+    }
+    Some(core_seconds * 1_000_000.0 / acknowledged as f64)
 }

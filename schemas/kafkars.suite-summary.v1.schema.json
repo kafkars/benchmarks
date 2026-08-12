@@ -171,7 +171,7 @@
     "observation": {
       "type": "object",
       "title": "One subject's numbers",
-      "description": "The same field set for a single attempt and for the median over attempts, so that reading a median and reading the observations behind it is the same act. Every latency is in nanoseconds and every one of them is an intended_to_terminal percentile, so a subject cannot look faster by spending longer refusing to accept work.",
+      "description": "The same field set for a single attempt and for the median over attempts, so that reading a median and reading the observations behind it is the same act. Every offer-to-terminal latency is in nanoseconds and is an intended_to_terminal percentile, so a subject cannot look faster by spending longer refusing to accept work. Three fields are attribution rather than comparison - declared, p99_intended_to_call_start_ns, and p99_accepted_to_terminal_ns - and they locate a difference without being able to establish one.",
       "required": [
         "name",
         "acknowledged_records_per_second",
@@ -187,6 +187,18 @@
           "enum": ["base", "head", "anchor"],
           "description": "The subject's role in this comparison; absent when the subject list is unlabeled."
         },
+        "declared": {
+          "type": ["object", "null"],
+          "description": "What the adapter declared it did in the measured path, copied from kafkars.producer-benchmark.v2. On an attempt observation it is that attempt's declaration; on a median it is the declaration every valid attempt agreed on, and absent when they did not. The matched-execution-surface gate reads the per-attempt values.",
+          "required": ["payload_construction", "ownership", "completion_mode", "serialization"],
+          "additionalProperties": false,
+          "properties": {
+            "payload_construction": { "type": "string" },
+            "ownership": { "type": "string" },
+            "completion_mode": { "type": "string" },
+            "serialization": { "type": "string" }
+          }
+        },
         "acknowledged_records_per_second": { "type": "number", "minimum": 0 },
         "p50_intended_to_terminal_ns": { "type": "integer", "minimum": 0 },
         "p99_intended_to_terminal_ns": { "type": "integer", "minimum": 0 },
@@ -195,6 +207,16 @@
           "type": "integer",
           "minimum": 0,
           "description": "99th percentile of admission wait alone, reported beside the end-to-end percentiles so backpressure is visible rather than merely included."
+        },
+        "p99_intended_to_call_start_ns": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "99th percentile scheduler lateness. Present exactly when the load mode had a schedule to be late against; a closed-loop run reports nothing here rather than zero, because no schedule is a different statement from a schedule kept perfectly."
+        },
+        "p99_accepted_to_terminal_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "99th percentile of the client-internal portion, terminal minus accepted. This locates a latency difference inside the client and cannot claim one: a client that refuses admission for longer looks better here by construction. Compare on p99_intended_to_terminal_ns and read this beside it. Absent only in documents written before the field existed, where a reader must treat it as unknown rather than as zero."
         },
         "max_rss_bytes": {
           "type": ["integer", "null"],
@@ -205,6 +227,11 @@
           "type": ["number", "null"],
           "minimum": 0,
           "description": "Absent when the platform did not report it."
+        },
+        "cpu_core_seconds_per_million_acknowledged": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "CPU core-seconds normalized to a million acknowledged records. Total CPU is not comparable between subjects that moved different amounts of traffic; this is. Absent rather than zero when the platform reported no resources, or when nothing was acknowledged to divide by."
         }
       }
     }

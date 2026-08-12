@@ -174,6 +174,8 @@ static void abandon(v2_caller_t *caller, size_t window) {
                 release_slot(phase, offer);
                 if (phase->outstanding > 0)
                         phase->outstanding--;
+                if (phase->outstanding_bytes >= caller->config->payload_bytes)
+                        phase->outstanding_bytes -= caller->config->payload_bytes;
                 if (phase->caller_outstanding[caller->caller] > 0)
                         phase->caller_outstanding[caller->caller]--;
         }
@@ -238,6 +240,8 @@ void bench_v2_delivery(bench_v2_phase_t *phase,
                                span_ns(offer->intended_ns, terminal_ns));
         if (phase->outstanding > 0)
                 phase->outstanding--;
+        if (phase->outstanding_bytes >= phase->config->payload_bytes)
+                phase->outstanding_bytes -= phase->config->payload_bytes;
         if (phase->caller_outstanding[offer->caller] > 0)
                 phase->caller_outstanding[offer->caller]--;
         release_slot(phase, offer);
@@ -429,6 +433,9 @@ static int offer_batch(v2_caller_t *caller,
         phase->caller_outstanding[caller->caller] += count;
         if (phase->outstanding > phase->max_outstanding_observed)
                 phase->max_outstanding_observed = phase->outstanding;
+        phase->outstanding_bytes += (uint64_t)count * caller->config->payload_bytes;
+        if (phase->outstanding_bytes > phase->max_outstanding_bytes_observed)
+                phase->max_outstanding_bytes_observed = phase->outstanding_bytes;
         v2_unlock(phase);
         for (;;) {
                 uint64_t accepted_ns;

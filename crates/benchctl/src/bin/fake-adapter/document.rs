@@ -125,6 +125,13 @@ pub(crate) fn result_document(
         throughput: throughput(experiment, spread),
         queue: QueueObservation {
             max_outstanding_observed: experiment.application.max_outstanding_records.min(records),
+            max_outstanding_bytes_observed: Some(
+                experiment
+                    .application
+                    .max_outstanding_records
+                    .min(records)
+                    .saturating_mul(u64::from(experiment.payload.bytes)),
+            ),
             final_outstanding: 0,
         },
         resources: Some(ProcessResources {

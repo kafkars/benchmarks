@@ -1,7 +1,7 @@
 //! Round-trips, and the three ways prose can fail to be about its packet.
 #![expect(clippy::unwrap_used, reason = "test assertions may unwrap")]
 
-use crate::llm::{Confidence, LlmFinding, LlmHypothesis, LlmSummary};
+use crate::llm::{Confidence, LlmFinding, LlmHypothesis, LlmProvenance, LlmSummary};
 use crate::packet::Verdict;
 use crate::packet_test::fixture as packet;
 use crate::{AnalysisPacket, SchemaErrorKind};
@@ -28,6 +28,19 @@ fn fixture() -> LlmSummary {
             "repeat at 16 KiB payloads to test the batching hypothesis".to_owned(),
         ],
         caveats: vec!["one host, one broker set, one payload size".to_owned()],
+        provenance: None,
+    }
+}
+
+fn provenance() -> LlmProvenance {
+    LlmProvenance {
+        model: "gpt-5.5".to_owned(),
+        prompt_version: "producer-comparison.v1".to_owned(),
+        reasoning_effort: "high".to_owned(),
+        response_id: Some("resp_0123456789".to_owned()),
+        input_sha256: "b".repeat(64),
+        output_sha256: "c".repeat(64),
+        created_at: "2026-08-12T10:15:00+00:00".to_owned(),
     }
 }
 
@@ -151,4 +164,59 @@ fn a_summary_that_cites_nothing_at_all_is_still_bound_to_the_verdict() {
 
     silent.verdict = Verdict::Inconclusive;
     assert!(silent.validate_against(&packet()).is_err());
+}
+
+#[test]
+fn a_finding_that_cites_no_metric_is_refused() {
+    // Stating no findings is allowed; stating one with nothing behind it is
+    // not. The uncited sentence reads as fact and rests on nothing.
+    let mut uncited = fixture();
+    uncited.findings[0].metric_refs.clear();
+
+    let error = uncited.validate_against(&packet()).unwrap_err();
+
+    assert_eq!(error.kind(), SchemaErrorKind::InvalidField);
+    assert!(
+        error.context().starts_with("findings[0].metric_refs"),
+        "{error}"
+    );
+    assert!(error.context().contains("hypothesis"), "{error}");
+}
+
+#[test]
+fn an_uncited_statement_is_accepted_as_a_hypothesis() {
+    let mut moved = fixture();
+    moved.findings.clear();
+    moved.hypotheses.push(LlmHypothesis {
+        text: "The gap may be allocator behaviour.".to_owned(),
+        confidence: Confidence::Low,
+        evidence_refs: Vec::new(),
+    });
+
+    moved.validate_against(&packet()).unwrap();
+}
+
+#[test]
+fn embedded_provenance_round_trips_and_is_not_required() {
+    let mut stamped = fixture();
+    stamped.provenance = Some(provenance());
+
+    let bytes = serde_json::to_vec(&stamped).unwrap();
+    let reparsed = LlmSummary::from_slice(&bytes).unwrap();
+
+    assert_eq!(reparsed, stamped);
+    assert_eq!(
+        reparsed
+            .provenance
+            .as_ref()
+            .map(|entry| entry.model.clone()),
+        Some("gpt-5.5".to_owned())
+    );
+    stamped.validate_against(&packet()).unwrap();
+
+    // Absent, the field does not appear on the wire at all, so every summary
+    // written before provenance existed still parses byte for byte.
+    let bare = serde_json::to_string(&fixture()).unwrap();
+    assert!(!bare.contains("provenance"), "{bare}");
+    LlmSummary::from_slice(bare.as_bytes()).unwrap();
 }

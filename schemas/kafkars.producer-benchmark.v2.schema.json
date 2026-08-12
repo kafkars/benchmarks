@@ -144,6 +144,11 @@
       "additionalProperties": false,
       "properties": {
         "max_outstanding_observed": { "type": "integer", "minimum": 0 },
+        "max_outstanding_bytes_observed": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Largest outstanding payload-byte count observed, when the adapter tracked one. The record count says how many offers the client owned at the peak; this says how much of the application's memory that peak was, which two clients at the same record high-water can differ on sharply. Absent rather than zero for an adapter that does not track it."
+        },
         "final_outstanding": { "type": "integer", "minimum": 0 }
       }
     },

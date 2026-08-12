@@ -60,7 +60,14 @@ fn execute_resolve(command: &ResolveCommand) -> CtlResult<()> {
     )
     .map(|(resolved, _lock)| resolved);
     let _ = std::fs::remove_dir_all(&scratch);
-    let bytes = pretty_bytes(&resolved?)?;
+    let resolved = resolved?;
+    let bytes = pretty_bytes(&resolved)?;
+    // The id goes to stderr whether or not `--out` was given. Without `--out`
+    // the document is on stdout for a pipeline to consume, and a second thing
+    // printed there would break it; with `--out` a reader still asked "under
+    // what identity would this run", and the id is the answer to that question
+    // rather than a decoration on the answer to another one.
+    eprintln!("experiment_id: {}", bench_schema::experiment_id(&resolved)?);
     match &command.out {
         Some(path) => std::fs::write(path, bytes)
             .map_err(|error| CtlError::internal(format!("write {}: {error}", path.display()))),
@@ -81,7 +88,15 @@ fn execute_run(command: &RunCommand) -> i32 {
         &command.results_root,
         command.budget,
     ) {
-        end @ AttemptEnd::Sealed(_) => end.exit_code(),
+        AttemptEnd::Sealed(sealed) => {
+            // The last line of stdout is the bundle path, on every exit code a
+            // sealed attempt can produce. A crashed attempt is exactly when a
+            // reader most wants the directory, and a verb that made them go
+            // looking for it with `ls -t` was asking them to guess which of
+            // several trees the run actually landed in.
+            println!("{}", sealed.paths.root().display());
+            sealed.exit_code
+        }
         AttemptEnd::Unsealable(error) => error.exit_code(),
     }
 }

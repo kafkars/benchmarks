@@ -31,6 +31,7 @@ OUTPUT_MARKDOWN=""
 MODEL="${OPENAI_MODEL:-gpt-5.5}"
 REASONING_EFFORT="${OPENAI_REASONING_EFFORT:-high}"
 DRY_RUN=false
+OFFLINE_REPLY=""
 
 usage() {
   cat <<'USAGE'
@@ -48,12 +49,20 @@ Options:
   --model MODEL             OpenAI model. Default: OPENAI_MODEL or gpt-5.5.
   --reasoning-effort VALUE  Reasoning effort. Default: OPENAI_REASONING_EFFORT or high.
   --dry-run                 Write the request JSON without calling the API.
+  --offline-reply FILE      Read the provider's raw response from FILE instead
+                            of calling the API, for contract tests and for
+                            replaying a captured reply. The guardrail still
+                            runs, and no markdown is written unless it passes.
   -h, --help                Show this help.
 
 Also written beside --output-json:
   llm-summary-request.json  The exact request payload, written before the call.
   llm-provenance.json       Prompt version, model, response id, and the sha256
-                            of both the packet in and the summary out.
+                            of both the packet in and the summary out. The same
+                            facts are embedded in the summary itself; the
+                            sidecar stays because a rejected summary still
+                            leaves one, and the tooling around this script
+                            reads it.
 USAGE
 }
 
@@ -93,6 +102,11 @@ while [[ "$#" -gt 0 ]]; do
       DRY_RUN=true
       shift
       ;;
+    --offline-reply)
+      [[ "$#" -ge 2 ]] || fail "--offline-reply requires a value"
+      OFFLINE_REPLY="$2"
+      shift 2
+      ;;
     -h | --help)
       usage
       exit 0
@@ -125,13 +139,23 @@ if [[ -z "$OUTPUT_MARKDOWN" ]]; then
 fi
 mkdir -p "$(dirname "$OUTPUT_JSON")" "$(dirname "$OUTPUT_MARKDOWN")"
 
+[[ -z "$OFFLINE_REPLY" || -f "$OFFLINE_REPLY" ]] || fail "no such reply file: $OFFLINE_REPLY"
+if [[ "$DRY_RUN" == true && -n "$OFFLINE_REPLY" ]]; then
+  fail "--dry-run and --offline-reply are alternatives: one sends nothing, the other replays"
+fi
+
 BENCHCTL="$repo_root/target/release/benchctl"
-if [[ "$DRY_RUN" == false ]]; then
+if [[ "$DRY_RUN" == false && -z "$OFFLINE_REPLY" ]]; then
   [[ -n "${OPENAI_API_KEY:-}" ]] || fail "OPENAI_API_KEY is required unless --dry-run is used"
   # A dry run never reaches the guardrail, so it never needs the binary; a real
   # one always does, and building it here means the failure mode is "the
   # control plane would not compile" rather than "the summary was written and
   # nothing checked it".
+  #
+  # A replay deliberately does NOT build. It runs in lanes that have no Rust
+  # toolchain, and the guardrail there fails to spawn — which is the correct
+  # outcome and the thing the contract test asserts: the summary lands on disk
+  # with its provenance, and no markdown is rendered.
   if [[ ! -x "$BENCHCTL" ]]; then
     printf 'building the control plane to validate the summary with\n'
     cargo build --locked --release -p benchctl >&2
@@ -148,7 +172,8 @@ python3 - \
   "$MODEL" \
   "$REASONING_EFFORT" \
   "$DRY_RUN" \
-  "$BENCHCTL" <<'PY'
+  "$BENCHCTL" \
+  "$OFFLINE_REPLY" <<'PY'
 import hashlib
 import json
 import os
@@ -168,6 +193,7 @@ model = sys.argv[6]
 reasoning_effort = sys.argv[7]
 dry_run = sys.argv[8] == "true"
 benchctl = sys.argv[9]
+offline_reply = pathlib.Path(sys.argv[10]) if len(sys.argv) > 10 and sys.argv[10] else None
 
 # The version of the committed prompt artifact this request was built from.
 # It is this constant and the file's name that must agree; changing the wording
@@ -334,24 +360,31 @@ if dry_run:
     # a summary here would be writing one nothing checked.
     raise SystemExit(0)
 
-api_key = os.environ["OPENAI_API_KEY"]
-request = urllib.request.Request(
-    "https://api.openai.com/v1/responses",
-    data=json.dumps(request_payload).encode("utf-8"),
-    headers={
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    },
-    method="POST",
-)
-try:
-    with urllib.request.urlopen(request, timeout=300) as response:
-        response_body = response.read().decode("utf-8")
-except urllib.error.HTTPError as exc:
-    body = exc.read().decode("utf-8", errors="replace")
-    die(f"OpenAI request failed: HTTP {exc.code}: {body}")
-except urllib.error.URLError as exc:
-    die(f"OpenAI request failed: {exc.reason}")
+if offline_reply is not None:
+    # A replay reaches every line below this one. The only thing it skips is the
+    # network, so the document that lands on disk is assembled by exactly the
+    # code a real run uses, and the guardrail is still what decides whether any
+    # markdown is written.
+    response_body = offline_reply.read_text(encoding="utf-8")
+else:
+    api_key = os.environ["OPENAI_API_KEY"]
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            response_body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        die(f"OpenAI request failed: HTTP {exc.code}: {body}")
+    except urllib.error.URLError as exc:
+        die(f"OpenAI request failed: {exc.reason}")
 
 raw_response = json.loads(response_body)
 output_text = raw_response.get("output_text")
@@ -380,11 +413,13 @@ if not isinstance(summary, dict):
 if "schema" not in summary:
     summary["schema"] = SUMMARY_SCHEMA_ID
 
+# The digest is taken over the model's own bytes, before the provenance block
+# below is added — a digest cannot cover the field that carries it. So
+# `output_sha256` identifies what the model wrote, which is the thing worth
+# identifying, and a reader recomputing it drops `provenance` first.
 summary_bytes = (json.dumps(summary, indent=2) + "\n").encode("utf-8")
-output_json_path.write_bytes(summary_bytes)
 output_sha256 = hashlib.sha256(summary_bytes).hexdigest()
 
-provenance_path = output_json_path.with_name("llm-provenance.json")
 provenance = {
     "created_at": datetime.now(timezone.utc).isoformat(),
     "prompt_version": PROMPT_VERSION,
@@ -394,24 +429,44 @@ provenance = {
     "input_sha256": packet_sha256,
     "output_sha256": output_sha256,
 }
+
+# The sidecar stays. It is what the surrounding tooling reads, and a summary
+# that the guardrail rejects still leaves one — which is exactly when somebody
+# wants to know which model produced it.
+provenance_path = output_json_path.with_name("llm-provenance.json")
 provenance_path.write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
+
+# The embed answers the question the sidecar cannot: a summary that has been
+# moved — attached to an issue, pasted into a report — arrives without its
+# sidecar, and a reader then has no way to ask what wrote it. The model never
+# writes this field; the strict output schema above does not even offer it.
+summary["provenance"] = provenance
+output_json_path.write_bytes((json.dumps(summary, indent=2) + "\n").encode("utf-8"))
 
 # The guardrail. Nothing downstream of this line runs for a summary that did
 # not pass it, and the failure is reported with the reason `benchctl` gave
 # rather than a summary of it.
-check = subprocess.run(
-    [
-        benchctl,
-        "packet",
-        "--suite",
-        str(suite_path),
-        "--llm-summary",
-        str(output_json_path),
-    ],
-    capture_output=True,
-    text=True,
-    check=False,
-)
+try:
+    check = subprocess.run(
+        [
+            benchctl,
+            "packet",
+            "--suite",
+            str(suite_path),
+            "--llm-summary",
+            str(output_json_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+except OSError as exc:
+    # No binary is not "the summary passed". The document stays on disk with
+    # its provenance so the failure is diagnosable, and nothing is rendered.
+    die(
+        f"the guardrail could not be run ({benchctl}: {exc}), so the summary at "
+        f"{output_json_path} is unchecked and no markdown was rendered."
+    )
 sys.stdout.write(check.stdout)
 sys.stderr.write(check.stderr)
 if check.returncode != 0:

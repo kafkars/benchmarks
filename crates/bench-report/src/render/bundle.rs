@@ -62,31 +62,51 @@ fn write_bundle_scorecard(out: &mut String, attempt: &LoadedAttempt) {
             .subject(name)
             .and_then(|subject| subject.role.clone())
             .unwrap_or_else(|| "-".to_owned());
+        let cpu = result.resources.map(|resources| {
+            nanos_to_seconds(
+                resources
+                    .user_cpu_ns
+                    .saturating_add(resources.system_cpu_ns),
+            )
+        });
         let _ = writeln!(
             out,
-            "| {name} | {role} | {} | {} | {} | {} | {} | {} | {} |",
+            "| {name} | {role} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             format_rate(result.throughput.acknowledged_records_per_second),
             optional_ms(terminal_percentile(result, 0.50)),
             optional_ms(terminal_percentile(result, 0.99)),
             optional_ms(terminal_percentile(result, 0.999)),
+            optional_ms(percentile_of(&result.timing.call_start_to_accepted)),
             optional_ms(
-                histogram_percentile(&result.timing.call_start_to_accepted, 0.99)
-                    .ok()
-                    .flatten()
+                result
+                    .timing
+                    .intended_to_call_start
+                    .as_ref()
+                    .and_then(percentile_of)
             ),
-            result.resources.map_or_else(
-                || NOT_REPORTED.to_owned(),
-                |resources| format_seconds(nanos_to_seconds(
-                    resources
-                        .user_cpu_ns
-                        .saturating_add(resources.system_cpu_ns)
-                ))
-            ),
+            optional_ms(percentile_of(&result.timing.accepted_to_terminal)),
+            cpu.map_or_else(|| NOT_REPORTED.to_owned(), format_seconds),
+            cpu.and_then(|seconds| per_million(seconds, result.outcomes.acknowledged))
+                .map_or_else(|| NOT_REPORTED.to_owned(), format_seconds),
             result
                 .resources
                 .map_or_else(|| NOT_REPORTED.to_owned(), |r| format_mib(r.max_rss_bytes)),
         );
     }
+}
+
+/// One histogram's 99th percentile, absent when it cannot be read.
+fn percentile_of(histogram: &bench_schema::EncodedHistogram) -> Option<u64> {
+    histogram_percentile(histogram, 0.99).ok().flatten()
+}
+
+/// CPU core-seconds normalized to a million acknowledged records.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "reporting statistic over a record count, not identity arithmetic"
+)]
+fn per_million(core_seconds: f64, acknowledged: u64) -> Option<f64> {
+    (acknowledged > 0).then(|| core_seconds * 1_000_000.0 / acknowledged as f64)
 }
 
 /// Where every offer ended, for one attempt.

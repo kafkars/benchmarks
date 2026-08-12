@@ -5,21 +5,37 @@ use crate::suite::{
     GateOutcome, PairedRatio, SubjectDispersion, SubjectMedians, SuiteAttempt,
     SuiteSubjectObservation, SuiteSummary,
 };
-use crate::{ExecutionStatus, ExperimentId, SUBJECT_ROLE_BASE, SUBJECT_ROLE_HEAD, SchemaErrorKind};
+use crate::{
+    DeclaredExecution, ExecutionStatus, ExperimentId, SUBJECT_ROLE_BASE, SUBJECT_ROLE_HEAD,
+    SchemaErrorKind,
+};
 
 const EXPERIMENT: &str = "d2932f88ad348028796b43b929f2fca826b683d19f13c0d1ad30d676b25dac15";
+
+fn declared() -> DeclaredExecution {
+    DeclaredExecution {
+        payload_construction: "prebuilt-pool-per-offer-sequence".to_owned(),
+        ownership: "copy-in-reused-buffer".to_owned(),
+        completion_mode: "delivery-callback".to_owned(),
+        serialization: "excluded".to_owned(),
+    }
+}
 
 fn observation(name: &str, role: &str, rate: f64) -> SuiteSubjectObservation {
     SuiteSubjectObservation {
         name: name.to_owned(),
         role: Some(role.to_owned()),
+        declared: Some(declared()),
         acknowledged_records_per_second: rate,
         p50_intended_to_terminal_ns: 1_000_000,
         p99_intended_to_terminal_ns: 9_000_000,
         p999_intended_to_terminal_ns: 21_000_000,
         p99_admission_wait_ns: 250_000,
+        p99_intended_to_call_start_ns: Some(120_000),
+        p99_accepted_to_terminal_ns: 8_500_000,
         max_rss_bytes: Some(134_217_728),
         cpu_core_seconds: Some(4.25),
+        cpu_core_seconds_per_million_acknowledged: Some(35.4),
     }
 }
 
@@ -27,13 +43,17 @@ fn medians(name: &str, role: &str, rate: f64) -> SubjectMedians {
     SubjectMedians {
         name: name.to_owned(),
         role: Some(role.to_owned()),
+        declared: Some(declared()),
         acknowledged_records_per_second: rate,
         p50_intended_to_terminal_ns: 1_000_000,
         p99_intended_to_terminal_ns: 9_000_000,
         p999_intended_to_terminal_ns: 21_000_000,
         p99_admission_wait_ns: 250_000,
+        p99_intended_to_call_start_ns: Some(120_000),
+        p99_accepted_to_terminal_ns: 8_500_000,
         max_rss_bytes: Some(134_217_728),
         cpu_core_seconds: Some(4.25),
+        cpu_core_seconds_per_million_acknowledged: Some(35.4),
     }
 }
 
@@ -102,13 +122,19 @@ fn absent_options_are_omitted_from_the_bytes() {
     let mut document = fixture();
     for observation in &mut document.attempts[0].subjects {
         observation.role = None;
+        observation.declared = None;
+        observation.p99_intended_to_call_start_ns = None;
         observation.max_rss_bytes = None;
         observation.cpu_core_seconds = None;
+        observation.cpu_core_seconds_per_million_acknowledged = None;
     }
     for median in &mut document.medians {
         median.role = None;
+        median.declared = None;
+        median.p99_intended_to_call_start_ns = None;
         median.max_rss_bytes = None;
         median.cpu_core_seconds = None;
+        median.cpu_core_seconds_per_million_acknowledged = None;
     }
     document.dispersion[0].coefficient_of_variation = None;
 
@@ -116,12 +142,18 @@ fn absent_options_are_omitted_from_the_bytes() {
 
     for key in [
         "role",
+        "declared",
+        "p99_intended_to_call_start_ns",
         "max_rss_bytes",
         "cpu_core_seconds",
         "coefficient_of_variation",
     ] {
         assert!(!bytes.contains(key), "{key} must be omitted when absent");
     }
+    // The client-internal percentile is not optional: it is always measured,
+    // so it is always written, and a reader never has to decide whether an
+    // absent field meant zero.
+    assert!(bytes.contains("p99_accepted_to_terminal_ns"), "{bytes}");
     assert_eq!(
         SuiteSummary::from_slice(bytes.as_bytes()).unwrap(),
         document

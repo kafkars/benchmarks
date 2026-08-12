@@ -31,6 +31,13 @@ impl VerificationVerdict {
 pub struct SubjectOutcome {
     /// Subject name, matching the resolved experiment.
     pub name: String,
+    /// The subject's declared role, when the experiment gave it one.
+    ///
+    /// Carried here because the comparison document needs it: which subject a
+    /// ratio divides by is a statement about the experiment's intent, and
+    /// intent is what the role records. Absent for an unlabeled subject list,
+    /// where execution order is the only order the experiment states.
+    pub role: Option<String>,
     /// How the adapter process ended; absent when it never ran.
     pub execution: Option<ProcessExit>,
     /// Whether the supervisor killed it in response to an interrupt.
@@ -60,6 +67,7 @@ impl SubjectOutcome {
     pub fn skipped(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            role: None,
             execution: None,
             interrupted: false,
             evidence: SubjectEvidence::default(),

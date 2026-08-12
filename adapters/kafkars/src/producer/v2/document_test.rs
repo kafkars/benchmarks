@@ -14,6 +14,9 @@ use super::outstanding::OutstandingGauge;
 const RUN_ID: &str = "0123456789abcdef";
 const RATE: u64 = 1_000;
 
+/// Payload bytes the gauge fixtures below weigh each offer at.
+const PAYLOAD_BYTES: u64 = 1_024;
+
 /// One phase's worth of evidence: `groups` batches of `count` offers each,
 /// every one acknowledged.
 fn measured(
@@ -21,7 +24,7 @@ fn measured(
     groups: u64,
     count: u64,
 ) -> (Measurement, OutstandingGauge) {
-    let outstanding = OutstandingGauge::default();
+    let outstanding = OutstandingGauge::new(PAYLOAD_BYTES);
     for index in 0..groups {
         let call_start_ns = 1_000_000 * (index + 1);
         let group = OfferGroup {
@@ -98,6 +101,13 @@ fn a_closed_loop_measurement_round_trips_with_its_invariants_intact() {
     );
     assert!((parsed.throughput.acknowledged_payload_bytes_per_second - 512_000.0).abs() < 1e-6);
     assert_eq!(parsed.queue.max_outstanding_observed, 250);
+    // The byte high-water is accumulated at the same admit and settle sites, so
+    // it is what those 250 outstanding offers weighed rather than a figure
+    // derived after the fact.
+    assert_eq!(
+        parsed.queue.max_outstanding_bytes_observed,
+        Some(250 * PAYLOAD_BYTES)
+    );
     assert_eq!(parsed.queue.final_outstanding, 0);
 }
 
@@ -180,7 +190,7 @@ fn undrained_offers_are_unknown_and_stay_visible_as_outstanding() {
     measurement.record_offered(&group.attempt).unwrap();
     measurement.record_accepted(&group);
     measurement.record_unknown(10);
-    let outstanding = OutstandingGauge::default();
+    let outstanding = OutstandingGauge::new(PAYLOAD_BYTES);
     outstanding.admitted(10);
 
     let document = build(&DocumentRequest {
@@ -225,7 +235,7 @@ fn a_wholly_refused_batch_is_offered_never_accepted_and_still_reads_back() {
     };
     measurement.record_offered(&refused).unwrap();
     measurement.record_refusal();
-    let outstanding = OutstandingGauge::default();
+    let outstanding = OutstandingGauge::new(PAYLOAD_BYTES);
 
     let document = build(&DocumentRequest {
         run_id: RUN_ID,

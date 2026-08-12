@@ -86,6 +86,7 @@ impl AttemptPaths {
                 target.display()
             )));
         }
+        let pending_parent = self.root.parent().map(Path::to_path_buf);
         std::fs::rename(&self.root, &target).map_err(|e| {
             CtlError::internal(format!(
                 "rename {} -> {}: {e}",
@@ -93,6 +94,18 @@ impl AttemptPaths {
                 target.display()
             ))
         })?;
+        // Best-effort, and never fatal. `results/pending/` exists to hold a
+        // workspace that has not yet earned an experiment id; once the last one
+        // has moved out, an empty directory sitting in the evidence tree reads
+        // as an attempt somebody lost. `remove_dir` refuses a non-empty
+        // directory, so a concurrent run's workspace is safe by construction,
+        // and a failure here is a tidy-up that did not happen — not a reason to
+        // fail a run whose evidence is already sealed and moved.
+        if let Some(parent) = pending_parent
+            && parent.file_name() == Some(PENDING_DIR.as_ref())
+        {
+            let _ = std::fs::remove_dir(&parent);
+        }
         Ok(Self { root: target })
     }
 

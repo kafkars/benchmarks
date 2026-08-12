@@ -4,7 +4,7 @@ use super::{SuiteMetric, metric_of_field};
 
 #[test]
 fn the_metric_order_is_fixed_and_round_trips_through_its_field_names() {
-    assert_eq!(SuiteMetric::ALL.len(), 7);
+    assert_eq!(SuiteMetric::ALL.len(), 9);
     assert_eq!(SuiteMetric::ALL[0], SuiteMetric::Goodput);
     assert_eq!(SuiteMetric::ALL[2], SuiteMetric::P99Latency);
     for metric in SuiteMetric::ALL {
@@ -13,4 +13,27 @@ fn the_metric_order_is_fixed_and_round_trips_through_its_field_names() {
     assert_eq!(metric_of_field("not_a_metric"), None);
     assert!(SuiteMetric::Goodput.higher_is_better());
     assert!(!SuiteMetric::P99Latency.higher_is_better());
+}
+
+#[test]
+fn only_the_two_attribution_metrics_are_unclaimable() {
+    let unclaimable: Vec<&str> = SuiteMetric::ALL
+        .into_iter()
+        .filter(|metric| !metric.claimable())
+        .map(SuiteMetric::field)
+        .collect();
+
+    assert_eq!(
+        unclaimable,
+        vec![
+            "p99_intended_to_call_start_ns",
+            "p99_accepted_to_terminal_ns"
+        ]
+    );
+    // The label says so where a reader will actually meet it, not only here.
+    assert!(
+        SuiteMetric::AcceptedToTerminal
+            .label()
+            .contains("locating not claiming")
+    );
 }

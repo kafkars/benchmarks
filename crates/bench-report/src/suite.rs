@@ -22,6 +22,7 @@
 //!   [`COEFFICIENT_OF_VARIATION_BUDGET`](crate::COEFFICIENT_OF_VARIATION_BUDGET)
 //!   is calibrated for, which is not the obvious answer.
 //! - `pairs` — paired ratios and their bootstrap intervals.
+//! - `surface` — whether both sides of a comparison were doing the same work.
 //! - `gates` — what has to be true before a difference may be called one.
 //! - `summarize` — the pass that assembles the document.
 
@@ -33,12 +34,14 @@ mod metric;
 mod pairs;
 mod report;
 mod summarize;
+mod surface;
 
 pub use attempt::UNSEALED_DIGEST;
 pub use metric::{SuiteMetric, metric_of_field};
 pub use pairs::{pair_passes, pair_regresses};
 pub use report::{DEFAULT_PRACTICAL_THRESHOLD, SubjectEconomics, SuiteOptions, SuiteReport};
 pub use summarize::{summarize_suite, summarize_suite_report};
+pub use surface::GATE_NAME as MATCHED_EXECUTION_SURFACE;
 
 pub(crate) use attempt::LoadedAttempt;
 
@@ -56,3 +59,5 @@ mod medians_test;
 mod metric_test;
 #[cfg(test)]
 mod summarize_test;
+#[cfg(test)]
+mod surface_test;

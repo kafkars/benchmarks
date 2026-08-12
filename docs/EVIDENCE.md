@@ -48,10 +48,20 @@ than remembered.
 `SubjectSpec.role` is the one recent addition to the identity surface. It
 takes `base`, `head`, or `anchor`, and it is absent by default:
 
-- `base` is the subject a comparison divides by.
+- `base` is the subject a comparison divides by. `benchctl suite` alternates
+  which subject runs first across repetitions, so the denominator is chosen by
+  role rather than by execution order — otherwise the same suite would seal
+  `head/base` in one repetition and `base/head` in the next, and a reader
+  comparing two `comparison.json` files would see the ratio invert for no
+  reason the documents explain.
 - `head` is the subject the comparison is about.
-- `anchor` is a third subject held fixed across attempts, not compared
-  against, that says whether the machine itself moved.
+- `anchor` is a third subject held fixed across attempts that says whether the
+  machine itself moved. The suite **does** emit `head/anchor` pairs and reports
+  them beside `head/base`; what the anchor is not is a *gate target* — no gate
+  is written against it, because a machine-drift reference that could fail a
+  comparison would be a second baseline. It is compared, read, and never
+  divided by: when a `base` exists, the attempt-level comparison never uses the
+  anchor as its denominator.
 
 Unlike `command`, the role is *not* excluded from the id. Two experiments
 that disagree about which subject is the baseline are asking different
@@ -63,6 +73,44 @@ An unknown role is refused by `ResolvedExperiment::validate` and by
 `SubjectsFile::validate` rather than silently degraded to unlabeled. A
 misspelled role is the same failure mode `deny_unknown_fields` exists to
 prevent, one level down.
+
+## What is in a sealed bundle
+
+One row per file a sealed attempt writes. Read this before the sections
+below: they describe the shapes, and this says which file carries which
+shape and who is entitled to have written it.
+
+| File | What it is | Written by | Schema id |
+|---|---|---|---|
+| `status.json` | How far the machinery got, phase by phase, and how each subject's process ended. Not validity. | control plane | `kafkars.run-status.v1` |
+| `classification.json` | Whether the evidence may be believed, with a named reason per failed gate and the checks this attempt deliberately did not perform. | control plane | `kafkars.classification.v1` |
+| `comparison.json` | Attempt-level ratios between subjects, dividing by the declared `base`. | control plane | `kafkars.comparison.v1` |
+| `execution-order.json` | Which subject ran in which position, and what decided that. | control plane | `kafkars.execution-order.v1` |
+| `experiment.source.toml` | The scenario as authored, byte for byte as it was handed in. | copied from the caller's input | — (source TOML) |
+| `experiment.resolved.json` | What was actually run, with every default made explicit. The document the experiment id is hashed over. | control plane resolver | `kafkars.experiment.v1` |
+| `subjects.lock.json` | What each subject's binary actually was at probe time, with its digest and the version it declared. | control plane probe | `kafkars.subjects-lock.v1` |
+| `environment.json` | Repository states, toolchain and build identity, host facts, broker identity. | control plane | `kafkars.benchmark-environment.v2` |
+| `adapters/<subject>/result.json` | The measurement: four timestamps, bounded histograms, offer accounting, declared execution. | the adapter under test | `kafkars.producer-benchmark.v2` |
+| `adapters/<subject>/status.json` | The adapter's own report of how its run verb ended. | the adapter under test | `kafkars.adapter-status.v1` |
+| `adapters/<subject>/stdout.log`, `stderr.log` | The subject's captured output, truncated at the declared budget. | the adapter under test | — (text) |
+| `verification/<subject>-<phase>.json` | What the broker-visible verifier read back off the topic. Never written by a subject. | the configured verifier tool | `kafkars.producer-verification.v1` |
+| `checksums.txt` | A digest per file in the bundle; the checksum walk refuses symlinks and other non-regular files outright. | seal | — (text, `sha256  path`) |
+| `bundle.json` | The bundle digest, which is the digest of `checksums.txt`. | seal | `kafkars.bundle.v1` |
+| `seal-failure.txt` | Present only when sealing itself failed partway; names the failure beside whatever terminal files could be completed. | seal recovery | — (text) |
+
+Two separations in that table are the whole design. An adapter writes only
+its own directory — it never writes a classification, a comparison, or a
+verification, because a subject that graded its own output would not be
+evidence. And the verifier is a configured tool invoked by the control
+plane rather than an adapter verb, for the same reason one level up.
+
+A suite or a capacity search writes its own documents *outside* the bundle,
+under the reports tree: `suite-summary.json`, `report.md`, `report.html`,
+`analysis-packet.json`, and — when a run was narrated — `llm-summary.json`
+with its `llm-summary-request.json` and `llm-provenance.json` beside it.
+Those are derived from sealed bundles and never part of one, because a
+bundle is immutable and an aggregate over several of them is not a fact
+about any single attempt.
 
 ## The offer model
 
@@ -201,6 +249,19 @@ failure next to whatever terminal files could still be completed — the
 richer `status.json` written before the failure is preserved, never
 overwritten by the recovery path.
 
+### What the queue retained
+
+`queue.max_outstanding_observed` is the largest number of offers the client
+owned at once, and `queue.max_outstanding_bytes_observed` is what those offers
+weighed. Both adapters accumulate the byte figure at the same admit and
+terminal sites the record count is updated at, rather than multiplying the
+record high-water by the payload size afterwards. Under today's payload
+contract every record in a run is one fixed size, so the two agree — but the
+moment a variable-size payload profile exists the multiplication silently
+becomes wrong while an accumulated figure stays right, and a number that is
+correct only because of a property nobody wrote down is a number waiting to
+lie. The field is absent, never zero, for an adapter that does not track it.
+
 ### Declared execution vocabulary
 
 `declared.payload_construction` is `prebuilt-pool-per-offer-sequence` in
@@ -216,6 +277,29 @@ where it belongs, in `declared.ownership`, not hidden inside the
 construction string. A reader comparing measurements should require equal
 `payload_construction` and treat unequal `ownership` as a product-surface
 difference to report, not to erase.
+
+That obligation is a gate rather than advice.
+`kafkars.suite-summary.v1` carries **`matched-execution-surface`**, which fails
+when the two sides of any compared pair declare a different
+`payload_construction` or a different `serialization`, and names both values
+when it does. Those two decide what work is being timed at all: a subject that
+builds its payload inside the measured interval, or that serializes there while
+the other does not, is not slower at producing — it is measuring more, and a
+ratio across that difference is not a weak comparison, it is not a comparison.
+The gate also fails when a compared pair carries no declaration to check,
+because "we did not check" is not "it matched".
+
+Unequal `ownership` and unequal `completion_mode` do **not** fail it. Those are
+real product-surface differences that a reader must be told about and must not
+have erased: the kafkars adapter hands the client an owned buffer because that
+is the public API it ships, and the librdkafka adapter asks for a copy because
+that is the public API *it* ships. Refusing to compare them would refuse to
+compare the two clients as they actually exist. Each such difference becomes a
+named note in the summary, carried into every rendering, and the numbers stay.
+
+When the gate fails, the analysis packet carries it as a deterministic
+*finding* rather than only as an anomaly, because it changes what every other
+finding in that packet means.
 
 ## The histogram
 
@@ -283,6 +367,36 @@ to care about, so that "the interval excludes zero" is never confused with
 Every attempt stays in the document, valid or not, with its bundle digest.
 A median over a set nobody can reconstruct is not auditable.
 
+**Comparison and attribution are separate.** Six of the observation fields can
+support a claim — goodput, the three offer-to-terminal percentiles, the
+admission wait, and the two resource figures. Three cannot, and are carried
+anyway because locating a difference is exactly what they are good for:
+
+| field | what it says | why it cannot claim |
+|---|---|---|
+| `declared` | what was in the measured path | it is a description, not a measurement |
+| `p99_intended_to_call_start_ns` | scheduler lateness, `call_start - intended` | present only under a schedule; **absent, never zero, for a closed-loop run**, because no schedule and a schedule kept perfectly are opposite statements |
+| `p99_accepted_to_terminal_ns` | the client-internal portion, `terminal - accepted` | a client that refuses admission for longer looks better here by construction, which is the exact substitution v2 was minted to prevent |
+
+The two percentiles are paired, rendered, and citable from the analysis packet.
+No gate is written over either of them, and neither contributes to the packet's
+verdict. Compare on `p99_intended_to_terminal_ns`; read these beside it.
+
+`cpu_core_seconds_per_million_acknowledged` is beside `cpu_core_seconds` for a
+related reason: total CPU is not comparable between subjects that moved
+different amounts of traffic, and reading the raw totals side by side rewards
+the subject that did less work. It is absent, never zero, when the platform
+reported no resources or when nothing was acknowledged to divide by. Nothing
+gates on it either.
+
+**Too few repetitions is inconclusive, and says which way it leaned.** A suite
+below the five valid paired attempts `MINIMUM_PAIRED_REPETITIONS` requires has intervals, and those
+intervals can sit entirely past the practical threshold — but a bootstrap over
+two paired blocks is an interval over two numbers. The packet's verdict is
+therefore `inconclusive`, and the directional read is not thrown away: it moves
+into a deterministic finding that names the direction and the repetition count
+in one sentence, so a reader gets the signal without the document asserting it.
+
 ### `kafkars.capacity-search.v1`
 
 The rate ladder a search walked for one subject, the objectives it judged
@@ -311,12 +425,32 @@ not define.
 ### `kafkars.llm-summary.v1`
 
 Prose written over one packet, and bound to it.
-`LlmSummary::validate_against` enforces three things mechanically: every
+`LlmSummary::validate_against` enforces four things mechanically: every
 `metric_refs` entry names a metric the packet defines, every
-`evidence_refs` entry names an evidence pointer it carries, and the verdict
-equals the packet's verdict. A model may hedge, elaborate, and speculate —
-that is what `hypotheses`, labeled with a confidence, and `caveats` are for
-— but it may not overrule the deterministic layer.
+`evidence_refs` entry names an evidence pointer it carries, **every finding
+cites at least one metric**, and the verdict equals the packet's verdict. A
+model may hedge, elaborate, and speculate — that is what `hypotheses`,
+labeled with a confidence, and `caveats` are for — but it may not overrule
+the deterministic layer.
+
+The citation rule is about the findings list specifically. An entry there is
+asserted as fact, reads exactly like a cited one, and carries the same
+authority; an uncited one rests on nothing a reader can check. A statement
+the model cannot attach to a number is a hypothesis, and `hypotheses` is
+deliberately not required to cite. Stating no findings at all is fine.
+
+`provenance` is optional and carries how the summary was produced: the
+model, the prompt version, the reasoning effort, the response id, the
+digests of the packet in and the summary out, and when it was written.
+`scripts/benchmark-openai-summary` stamps it and also writes the same facts
+beside the document as `llm-provenance.json` — the sidecar because the
+surrounding tooling reads it and a *rejected* summary still leaves one, the
+embed because a summary that has been moved arrives without its sidecar and
+a reader then cannot ask what wrote it. `output_sha256` covers the model's
+own bytes with `provenance` removed, because a digest cannot cover the field
+that carries it. The strict output schema the script sends does not offer
+the model a `provenance` field: a model that could write its own provenance
+could write anything.
 
 Rejecting a summary costs nothing. The packet is still there, and the
 numbers in it never depended on the prose.

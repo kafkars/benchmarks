@@ -1,3 +1,16 @@
+# The design document's producer parameter matrix, kept as a reference and NOT
+# as a runnable scenario.
+#
+# `benchctl resolve --experiment scenarios/producer/producer-baseline.toml`
+# fails on purpose, and it should: every value below is a *list* of settings to
+# sweep, while an executable scenario states one setting per key. The scenario
+# schema is deny-unknown-fields precisely so that a document like this one
+# cannot be mistaken for something a harness read.
+#
+# What it is for: naming the axes the headline set does and does not cover.
+# `scenarios/DEFERRED.md` walks every row that is missing, says which specific
+# thing refuses it today, and names the change that would unblock it. The
+# runnable set is `scenarios/producer/headline/`.
 name = "producer-baseline"
 duration_seconds = 120
 warmup_seconds = 30

@@ -185,7 +185,7 @@ fn measure_closed_loop(
     let partitions = usize::try_from(arguments.partitions)?;
     warm_up(session, &pool, arguments, partitions, budget)?;
 
-    let outstanding = OutstandingGauge::default();
+    let outstanding = OutstandingGauge::new(u64::try_from(arguments.payload_bytes)?);
     let started = Instant::now();
     let context = PhaseContext {
         producer: &session.producer,
@@ -227,7 +227,7 @@ fn measure_fixed_rate(
     let partitions = usize::try_from(common.partitions)?;
     warm_up(session, &pool, common, partitions, budget)?;
 
-    let outstanding = OutstandingGauge::default();
+    let outstanding = OutstandingGauge::new(u64::try_from(common.payload_bytes)?);
     let outcome = fixed_rate::run(&fixed_rate::FixedRateSpec {
         producer: &session.producer,
         pool: &pool,
@@ -266,7 +266,7 @@ fn warm_up(
     if arguments.warmup_records == 0 {
         return Ok(());
     }
-    let outstanding = OutstandingGauge::default();
+    let outstanding = OutstandingGauge::new(u64::try_from(arguments.payload_bytes)?);
     let context = PhaseContext {
         producer: &session.producer,
         pool,

@@ -25,13 +25,20 @@
 //! acknowledged + failed + timed_out` (unknown offers have no terminal);
 //! `intended_to_call_start` present exactly when the load mode is scheduled
 //! open-loop, with `total == offered`.
+//!
+//! # Layout
+//!
+//! - this file — the document's shape, field by field.
+//! - `validate` — the accounting invariants, and the order they are named in.
+
+mod validate;
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::{SchemaError, SchemaResult};
 use crate::experiment::LoadMode;
 use crate::histogram::EncodedHistogram;
-use crate::schema_id::{PRODUCER_BENCHMARK_V2, require_schema};
+use crate::schema_id::PRODUCER_BENCHMARK_V2;
 
 /// What the adapter actually did in the measured path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +110,17 @@ pub struct MeasuredThroughput {
 pub struct QueueObservation {
     /// Largest outstanding-offer count observed.
     pub max_outstanding_observed: u64,
+    /// Largest outstanding *payload byte* count observed, when the adapter
+    /// tracked one.
+    ///
+    /// The count above says how many offers the client owned at the peak; this
+    /// says how much memory that peak was. Two clients at the same record
+    /// high-water can retain very different amounts of the application's bytes,
+    /// and a record count alone cannot tell a reader which. Absent rather than
+    /// zero for an adapter that does not track it, because "not measured" and
+    /// "nothing retained" are opposite claims.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_outstanding_bytes_observed: Option<u64>,
     /// Outstanding offers when the run ended; complete drain is zero.
     pub final_outstanding: u64,
 }
@@ -180,121 +198,6 @@ impl ProducerBenchmarkV2 {
     ///
     /// Returns an error naming the first violated invariant.
     pub fn validate(&self) -> SchemaResult<()> {
-        require_schema(&self.schema, Self::SCHEMA)?;
-        if self.timing.clock != "monotonic-ns" {
-            return Err(SchemaError::invalid_field(
-                "timing.clock",
-                &format!("{:?} is not \"monotonic-ns\"", self.timing.clock),
-            ));
-        }
-        let o = self.outcomes;
-        if o.offered < o.accepted {
-            return Err(SchemaError::invalid_field(
-                "outcomes.offered",
-                &format!("offered {} is below accepted {}", o.offered, o.accepted),
-            ));
-        }
-        let terminals = o
-            .acknowledged
-            .saturating_add(o.failed)
-            .saturating_add(o.timed_out);
-        if terminals.saturating_add(o.unknown) != o.accepted {
-            return Err(SchemaError::invalid_field(
-                "outcomes.accepted",
-                &format!(
-                    "accepted {} does not equal terminals {terminals} plus unknown {}",
-                    o.accepted, o.unknown
-                ),
-            ));
-        }
-        self.validate_timing(o, terminals)?;
-        if !self.valid && self.invalid_reason.is_none() {
-            return Err(SchemaError::invalid_field(
-                "invalid_reason",
-                "an invalid measurement must say why",
-            ));
-        }
-        Ok(())
-    }
-
-    /// Checks the histogram totals against the outcome accounting.
-    fn validate_timing(&self, o: OfferOutcomes, terminals: u64) -> SchemaResult<()> {
-        for (name, histogram) in [
-            (
-                "timing.intended_to_terminal",
-                &self.timing.intended_to_terminal,
-            ),
-            (
-                "timing.accepted_to_terminal",
-                &self.timing.accepted_to_terminal,
-            ),
-            (
-                "timing.call_start_to_accepted",
-                &self.timing.call_start_to_accepted,
-            ),
-        ] {
-            histogram
-                .validate()
-                .map_err(|error| SchemaError::invalid_field(name, &error.to_string()))?;
-        }
-        if self.timing.call_start_to_accepted.total != o.accepted {
-            return Err(SchemaError::invalid_field(
-                "timing.call_start_to_accepted",
-                &format!(
-                    "total {} does not equal accepted {}",
-                    self.timing.call_start_to_accepted.total, o.accepted
-                ),
-            ));
-        }
-        for (name, histogram) in [
-            (
-                "timing.intended_to_terminal",
-                &self.timing.intended_to_terminal,
-            ),
-            (
-                "timing.accepted_to_terminal",
-                &self.timing.accepted_to_terminal,
-            ),
-        ] {
-            if histogram.total != terminals {
-                return Err(SchemaError::invalid_field(
-                    name,
-                    &format!(
-                        "total {} does not equal terminal count {terminals}",
-                        histogram.total
-                    ),
-                ));
-            }
-        }
-        match (&self.load_mode, &self.timing.intended_to_call_start) {
-            (LoadMode::ScheduledOpenLoopFixedRate, Some(lateness)) => {
-                lateness.validate().map_err(|error| {
-                    SchemaError::invalid_field("timing.intended_to_call_start", &error.to_string())
-                })?;
-                if lateness.total != o.offered {
-                    return Err(SchemaError::invalid_field(
-                        "timing.intended_to_call_start",
-                        &format!(
-                            "total {} does not equal offered {}",
-                            lateness.total, o.offered
-                        ),
-                    ));
-                }
-            }
-            (LoadMode::ScheduledOpenLoopFixedRate, None) => {
-                return Err(SchemaError::invalid_field(
-                    "timing.intended_to_call_start",
-                    "scheduled open-loop measurement is missing scheduler lateness",
-                ));
-            }
-            (LoadMode::ClosedLoop, Some(_)) => {
-                return Err(SchemaError::invalid_field(
-                    "timing.intended_to_call_start",
-                    "closed-loop measurement must not carry scheduler lateness",
-                ));
-            }
-            (LoadMode::ClosedLoop, None) => {}
-        }
-        Ok(())
+        validate::validate(self)
     }
 }

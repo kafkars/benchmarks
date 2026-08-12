@@ -312,7 +312,15 @@ fn an_attempt_with_no_tools_is_partial_and_names_every_skipped_check() {
 
     let classification = read_classification(&paths);
     assert!(!classification.run_valid);
-    assert_eq!(classification.deferred_checks.len(), 7);
+    assert_eq!(
+        classification.deferred_checks.len(),
+        crate::results::DEFERRED_CHECKS.len()
+    );
+    assert!(
+        classification
+            .deferred_checks
+            .contains(&"slo-drain-tail".to_owned())
+    );
     assert_bundle_is_self_consistent(&paths);
     std::fs::remove_dir_all(&results_root).unwrap();
 }

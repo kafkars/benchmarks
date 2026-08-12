@@ -40,6 +40,10 @@
 //! column next to a single measurement. `capacity` takes no repetition flag
 //! because the scenario's `repetitions_per_rate` already says how many times a
 //! candidate rate must be confirmed.
+//!
+//! Every verb declares its own option names as a constant and hands them to
+//! [`collect_flags`], which is what lets an unknown name be reported as one
+//! before anything looks for its value.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -54,7 +58,7 @@ use crate::report::{PacketCommand, ReportCommand};
 use crate::suite::{DEFAULT_REPORTS_ROOT, MINIMUM_REPETITIONS, SuiteCommand};
 
 use super::command::{Command, ResolveCommand, RunCommand};
-use super::flags::{collect_flags, order, reject_unknown, required, seconds, unsigned};
+use super::flags::{bootstrap, collect_flags, order, required, seconds, unsigned};
 use super::usage::DEFAULT_RESULTS_ROOT;
 
 /// Parses the argument vector *after* the program name.
@@ -86,20 +90,43 @@ pub fn parse(arguments: &[String]) -> CtlResult<Command> {
     }
 }
 
+/// The inputs every attempt-making verb shares.
+const COMMON: [&str; 6] = [
+    "experiment",
+    "subjects",
+    "cluster",
+    "bootstrap",
+    "seed",
+    "order",
+];
+
+/// The three timeout flags every attempt-making verb shares.
+const BUDGET: [&str; 3] = [
+    "run-timeout-secs",
+    "tool-timeout-secs",
+    "probe-timeout-secs",
+];
+
+/// This verb's option names: the shared sets plus whatever it adds.
+fn options(extra: &[&'static str]) -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = COMMON.to_vec();
+    names.extend(BUDGET);
+    names.extend(extra);
+    names
+}
+
 fn parse_resolve(arguments: &[String]) -> CtlResult<Command> {
-    let mut flags = collect_flags(arguments)?;
+    let mut flags = collect_flags(arguments, &options(&["out"]))?;
     let common = parse_common(&mut flags)?;
     let out = flags.remove("out").map(PathBuf::from);
-    reject_unknown(&flags)?;
     Ok(Command::Resolve(ResolveCommand { common, out }))
 }
 
 fn parse_run(arguments: &[String]) -> CtlResult<Command> {
-    let mut flags = collect_flags(arguments)?;
+    let mut flags = collect_flags(arguments, &options(&["results"]))?;
     let common = parse_common(&mut flags)?;
     let results_root = results_root(&mut flags);
     let budget = parse_budget(&mut flags)?;
-    reject_unknown(&flags)?;
     Ok(Command::Run(RunCommand {
         common,
         results_root,
@@ -108,7 +135,7 @@ fn parse_run(arguments: &[String]) -> CtlResult<Command> {
 }
 
 fn parse_suite(arguments: &[String]) -> CtlResult<Command> {
-    let mut flags = collect_flags(arguments)?;
+    let mut flags = collect_flags(arguments, &options(&["results", "reports", "repetitions"]))?;
     let common = parse_common(&mut flags)?;
     let results_root = results_root(&mut flags);
     let reports_root = reports_root(&mut flags);
@@ -123,7 +150,6 @@ fn parse_suite(arguments: &[String]) -> CtlResult<Command> {
             "--repetitions must be at least {MINIMUM_REPETITIONS}; one repetition is a run"
         )));
     }
-    reject_unknown(&flags)?;
     Ok(Command::Suite(SuiteCommand {
         common,
         results_root,
@@ -134,12 +160,11 @@ fn parse_suite(arguments: &[String]) -> CtlResult<Command> {
 }
 
 fn parse_capacity(arguments: &[String]) -> CtlResult<Command> {
-    let mut flags = collect_flags(arguments)?;
+    let mut flags = collect_flags(arguments, &options(&["results", "reports"]))?;
     let common = parse_common(&mut flags)?;
     let results_root = results_root(&mut flags);
     let reports_root = reports_root(&mut flags);
     let budget = parse_budget(&mut flags)?;
-    reject_unknown(&flags)?;
     Ok(Command::Capacity(CapacityCommand {
         common,
         results_root,
@@ -151,11 +176,21 @@ fn parse_capacity(arguments: &[String]) -> CtlResult<Command> {
 /// `pack` shares every input a run takes except the scenario, which each
 /// manifest entry names for itself.
 fn parse_pack(arguments: &[String]) -> CtlResult<Command> {
-    let mut flags = collect_flags(arguments)?;
+    let mut names: Vec<&'static str> = vec![
+        "manifest",
+        "subjects",
+        "cluster",
+        "bootstrap",
+        "seed",
+        "results",
+        "reports",
+    ];
+    names.extend(BUDGET);
+    let mut flags = collect_flags(arguments, &names)?;
     let manifest = PathBuf::from(required(&mut flags, "manifest")?);
     let subjects = PathBuf::from(required(&mut flags, "subjects")?);
     let cluster = PathBuf::from(required(&mut flags, "cluster")?);
-    let bootstrap = required(&mut flags, "bootstrap")?;
+    let bootstrap = bootstrap(&mut flags)?;
     let seed = match flags.remove("seed") {
         None => None,
         Some(value) => Some(unsigned("seed", &value)?),
@@ -163,7 +198,6 @@ fn parse_pack(arguments: &[String]) -> CtlResult<Command> {
     let results_root = results_root(&mut flags);
     let reports_root = reports_root(&mut flags);
     let budget = parse_budget(&mut flags)?;
-    reject_unknown(&flags)?;
     Ok(Command::Pack(PackCommand {
         manifest,
         subjects,
@@ -177,18 +211,16 @@ fn parse_pack(arguments: &[String]) -> CtlResult<Command> {
 }
 
 fn parse_report(arguments: &[String]) -> CtlResult<Command> {
-    let mut flags = collect_flags(arguments)?;
+    let mut flags = collect_flags(arguments, &["bundle", "out"])?;
     let bundle = PathBuf::from(required(&mut flags, "bundle")?);
     let out = flags.remove("out").map(PathBuf::from);
-    reject_unknown(&flags)?;
     Ok(Command::Report(ReportCommand { bundle, out }))
 }
 
 fn parse_packet(arguments: &[String]) -> CtlResult<Command> {
-    let mut flags = collect_flags(arguments)?;
+    let mut flags = collect_flags(arguments, &["suite", "llm-summary"])?;
     let suite = PathBuf::from(required(&mut flags, "suite")?);
     let llm_summary = PathBuf::from(required(&mut flags, "llm-summary")?);
-    reject_unknown(&flags)?;
     Ok(Command::Packet(PacketCommand { suite, llm_summary }))
 }
 
@@ -197,7 +229,7 @@ fn parse_common(flags: &mut BTreeMap<String, String>) -> CtlResult<CommonArgumen
         experiment: PathBuf::from(required(flags, "experiment")?),
         subjects: PathBuf::from(required(flags, "subjects")?),
         cluster: PathBuf::from(required(flags, "cluster")?),
-        bootstrap: required(flags, "bootstrap")?,
+        bootstrap: bootstrap(flags)?,
         seed: match flags.remove("seed") {
             None => None,
             Some(value) => Some(unsigned("seed", &value)?),

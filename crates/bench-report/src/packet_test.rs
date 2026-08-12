@@ -26,8 +26,13 @@ fn options() -> SuiteOptions {
 /// Writes a suite where the head subject is `gain` times the base subject's
 /// goodput and `latency` times its latency.
 fn suite(name: &str, gain: f64, latency: f64) -> SuiteSummary {
+    suite_of(name, gain, latency, 5)
+}
+
+/// The same suite at an explicit repetition count.
+fn suite_of(name: &str, gain: f64, latency: f64, repetitions: u32) -> SuiteSummary {
     let root = scratch_directory(name);
-    let roots: Vec<PathBuf> = (0..5)
+    let roots: Vec<PathBuf> = (0..repetitions)
         .map(|index| {
             let jitter = 0.002f64.mul_add(f64::from(index), 1.0);
             #[expect(
@@ -317,6 +322,7 @@ fn a_summary_that_copies_the_verdict_and_cites_the_packet_is_accepted() {
         }],
         next_experiments: vec!["Repeat at a larger payload size.".to_owned()],
         caveats: vec!["Diagnostic only.".to_owned()],
+        provenance: None,
     };
 
     validate_llm_summary(&summary, &packet).unwrap();
@@ -333,6 +339,7 @@ fn a_summary_that_overrules_the_verdict_is_rejected() {
         hypotheses: Vec::new(),
         next_experiments: Vec::new(),
         caveats: Vec::new(),
+        provenance: None,
     };
 
     let error = validate_llm_summary(&summary, &packet).unwrap_err();
@@ -355,9 +362,95 @@ fn a_summary_that_invents_a_metric_is_rejected() {
         hypotheses: Vec::new(),
         next_experiments: Vec::new(),
         caveats: Vec::new(),
+        provenance: None,
     };
 
     let error = validate_llm_summary(&summary, &packet).unwrap_err();
 
     assert!(error.to_string().contains("M999"), "{error}");
+}
+
+#[test]
+fn a_run_below_the_repetition_minimum_is_inconclusive_and_says_which_way_it_leaned() {
+    let packet = build_packet(&suite_of("packet-under-repeated", 1.30, 0.70, 2));
+
+    assert_eq!(packet.verdict, Verdict::Inconclusive);
+    let directional = packet
+        .deterministic_findings
+        .iter()
+        .find(|finding| finding.text.starts_with("Directionally"))
+        .unwrap_or_else(|| panic!("{:?}", packet.deterministic_findings));
+    assert!(
+        directional.text.contains("improved"),
+        "{}",
+        directional.text
+    );
+    assert!(directional.text.contains("n=2"), "{}", directional.text);
+    assert!(
+        directional.text.contains("inconclusive"),
+        "{}",
+        directional.text
+    );
+    // The same run at the minimum states the direction as the verdict.
+    assert_eq!(
+        build_packet(&suite_of("packet-enough-reps", 1.30, 0.70, 5)).verdict,
+        Verdict::Improved
+    );
+}
+
+#[test]
+fn an_attribution_metric_never_decides_the_verdict() {
+    // The accepted-to-terminal pair is numbered, so prose may cite it, and is
+    // excluded from the verdict and from the findings that carry a direction.
+    let packet = build_packet(&suite("packet-attribution", 1.0, 1.0));
+
+    assert!(
+        packet
+            .metrics
+            .values()
+            .any(|metric| metric.name.contains("p99_accepted_to_terminal_ns")),
+        "the attribution metric is still citable"
+    );
+    assert!(
+        !packet
+            .deterministic_findings
+            .iter()
+            .any(|finding| finding.text.contains("p99_accepted_to_terminal_ns")),
+        "{:?}",
+        packet.deterministic_findings
+    );
+    assert_eq!(packet.verdict, Verdict::Inconclusive);
+}
+
+#[test]
+fn an_unmatched_execution_surface_is_a_finding_not_only_an_anomaly() {
+    let root = scratch_directory("packet-unmatched-surface");
+    let roots: Vec<PathBuf> = (0..5)
+        .map(|index| {
+            BundleFixture::new(&format!("attempt-{index}"))
+                .subject("base", Some("base"), ResultFixture::default())
+                .subject(
+                    "head",
+                    Some("head"),
+                    ResultFixture {
+                        declared: bench_schema::DeclaredExecution {
+                            payload_construction: "built-per-offer".to_owned(),
+                            ..crate::fixture::matched_declaration()
+                        },
+                        ..ResultFixture::default()
+                    },
+                )
+                .write(&root)
+        })
+        .collect();
+
+    let packet = build_packet(&summarize_suite(&roots, &options()).unwrap());
+
+    assert!(
+        packet.deterministic_findings.iter().any(|finding| finding
+            .text
+            .contains("did not declare the same measured work")),
+        "{:?}",
+        packet.deterministic_findings
+    );
 }

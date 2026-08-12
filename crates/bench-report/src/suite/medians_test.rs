@@ -49,10 +49,22 @@ fn dispersion_is_reported_for_every_metric_of_every_subject_and_every_pair() {
 
     let summary = summarize_suite(&roots, &options()).unwrap();
 
-    // Two subjects and one comparison, each over all seven metrics. The
+    // Two subjects and one comparison, each over every metric this closed-loop
+    // fixture reported. Scheduler lateness is the one metric it did not: there
+    // was no schedule, so there is no row rather than a row of zeroes. The
     // per-subject rows are informational; the `head/base` rows are the ones the
     // budget gate reads.
-    assert_eq!(summary.dispersion.len(), 3 * SuiteMetric::ALL.len());
+    let reported = SuiteMetric::ALL
+        .into_iter()
+        .filter(|metric| *metric != SuiteMetric::SchedulerLateness)
+        .count();
+    assert_eq!(summary.dispersion.len(), 3 * reported);
+    assert!(
+        !summary
+            .dispersion
+            .iter()
+            .any(|entry| entry.metric == "p99_intended_to_call_start_ns")
+    );
     let row = |name: &str| {
         summary
             .dispersion

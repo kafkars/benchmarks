@@ -17,12 +17,20 @@ use crate::suite::{SuiteMetric, metric_of_field, pair_passes, pair_regresses};
 use super::NOT_REPORTED;
 
 /// The scorecard's header row, shared by the suite and bundle views.
+///
+/// The column order is the reading order, and it is an argument: what the
+/// application saw end to end first, then where that time went, then what it
+/// cost. `Lateness p99` and `Accepted-to-terminal p99` sit after the
+/// offer-to-terminal percentiles rather than beside them so that a reader meets
+/// the number a comparison may rest on before the two that only locate it.
 pub(super) const SCORECARD_HEADER: &str = "| Subject | Role | Goodput (records/s) | p50 (ms) | p99 (ms) | \
-     p99.9 (ms) | Admission p99 (ms) | CPU (core-s) | Peak RSS (MiB) |";
+     p99.9 (ms) | Admission p99 (ms) | Lateness p99 (ms) | \
+     Accepted-to-terminal p99 (ms) | CPU (core-s) | CPU per 1M ack (core-s) | \
+     Peak RSS (MiB) |";
 
 /// The scorecard's alignment row: every numeric column is right-aligned.
 pub(super) const SCORECARD_ALIGNMENT: &str =
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |";
 
 /// Whether a dispersion row is judged or merely reported.
 ///

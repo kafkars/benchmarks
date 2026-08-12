@@ -35,6 +35,10 @@ pub(super) fn run_subject(
         outcome
             .declared_adapter_version
             .clone_from(&subject.adapter_version);
+        // The role travels with the subject for the same reason: the comparison
+        // divides by whichever subject the experiment named `base`, not by
+        // whichever one the rotation happened to start with.
+        outcome.role.clone_from(&subject.role);
     }
     let phase = format!("subject:{name}:run");
     if interrupt.is_set() {

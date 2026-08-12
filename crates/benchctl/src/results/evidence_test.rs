@@ -93,6 +93,7 @@ pub(super) fn measurement(goodput: f64, p99: u64) -> ProducerBenchmarkV2 {
             acknowledged_payload_bytes_per_second: goodput * 1_024.0,
         },
         queue: QueueObservation {
+            max_outstanding_bytes_observed: None,
             max_outstanding_observed: 256,
             final_outstanding: 0,
         },
@@ -127,6 +128,7 @@ pub(super) fn subject_with(name: &str, document: &ProducerBenchmarkV2) -> Subjec
     std::fs::remove_dir_all(&results_root).unwrap();
     SubjectOutcome {
         name: name.to_owned(),
+        role: None,
         execution: Some(clean_exit()),
         interrupted: false,
         evidence,
@@ -250,6 +252,7 @@ fn an_unreadable_document_is_noted_and_the_subject_stays_invalid() {
     );
     let outcome = SubjectOutcome {
         name: "only".to_owned(),
+        role: None,
         execution: Some(clean_exit()),
         interrupted: false,
         evidence,
