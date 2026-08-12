@@ -12,3 +12,7 @@ publish = false
 workspace = true
 
 [dependencies]
+bench-schema.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+signal-hook.workspace = true
