@@ -61,13 +61,5 @@ scenario = "scenarios/producer/headline/payload-16k-12p.toml"
 repetitions = 3
 
 [[entries]]
-scenario = "scenarios/producer/headline/payload-256k-6p.toml"
-repetitions = 3
-
-[[entries]]
-scenario = "scenarios/producer/headline/near-limit-900k-3p.toml"
-repetitions = 3
-
-[[entries]]
 scenario = "scenarios/producer/headline/capacity-balanced-1k-12p.toml"
 repetitions = 1

@@ -7,11 +7,15 @@
 # request carries a handful of records and the per-record path is dominated by
 # whatever the client does with the bytes between admission and the wire.
 #
-# The application window is deliberately small — 128 records is 32 MiB of
-# payload, half the client queue budget — because at this size a wide window
-# would measure the 64 MiB byte budget rather than the record path. Both
-# adapters admit `min(window, 256, remaining)` records per public call, so a
-# window below 256 shortens the application batch rather than stalling it.
+# The window is 256 records — 64 MiB of payload — because both adapters
+# hard-code a 256-record client batch and the kafkars engine refuses a window
+# below its batch limit (Producer(BatchRecordLimitExceedsCapacity), sealed in
+# the first attempt of this scenario). Both adapters also hard-code the
+# 64 MiB client queue, and 256 records at this size is exactly that budget —
+# so admission throttles on bytes before it throttles on records. That is not
+# a flaw here: the v2 offer model measures the wait inside
+# `call_start_to_accepted` instead of erasing it, and this scenario reads the
+# record path under an honest byte-gate backpressure.
 #
 # 1,000 measured records is 250 MiB of payload per subject, which is what keeps
 # one attempt inside a couple of minutes on a developer host. It is a p99-grade
@@ -29,7 +33,7 @@ producer_instances = 1
 callers_per_producer = 1
 backpressure = "block-within-original-offer"
 queue_bytes = 67108864
-max_outstanding_records = 128
+max_outstanding_records = 256
 
 [application_api]
 admission_shape = "public-batch"
