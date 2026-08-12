@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+manifest="$repo_root/adapters/kafkars/Cargo.toml"
+binary_root=$("$repo_root/scripts/build-benchmark-adapters")
+run_id=0123456789abcdef
+export CARGO_TARGET_DIR="$repo_root/target/benchmarks/kafkars-check"
+
+node --test "$repo_root/legacy/benchctl/"*.test.mjs
+cargo fmt --manifest-path "$manifest" --all -- --check
+cargo clippy \
+  --manifest-path "$manifest" \
+  --locked \
+  --offline \
+  --all-targets \
+  -- -D warnings
+cargo test \
+  --manifest-path "$manifest" \
+  --locked \
+  --offline
+
+for sequence in 0 1 42 18446744073709551615; do
+  rust_vector=$(
+    "$binary_root/kafkars-benchmark-adapter" payload "$run_id" "$sequence" 1024
+  )
+  c_vector=$(
+    "$binary_root/librdkafka-payload-vector" "$run_id" "$sequence" 1024
+  )
+  if [[ "$rust_vector" != "$c_vector" ]]; then
+    echo "payload conformance failed at sequence $sequence" >&2
+    exit 1
+  fi
+done
+
+for vector in "100000 1000 256 4" "3 17 4 2" "1000000000 513 256 4"; do
+  read -r rate records batch_records callers <<<"$vector"
+  rust_vector=$(
+    "$binary_root/kafkars-benchmark-adapter" schedule \
+      "$rate" "$records" "$batch_records" "$callers"
+  )
+  c_vector=$(
+    "$binary_root/librdkafka-schedule-vector" \
+      "$rate" "$records" "$batch_records" "$callers"
+  )
+  if [[ "$rust_vector" != "$c_vector" ]]; then
+    echo "schedule conformance failed for $vector" >&2
+    exit 1
+  fi
+done
+
+# The loops above prove the two adapters agree with each other today. They cannot
+# prove either one still agrees with what shipped, because a change that moves
+# both implementations in lockstep keeps them equal while silently redefining the
+# payload bytes or the admission schedule. The committed goldens under
+# conformance/ are the third party to that comparison: they pin the bytes across
+# time, so the assertion below turns Rust == C into Rust == C == shipped.
+golden_root="$repo_root/conformance"
+vector_scratch=$(mktemp -d)
+trap 'rm -rf -- "$vector_scratch"' EXIT
+
+assert_golden() {
+  local golden="$1"
+  local observed="$2"
+  local producer="$3"
+  if [[ ! -f "$golden" ]]; then
+    echo "missing conformance golden ${golden#"$repo_root/"}" >&2
+    echo "regenerate the goldens with the commands in conformance/README.md" >&2
+    exit 1
+  fi
+  if ! cmp -s "$golden" "$observed"; then
+    echo "conformance golden mismatch: $producer disagrees with" >&2
+    echo "  ${golden#"$repo_root/"}" >&2
+    echo "the observable vector bytes changed; if that is intended, regenerate" >&2
+    echo "the goldens with the commands in conformance/README.md and review the" >&2
+    echo "resulting diff as a behavior change, not a refresh" >&2
+    exit 1
+  fi
+}
+
+for sequence in 0 1 42 18446744073709551615; do
+  golden="$golden_root/payload/seq-$sequence.vector"
+  "$binary_root/kafkars-benchmark-adapter" payload "$run_id" "$sequence" 1024 \
+    >"$vector_scratch/payload-rust.vector"
+  "$binary_root/librdkafka-payload-vector" "$run_id" "$sequence" 1024 \
+    >"$vector_scratch/payload-c.vector"
+  assert_golden \
+    "$golden" "$vector_scratch/payload-rust.vector" "kafkars payload $sequence"
+  assert_golden \
+    "$golden" "$vector_scratch/payload-c.vector" "librdkafka payload $sequence"
+done
+
+for vector in "100000 1000 256 4" "3 17 4 2" "1000000000 513 256 4"; do
+  read -r rate records batch_records callers <<<"$vector"
+  golden="$golden_root/schedule/$rate-$records-$batch_records-$callers.vector"
+  "$binary_root/kafkars-benchmark-adapter" schedule \
+    "$rate" "$records" "$batch_records" "$callers" \
+    >"$vector_scratch/schedule-rust.vector"
+  "$binary_root/librdkafka-schedule-vector" \
+    "$rate" "$records" "$batch_records" "$callers" \
+    >"$vector_scratch/schedule-c.vector"
+  assert_golden \
+    "$golden" "$vector_scratch/schedule-rust.vector" "kafkars schedule $vector"
+  assert_golden \
+    "$golden" "$vector_scratch/schedule-c.vector" "librdkafka schedule $vector"
+done

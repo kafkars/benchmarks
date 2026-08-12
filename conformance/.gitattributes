@@ -1,0 +1,4 @@
+# Goldens are exact stdout bytes. The repository-wide `text=auto eol=lf` rule
+# would let git rewrite line endings on checkout, which is precisely the kind of
+# silent mutation these files exist to detect. Opt them out of all normalization.
+*.vector -text

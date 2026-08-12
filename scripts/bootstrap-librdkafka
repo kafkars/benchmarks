@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+version=2.15.0
+archive_sha=259015220cdca708afe838b5aa79ebf1a5fb710fb4179cf918d390aed85d5dbc
+artifact_root="$repo_root/target/benchmarks"
+archive="$artifact_root/downloads/librdkafka-v$version.tar.gz"
+source_root="$artifact_root/librdkafka-$version-$archive_sha"
+
+if [[ -f "$source_root/src/librdkafka.a" ]]; then
+  printf '%s\n' "$source_root"
+  exit 0
+fi
+if [[ -e "$source_root" ]]; then
+  echo "incomplete pinned librdkafka tree exists at $source_root" >&2
+  exit 69
+fi
+
+mkdir -p "$artifact_root/downloads"
+if [[ ! -f "$archive" ]]; then
+  curl --fail --location \
+    --output "$archive" \
+    "https://github.com/confluentinc/librdkafka/archive/refs/tags/v$version.tar.gz"
+fi
+observed_sha=$(LC_ALL=C shasum -a 256 "$archive" | awk '{print $1}')
+if [[ "$observed_sha" != "$archive_sha" ]]; then
+  echo "librdkafka v$version archive checksum mismatch: $observed_sha" >&2
+  exit 69
+fi
+
+build_root=$(mktemp -d "$artifact_root/librdkafka-build.XXXXXX")
+cleanup() {
+  rm -rf -- "$build_root"
+}
+trap cleanup EXIT
+unpacked="$build_root/source"
+mkdir -p "$unpacked"
+LC_ALL=C tar -xzf "$archive" --strip-components=1 -C "$unpacked"
+(
+  cd "$unpacked"
+  ./configure \
+    --disable-ssl \
+    --disable-gssapi \
+    --disable-curl \
+    --disable-zstd \
+    --disable-lz4-ext \
+    --enable-static >&2
+  make -C src -j "${KAFKARS_BENCH_BUILD_JOBS:-4}" >&2
+)
+mv "$unpacked" "$source_root"
+printf '%s\n' "$source_root"
