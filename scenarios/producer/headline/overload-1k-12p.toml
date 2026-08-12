@@ -1,0 +1,88 @@
+# Question: when the offered rate is beyond anything the cluster can absorb,
+# does the client stay bounded and drain — or does it hide the overload?
+#
+# The balanced point with the rate moved to 400,000 records/s, four times the
+# balanced offer and roughly 400 MiB/s before replication. No developer-host
+# cluster sustains that, and that is the design: an overload observation is
+# only interesting if the run is otherwise valid. The expected result is a
+# clean, complete, fully drained run that misses every objective below, with
+# schedule delay and admission wait carrying the story.
+#
+# The failure this scenario exists to catch is the opposite: a client that
+# reports comfortable latency at an impossible rate, because it dropped the
+# offers it could not take, reset a timestamp when a queue was full, or grew an
+# unbounded buffer instead of pushing back. The v2 offer model counts an offer
+# that never crossed the API as offered-but-not-accepted, so none of those can
+# be spent as throughput.
+#
+# The objectives below are the capacity-probe contract, unchanged, so this
+# point is exactly "the failing side of capacity mode, pinned to one rate".
+
+name = "producer-overload-1k-12p"
+status = "diagnostic"
+claim_eligible = false
+load_mode = "scheduled-open-loop-fixed-rate"
+records = 300000
+warmup_records = 30000
+offered_records_per_second = 400000
+
+[slo]
+corrected_p99_ms = 250
+schedule_delay_p99_ms = 50
+drain_tail_ms = 1000
+queue_slope_percent = 1
+queue_slope_floor_records_per_second = 1000
+minimum_queue_samples = 3
+native_retries = 0
+native_timeouts = 0
+
+[application]
+producer_instances = 1
+callers_per_producer = 4
+backpressure = "block-within-original-offer"
+queue_bytes = 67108864
+max_outstanding_records = 8192
+
+[application_api]
+admission_shape = "public-batch"
+completion_shape = "aggregate-batch-terminal"
+batch_records = 256
+
+[payload]
+bytes = 1024
+profile = "deterministic-ascii-envelope"
+seed = 44
+identity = "KFB1 plus 16-byte run ID plus 64-bit sequence"
+
+[producer]
+acks = "all"
+idempotence = true
+compression = "none"
+linger_ms = 5
+batch_records = 256
+batch_bytes = 65536
+request_bytes = 1048576
+delivery_timeout_ms = 60000
+partitioning = "explicit-round-robin"
+warmup_partitioning = "explicit-round-robin"
+warmup_serialized_partition_primer_records = 12
+max_in_flight_requests_per_broker = 5
+retry_max_replacements = 600
+retry_backoff_ms = 100
+
+[cluster]
+brokers = 3
+partitions = 12
+replication_factor = 3
+min_in_sync_replicas = 2
+security = "plaintext"
+unclean_leader_election = false
+
+[validity]
+require_complete_drain = true
+require_every_delivery_terminal = true
+require_broker_visible_identity = true
+require_no_missing_records = true
+require_no_duplicate_records = true
+require_partition_order = true
+require_exact_payload = true

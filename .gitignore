@@ -1,5 +1,6 @@
 /target/
 /results/
+/reports/
 /adapters/kafkars/target/
 /node_modules/
 .DS_Store

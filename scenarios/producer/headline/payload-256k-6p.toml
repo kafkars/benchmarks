@@ -1,0 +1,76 @@
+# Question: when a single record is four times the batch budget, what does the
+# slab, the copy, and the request boundary cost?
+#
+# 256 KiB records, closed-loop, six partitions. At this size a record is larger
+# than the 64 KiB batch budget and a quarter of the 1 MiB request budget, so
+# batching stops being an aggregation question and becomes a framing one: each
+# request carries a handful of records and the per-record path is dominated by
+# whatever the client does with the bytes between admission and the wire.
+#
+# The application window is deliberately small — 128 records is 32 MiB of
+# payload, half the client queue budget — because at this size a wide window
+# would measure the 64 MiB byte budget rather than the record path. Both
+# adapters admit `min(window, 256, remaining)` records per public call, so a
+# window below 256 shortens the application batch rather than stalling it.
+#
+# 1,000 measured records is 250 MiB of payload per subject, which is what keeps
+# one attempt inside a couple of minutes on a developer host. It is a p99-grade
+# sample at this record size and deliberately not a p99.9-grade one.
+
+name = "producer-payload-256k-6p"
+status = "diagnostic"
+claim_eligible = false
+load_mode = "closed-loop-capacity-point"
+records = 1000
+warmup_records = 100
+
+[application]
+producer_instances = 1
+callers_per_producer = 1
+backpressure = "block-within-original-offer"
+queue_bytes = 67108864
+max_outstanding_records = 128
+
+[application_api]
+admission_shape = "public-batch"
+completion_shape = "aggregate-batch-terminal"
+batch_records = 256
+
+[payload]
+bytes = 262144
+profile = "deterministic-ascii-envelope"
+seed = 44
+identity = "KFB1 plus 16-byte run ID plus 64-bit sequence"
+
+[producer]
+acks = "all"
+idempotence = true
+compression = "none"
+linger_ms = 5
+batch_records = 256
+batch_bytes = 65536
+request_bytes = 1048576
+delivery_timeout_ms = 60000
+partitioning = "explicit-round-robin"
+warmup_partitioning = "explicit-round-robin"
+warmup_serialized_partition_primer_records = 6
+max_in_flight_requests_per_broker = 5
+retry_max_replacements = 600
+retry_backoff_ms = 100
+
+[cluster]
+brokers = 3
+partitions = 6
+replication_factor = 3
+min_in_sync_replicas = 2
+security = "plaintext"
+unclean_leader_election = false
+
+[validity]
+require_complete_drain = true
+require_every_delivery_terminal = true
+require_broker_visible_identity = true
+require_no_missing_records = true
+require_no_duplicate_records = true
+require_partition_order = true
+require_exact_payload = true

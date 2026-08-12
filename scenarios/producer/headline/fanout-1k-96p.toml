@@ -1,0 +1,72 @@
+# Question: what does spreading the same offered rate across eight times as
+# many partitions cost?
+#
+# The balanced point with one axis moved: 96 partitions instead of 12, at the
+# same 1 KiB payload, the same four callers, and the same offered rate. Every
+# partition is a separate accumulator, a separate batch, and a separate
+# sequence lane, so the difference between this and `balanced-1k-12p` is
+# routing and per-partition batching cost rather than bytes on the wire.
+#
+# 96 partitions over three brokers is 32 leaders each, and at replication
+# factor 3 that is 288 replicas — within reach of the dev-compose cluster, and
+# the reason this stops at 96 rather than continuing the design document's
+# partition axis upward.
+
+name = "producer-fanout-1k-96p"
+status = "diagnostic"
+claim_eligible = false
+load_mode = "scheduled-open-loop-fixed-rate"
+records = 300000
+warmup_records = 30000
+offered_records_per_second = 100000
+
+[application]
+producer_instances = 1
+callers_per_producer = 4
+backpressure = "block-within-original-offer"
+queue_bytes = 67108864
+max_outstanding_records = 8192
+
+[application_api]
+admission_shape = "public-batch"
+completion_shape = "aggregate-batch-terminal"
+batch_records = 256
+
+[payload]
+bytes = 1024
+profile = "deterministic-ascii-envelope"
+seed = 44
+identity = "KFB1 plus 16-byte run ID plus 64-bit sequence"
+
+[producer]
+acks = "all"
+idempotence = true
+compression = "none"
+linger_ms = 5
+batch_records = 256
+batch_bytes = 65536
+request_bytes = 1048576
+delivery_timeout_ms = 60000
+partitioning = "explicit-round-robin"
+warmup_partitioning = "explicit-round-robin"
+warmup_serialized_partition_primer_records = 96
+max_in_flight_requests_per_broker = 5
+retry_max_replacements = 600
+retry_backoff_ms = 100
+
+[cluster]
+brokers = 3
+partitions = 96
+replication_factor = 3
+min_in_sync_replicas = 2
+security = "plaintext"
+unclean_leader_election = false
+
+[validity]
+require_complete_drain = true
+require_every_delivery_terminal = true
+require_broker_visible_identity = true
+require_no_missing_records = true
+require_no_duplicate_records = true
+require_partition_order = true
+require_exact_payload = true
