@@ -413,11 +413,13 @@ fn classify(result: SendBatchResult, count: u64) -> Result<Admission, Box<dyn Er
             "an offer group of {count} reported {accepted} terminals and no rejection"
         )
         .into()),
-        Some(rejection)
-            if deliveries.is_empty() && rejection.error().kind() == ErrorKind::Backpressure =>
-        {
-            let (records, _error) = rejection.into_parts();
-            Ok(Admission::Refused(records))
+        Some(rejection) if deliveries.is_empty() => {
+            let (records, error) = rejection.into_parts();
+            if error.kind() == ErrorKind::Backpressure {
+                Ok(Admission::Refused(records))
+            } else {
+                Err(wholly_refused(count, &error).into())
+            }
         }
         Some(rejection) => {
             let (records, error) = rejection.into_parts();
@@ -429,6 +431,26 @@ fn classify(result: SendBatchResult, count: u64) -> Result<Admission, Box<dyn Er
             .into())
         }
     }
+}
+
+/// Names a refusal the retry loop has no way to answer.
+///
+/// Backpressure is the only refusal an offer can wait out: the client is full
+/// now and may not be a moment from now, so [`OfferEngine::admit`] presents the
+/// same records again. Every other refusal returns the identical "nothing accepted,
+/// everything handed back" shape while meaning the opposite — the client will
+/// never take this record — and reporting it as a *partial* admission named the
+/// one thing that demonstrably did not happen, hid the client's own error, and
+/// left a reader to guess whether their run had been reordered. The kind is the
+/// only thing that separates the two, so it is what this says first.
+pub(super) fn wholly_refused(count: u64, error: &KafkaError) -> String {
+    format!(
+        "the client accepted no record of an offer group of {count}, for a reason no retry \
+         can clear: kind={:?} fatal={} delivery={:?} message={error}",
+        error.kind(),
+        error.is_fatal(),
+        error.delivery_status(),
+    )
 }
 
 /// What one poll of a parked group said.

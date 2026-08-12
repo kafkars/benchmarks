@@ -144,7 +144,7 @@ the client's request budget, and the adapter's fixed request size all raised
 together, and every one of those values recorded in the bundle. The design
 document is explicit that a raised-limit result does not share a score with
 default-compatible runs, so this is a separate lane rather than one more row —
-which is why `near-limit-900k-3p.toml` exists at 900,000 bytes instead.
+which is why `producer/deferred/near-limit-900k-3p.toml` exists at 900,000 bytes instead.
 
 ## Consumer, end-to-end, faults, and soak
 
@@ -165,3 +165,31 @@ cluster-control surface separate from the adapter protocol, on the same
 principle that keeps verification outside it. Soak needs the evidence-retention
 policy decided first, because a two-hour run at the current per-record sampling
 produces evidence nobody has said where to keep.
+
+## Records larger than the client batch budget
+
+`producer/deferred/payload-256k-6p.toml` and
+`producer/deferred/near-limit-900k-3p.toml` are authored, validate cleanly,
+and cannot yet produce a valid kafkars measurement. Two client-side findings,
+both sealed as evidence by the attempts that discovered them:
+
+- **`batch_bytes` is a hard cap on the encoded wire batch.** Both adapters
+  pin the client batch budget at 65,536 bytes per the performance contract,
+  and `kafka-client` refuses to materialize any record whose complete batch
+  encoding exceeds it (`kafka-wire-records` `batch_encode` returns
+  `BatchLimitExceeded`; the engine settles the record as an immediate,
+  non-retried failure terminal). librdkafka's `batch.size` is a soft cap — an
+  oversized record gets a batch of its own — so the same scenario runs valid
+  on the anchor and fails in microseconds on kafkars.
+- **One failure terminal fences producer admission.** After a single record
+  settles as failed, `send_batch` reports `producer admission is closed` and
+  `close()` reports `producer is already closed`. A workload with any local
+  failure therefore cannot finish its measurement.
+
+Unblocking is a `kafka-client` decision (oversized-record batching, or a
+documented refusal the resolver can check before running; and whether
+admission fencing after a failure terminal is intended semantics). Until
+then these two stay out of the runnable packs. The adapter now reports the
+fencing accurately rather than masking it behind the close failure; making
+it seal a partial v2 result document after fencing — failures counted,
+histograms intact — is a follow-up noted in `docs/ROADMAP.md`.

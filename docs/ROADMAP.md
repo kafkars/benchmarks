@@ -75,3 +75,14 @@ published number cites. Deferred, and recorded as deferred in `AGENTS.md`,
 because it must be decided before the first result is treated as a gate and it
 does not block anything before that. Bundles are written to a gitignored
 `results/` tree in the meantime, which is a location, not a policy.
+
+## Findings awaiting a client decision
+
+The large-record scenarios surfaced two `kafka-client` behaviors the lab can
+measure but not change: `batch_bytes` acts as a hard cap on the encoded wire
+batch (records above it fail locally, without a broker), and one failure
+terminal permanently fences producer admission. Both are recorded with
+sealed evidence in `scenarios/DEFERRED.md`. A related harness follow-up:
+after admission fencing the kafkars adapter exits without a result document;
+it could instead seal a partial v2 measurement with the failure terminals
+counted.

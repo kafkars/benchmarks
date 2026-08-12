@@ -29,6 +29,8 @@ mod turn;
 #[cfg(test)]
 mod turn_test;
 mod v2;
+#[cfg(test)]
+mod v2_test;
 
 use std::{
     error::Error,

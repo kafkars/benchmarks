@@ -11,11 +11,13 @@
 # design document's literal 1 MiB row is a raised-limit workload and is not in
 # this pack — see `scenarios/DEFERRED.md`.
 #
-# The window is tiny on purpose. Sixteen records is 14.4 MiB of payload, and at
-# one record per request that is roughly the fifteen requests three brokers
-# will hold in flight — one network wave, and no application queue hiding
-# behind it. With 300 measured records this is a framing and limit workload,
-# not a percentile workload; read the distribution, not its p99.9.
+# The window is the floor both adapters permit: they hard-code a 256-record
+# client batch, and the kafkars engine refuses a window below its batch limit.
+# At 900 KB the hard-coded 64 MiB client queue admits roughly 74 records, so
+# the byte gate, not the 256-record window, is the real limiter — and the v2
+# offer model records that wait in `call_start_to_accepted` rather than
+# hiding it. With 300 measured records this is a framing and limit workload, not a
+# percentile workload; read the distribution, not its p99.9.
 
 name = "producer-near-limit-900k-3p"
 status = "diagnostic"
@@ -29,7 +31,7 @@ producer_instances = 1
 callers_per_producer = 1
 backpressure = "block-within-original-offer"
 queue_bytes = 67108864
-max_outstanding_records = 16
+max_outstanding_records = 256
 
 [application_api]
 admission_shape = "public-batch"

@@ -49,6 +49,8 @@ mod document;
 #[cfg(test)]
 mod document_test;
 mod engine;
+#[cfg(test)]
+mod engine_test;
 mod fixed_rate;
 mod measurement;
 #[cfg(test)]
@@ -115,8 +117,7 @@ pub(crate) fn run_closed_loop_v2(
         waiting_bytes: CLOSED_LOOP_WAITING_BYTES,
     })?;
     let outcome = measure_closed_loop(&session, arguments);
-    session.close()?;
-    outcome
+    seal(outcome, session.close())
 }
 
 /// Runs one fixed-rate experiment and returns its v2 document.
@@ -133,8 +134,30 @@ pub(crate) fn run_fixed_rate_v2(
         waiting_bytes: FIXED_RATE_WAITING_BYTES,
     })?;
     let outcome = measure_fixed_rate(&session, arguments);
-    session.close()?;
-    outcome
+    seal(outcome, session.close())
+}
+
+/// Reports what the measurement said, not what shutting down afterwards said.
+///
+/// The session is closed on every path, including the failing ones, so a phase
+/// that gave up still releases the client rather than leaving the process to
+/// tear it down. That ordering had a cost: `close()?` ran first, so a shutdown
+/// that failed *because* the phase had already failed replaced the diagnosis
+/// with its own symptom, and the run reported the consequence instead of the
+/// cause. The measurement's error is therefore the one that survives, and a
+/// close failure is appended to it rather than substituted for it.
+pub(super) fn seal<T>(
+    outcome: Result<T, Box<dyn Error>>,
+    closed: Result<(), Box<dyn Error>>,
+) -> Result<T, Box<dyn Error>> {
+    match (outcome, closed) {
+        (Ok(document), Ok(())) => Ok(document),
+        (Ok(_), Err(close)) => Err(close),
+        (Err(failure), Ok(())) => Err(failure),
+        (Err(failure), Err(close)) => {
+            Err(format!("{failure}; the session then failed to close: {close}").into())
+        }
+    }
 }
 
 /// Warms up, measures, and builds the closed-loop document.
