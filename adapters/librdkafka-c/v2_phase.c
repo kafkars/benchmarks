@@ -14,9 +14,10 @@
  * (its place in the schedule, or its own call start under closed loop),
  * `call_start` (when the application began the admission attempt),
  * `accepted` (when the client took ownership), and `terminal` (its delivery
- * report). `call_start` is taken once, *before* the application blocks for
- * admission, and no queue-full retry ever rewrites it — a retry that restarts
- * the clock hides exactly the backpressure the measurement exists to show.
+ * report). `call_start` is taken once, at the single point named by
+ * `await_budget_then_stamp` below, and no queue-full retry ever rewrites it —
+ * a retry that restarts the clock hides exactly the backpressure the
+ * measurement exists to show.
  *
  * # Why the memory is bounded
  *
@@ -197,6 +198,27 @@ void bench_v2_delivery(bench_v2_phase_t *phase,
            acceptance. */
         while (!offer->published && !phase->fatal)
                 v2_wait(phase);
+        /*
+         * INVARIANT: a slab entry is retired exactly once, by whoever owns it —
+         * the delivery report of a *published* offer, or `abandon` for an offer
+         * the client refused. The two sets are disjoint because publication is
+         * exactly "the client took these bytes".
+         *
+         * The wait above has one escape, and it is this one: a phase that has
+         * already gone fatal stops waiting, because the submitter that owes the
+         * publication may itself be failing and never arrive. An unpublished
+         * offer is therefore left exactly as it was found — not recorded, not
+         * released, still outstanding, so it ends the run as `unknown`. Doing
+         * anything else here reads `accepted_ns` before it is written (a
+         * terminal span measured from zero, i.e. the whole run), and hands the
+         * entry back to the free list while the submitter still holds a pointer
+         * to it — which is how a later `publish_accepted` or `abandon` writes
+         * through a reissued slot and releases another offer's entry twice.
+         */
+        if (!offer->published) {
+                v2_unlock(phase);
+                return;
+        }
         if (terminal_ns == V2_CLOCK_FAILED) {
                 fail_locked(phase);
                 terminal_ns = offer->accepted_ns;
@@ -214,8 +236,6 @@ void bench_v2_delivery(bench_v2_phase_t *phase,
                                span_ns(offer->accepted_ns, terminal_ns));
         bench_histogram_record(&phase->intended_to_terminal,
                                span_ns(offer->intended_ns, terminal_ns));
-        if (terminal_ns > phase->last_terminal_ns)
-                phase->last_terminal_ns = terminal_ns;
         if (phase->outstanding > 0)
                 phase->outstanding--;
         if (phase->caller_outstanding[offer->caller] > 0)
@@ -316,24 +336,68 @@ static void backoff(void) {
 }
 
 /*
- * The measured admission of one batch of offers. Everything from here to the
- * delivery report is inside `call_start_to_accepted`, including the wait for
- * outstanding budget and every queue-full retry — and `call_start_ns` arrives
- * already taken, so no path in here can restart it.
+ * Waits until this caller's own outstanding budget admits the whole batch, and
+ * only then stamps `call_start`. The caller holds the lock.
+ *
+ * These two steps are one function because their order *is* the measurement
+ * contract, stated normatively in docs/EVIDENCE.md: `call_start` excludes the
+ * application's own budget wait — under fixed rate that wait is already
+ * visible as scheduler lateness, under closed loop it is deliberately invisible
+ * in latency and visible only in throughput — and includes everything after
+ * it, which is the harness's submission-order serialization, the client's
+ * admission call, and every queue-full retry of the same offer. The kafkars
+ * adapter brackets identically (`v2/engine.rs`: `AdmissionClock::start` runs
+ * after the caller's budget loop and before `AdmissionOrder::wait`), and this
+ * is the only place in this adapter that reads the clock for `call_start`.
+ */
+static int await_budget_then_stamp(v2_caller_t *caller,
+                                   size_t count,
+                                   uint64_t *call_start_ns) {
+        bench_v2_phase_t *phase = caller->phase;
+
+        while (!phase->fatal &&
+               phase->caller_outstanding[caller->caller] + count >
+                   caller->budget)
+                v2_wait(phase);
+        if (phase->fatal)
+                return -1;
+        *call_start_ns = elapsed_ns(phase);
+        if (*call_start_ns == V2_CLOCK_FAILED) {
+                fprintf(stderr, "monotonic clock failed\n");
+                return -1;
+        }
+        return 0;
+}
+
+/*
+ * The measured admission of one batch of offers. Everything from the stamp
+ * above to the delivery report is inside `call_start_to_accepted`, including
+ * the submission-order barrier and every queue-full retry — and `call_start_ns`
+ * is written exactly once, so no path in here can restart it.
  */
 static int offer_batch(v2_caller_t *caller,
                        size_t batch_index,
                        size_t count,
-                       uint64_t call_start_ns,
                        const uint64_t *intended_ns) {
         bench_v2_phase_t *phase = caller->phase;
-        uint64_t deadline_ns =
-            call_start_ns +
-            ((uint64_t)BENCH_DELIVERY_TIMEOUT_MS * UINT64_C(1000000));
+        uint64_t call_start_ns;
+        uint64_t deadline_ns;
         size_t pending = count;
         size_t index;
 
         v2_lock(phase);
+        if (await_budget_then_stamp(caller, count, &call_start_ns) != 0) {
+                fail_locked(phase);
+                v2_unlock(phase);
+                return -1;
+        }
+        deadline_ns = call_start_ns +
+                      ((uint64_t)BENCH_DELIVERY_TIMEOUT_MS * UINT64_C(1000000));
+        /* An offer is counted the moment its public call begins, before the
+           client has said anything about it, so a refused batch leaves
+           `offered` above `accepted` rather than agreeing with it by
+           construction. Lateness is one sample per offered record, which is
+           the total the document's accounting requires. */
         for (index = 0; index < count; ++index) {
                 phase->offered++;
                 if (intended_ns)
@@ -341,10 +405,6 @@ static int offer_batch(v2_caller_t *caller,
                             &phase->intended_to_call_start,
                             span_ns(intended_ns[index], call_start_ns));
         }
-        while (!phase->fatal &&
-               phase->caller_outstanding[caller->caller] + count >
-                   caller->budget)
-                v2_wait(phase);
         /* Batches enter the client in schedule order, as the legacy path
            admits them, so a slow caller cannot reorder the offered stream. */
         while (!phase->fatal && phase->submission_count < batch_index)
@@ -440,17 +500,13 @@ static int run_closed_caller(v2_caller_t *caller) {
 
         for (sequence = 0; sequence < config->records;) {
                 size_t count = config->records - sequence;
-                uint64_t call_start_ns;
 
                 if (count > BENCH_BATCH_RECORDS)
                         count = BENCH_BATCH_RECORDS;
                 if (count > caller->budget)
                         count = caller->budget;
                 prepare_batch(caller, sequence, count);
-                call_start_ns = elapsed_ns(caller->phase);
-                if (call_start_ns == V2_CLOCK_FAILED ||
-                    offer_batch(caller, batch_index, count, call_start_ns,
-                                NULL) != 0)
+                if (offer_batch(caller, batch_index, count, NULL) != 0)
                         return -1;
                 batch_index++;
                 sequence += count;
@@ -469,7 +525,6 @@ static int run_fixed_caller(v2_caller_t *caller) {
              batch_index += config->callers) {
                 size_t sequence = batch_index * BENCH_BATCH_RECORDS;
                 size_t count    = config->records - sequence;
-                uint64_t call_start_ns;
                 size_t index;
 
                 if (count > BENCH_BATCH_RECORDS)
@@ -484,10 +539,8 @@ static int run_fixed_caller(v2_caller_t *caller) {
                 prepare_batch(caller, sequence, count);
                 if (await_due(caller->phase, caller->intended[count - 1U]) != 0)
                         return -1;
-                call_start_ns = elapsed_ns(caller->phase);
-                if (call_start_ns == V2_CLOCK_FAILED ||
-                    offer_batch(caller, batch_index, count, call_start_ns,
-                                caller->intended) != 0)
+                if (offer_batch(caller, batch_index, count, caller->intended) !=
+                    0)
                         return -1;
         }
         return 0;
@@ -587,8 +640,19 @@ int bench_run_v2_phase(rd_kafka_t *producer,
         size_t index;
         uint64_t now;
 
+        /*
+         * Every admission shape this phase cannot honour, refused in one place
+         * rather than discovered later as a hang. A per-caller budget of zero
+         * clamps the closed-loop batch to zero records, which offers nothing
+         * and never advances its sequence; and the closed-loop submitter numbers
+         * its batches from zero per caller, so two closed-loop callers would
+         * both claim submission index zero and collide on the order barrier.
+         * The parser already fixes one caller for closed loop and four for
+         * fixed rate — this says so where the phase's own assumptions live.
+         */
         if (config->callers == 0 || config->callers > 4 ||
-            config->max_outstanding == 0 ||
+            config->max_outstanding == 0 || base_budget == 0 ||
+            (!config->fixed_rate && config->callers != 1) ||
             (config->fixed_rate && base_budget < BENCH_BATCH_RECORDS)) {
                 fprintf(stderr, "v2 phase cannot run this admission shape\n");
                 return -1;
@@ -655,6 +719,14 @@ int bench_run_v2_phase(rd_kafka_t *producer,
         v2_lock(phase);
         phase->closed  = 1;
         phase->unknown = phase->outstanding;
+        /* The measured interval is the phase's own wall clock — schedule epoch
+           to end of drain — not the last terminal that happened to arrive. A
+           run whose offers all ended `unknown` has no last terminal at all, and
+           reporting its duration as zero divided a throughput by nothing and
+           called the answer zero. kafkars measures the same interval the same
+           way. */
+        now = elapsed_ns(phase);
+        phase->measured_duration_ns = now == V2_CLOCK_FAILED ? 0 : now;
         v2_unlock(phase);
         rd_kafka_topic_destroy(topic);
         return v2_failed(phase) ? -1 : 0;

@@ -4,14 +4,21 @@
 use bench_schema::Histogram;
 
 use super::admission::AdmissionClock;
-use super::measurement::{Measurement, OfferGroup, Terminal};
+use super::measurement::{Measurement, OfferAttempt, OfferGroup, Terminal};
 
-/// A group of `count` offers whose admission began at `call_start_ns`.
-fn group(first_sequence: u64, count: u64, call_start_ns: u64, accepted_ns: u64) -> OfferGroup {
-    OfferGroup {
+/// A group of `count` offers whose public call began at `call_start_ns`.
+fn attempt(first_sequence: u64, count: u64, call_start_ns: u64) -> OfferAttempt {
+    OfferAttempt {
         first_sequence,
         count,
         admission: AdmissionClock::start(call_start_ns),
+    }
+}
+
+/// The same group, taken by the client at `accepted_ns`.
+fn group(first_sequence: u64, count: u64, call_start_ns: u64, accepted_ns: u64) -> OfferGroup {
+    OfferGroup {
+        attempt: attempt(first_sequence, count, call_start_ns),
         accepted_ns,
     }
 }
@@ -29,9 +36,11 @@ fn retried_group(
         admission.rejected();
     }
     OfferGroup {
-        first_sequence,
-        count,
-        admission,
+        attempt: OfferAttempt {
+            first_sequence,
+            count,
+            admission,
+        },
         accepted_ns,
     }
 }
@@ -42,11 +51,14 @@ fn decoded(encoded: &bench_schema::EncodedHistogram) -> Histogram {
 
 #[test]
 fn the_admission_wait_a_retried_offer_reports_includes_the_backpressure() {
-    // Two offers, first attempt at 1_000, refused twice, taken at 9_000.
+    // Two offers, first attempt at 1_000, refused twice, taken at 9_000 — in
+    // the order the engine records them: the offer once, at its first public
+    // call, then one refusal per bounce, then the acceptance.
     let mut measurement = Measurement::closed_loop();
-    let retried = retried_group(0, 2, 1_000, 9_000, 2);
-    measurement.record_offered(&retried).unwrap();
-    measurement.record_accepted(&retried);
+    measurement.record_offered(&attempt(0, 2, 1_000)).unwrap();
+    measurement.record_refusal();
+    measurement.record_refusal();
+    measurement.record_accepted(&retried_group(0, 2, 1_000, 9_000, 2));
 
     let timing = measurement.timing();
     let wait = decoded(&timing.call_start_to_accepted);
@@ -59,6 +71,11 @@ fn the_admission_wait_a_retried_offer_reports_includes_the_backpressure() {
     );
     assert_eq!(wait.max(), Some(8_000));
     assert_eq!(
+        measurement.outcomes().offered,
+        2,
+        "three attempts at one offer of two records is two offered records"
+    );
+    assert_eq!(
         measurement.admission_attempts(),
         3,
         "the refusals stay visible as attempts"
@@ -66,10 +83,41 @@ fn the_admission_wait_a_retried_offer_reports_includes_the_backpressure() {
 }
 
 #[test]
+fn an_offer_the_client_never_took_is_offered_and_not_accepted() {
+    // `offered` counts public calls that began, so a refusal is representable
+    // at all. Recorded next to the acceptance it would be a second name for
+    // `accepted`, and a run that offered a thousand records and had every one
+    // turned away would report offering nothing.
+    let mut measurement = Measurement::scheduled(1_000);
+
+    measurement
+        .record_offered(&attempt(0, 4, 2_000_000))
+        .unwrap();
+
+    let outcomes = measurement.outcomes();
+    assert_eq!(outcomes.offered, 4, "the public call began");
+    assert_eq!(
+        outcomes.accepted, 0,
+        "the client said nothing about the bytes"
+    );
+    let timing = measurement.timing();
+    assert_eq!(
+        decoded(&timing.call_start_to_accepted).total(),
+        0,
+        "there is no admission wait to report for an admission that never happened"
+    );
+    assert_eq!(
+        decoded(timing.intended_to_call_start.as_ref().unwrap()).total(),
+        4,
+        "lateness is one sample per offered record, taken or not"
+    );
+}
+
+#[test]
 fn a_closed_loop_offer_has_no_schedule_and_no_lateness() {
     let mut measurement = Measurement::closed_loop();
     let offered = group(0, 4, 5_000, 5_200);
-    measurement.record_offered(&offered).unwrap();
+    measurement.record_offered(&offered.attempt).unwrap();
     measurement.record_accepted(&offered);
     measurement
         .record_terminals(&offered, 9_200, [Terminal::Acknowledged; 4].into_iter())
@@ -99,7 +147,7 @@ fn a_scheduled_offer_reports_lateness_per_record() {
     // 3_000_000.
     let mut measurement = Measurement::scheduled(1_000);
     let offered = group(0, 2, 3_000_000, 3_000_100);
-    measurement.record_offered(&offered).unwrap();
+    measurement.record_offered(&offered.attempt).unwrap();
     measurement.record_accepted(&offered);
 
     let timing = measurement.timing();
@@ -118,7 +166,7 @@ fn a_scheduled_offer_reports_lateness_per_record() {
 fn terminals_are_counted_by_kind_and_every_one_lands_in_both_histograms() {
     let mut measurement = Measurement::closed_loop();
     let offered = group(10, 3, 1_000, 2_000);
-    measurement.record_offered(&offered).unwrap();
+    measurement.record_offered(&offered.attempt).unwrap();
     measurement.record_accepted(&offered);
     measurement
         .record_terminals(
@@ -163,14 +211,14 @@ fn a_terminal_count_that_disagrees_with_the_group_is_refused() {
 fn merging_callers_sums_outcomes_and_unions_histograms() {
     let mut left = Measurement::scheduled(1_000);
     let first = group(0, 1, 1_000, 1_500);
-    left.record_offered(&first).unwrap();
+    left.record_offered(&first.attempt).unwrap();
     left.record_accepted(&first);
     left.record_terminals(&first, 4_000, [Terminal::Acknowledged].into_iter())
         .unwrap();
 
     let mut right = Measurement::scheduled(1_000);
     let second = group(1, 1, 2_000, 2_900);
-    right.record_offered(&second).unwrap();
+    right.record_offered(&second.attempt).unwrap();
     right.record_accepted(&second);
     right
         .record_terminals(&second, 9_000, [Terminal::Failed].into_iter())

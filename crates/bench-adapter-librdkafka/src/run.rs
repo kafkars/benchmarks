@@ -27,9 +27,15 @@
 //! not be built, or the binary could not be spawned. A missing status document
 //! therefore means something killed this process — which is exactly the
 //! distinction the control plane needs and cannot make for itself.
+//!
+//! The same distinction applies one level down. A child that dies on a signal
+//! has no exit code at all, and reporting it as a plain failure would file an
+//! out-of-memory kill, a segmentation fault, and a supervisor's own `SIGKILL`
+//! under the same sentence as a benchmark that ran and disagreed with itself.
+//! The signal is named instead.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::SystemTime;
 
 use bench_schema::{AdapterStatus, ResolvedExperiment, pretty_bytes};
@@ -121,7 +127,28 @@ fn attempt(binary: &Path, experiment: &Path, output: &Path) -> Result<i32, Failu
     let status = child
         .wait()
         .map_err(|error| Failure::new("wait", format!("wait for the C benchmark: {error}")))?;
+    if let Some(signal) = signal_of(status) {
+        return Err(Failure::new(
+            "run",
+            format!("the librdkafka benchmark died on signal {signal}"),
+        ));
+    }
+    // A status with neither a code nor a signal cannot be produced by a
+    // `wait` on this platform; if one ever is, it is a failure rather than a
+    // success, which is the only safe reading of "the child ended somehow".
     Ok(status.code().unwrap_or(EXIT_FAILURE))
+}
+
+/// Returns the signal a child died on, when the platform reports one.
+#[cfg(unix)]
+fn signal_of(status: ExitStatus) -> Option<i32> {
+    std::os::unix::process::ExitStatusExt::signal(&status)
+}
+
+/// Returns no signal: this platform does not have them.
+#[cfg(not(unix))]
+fn signal_of(_status: ExitStatus) -> Option<i32> {
+    None
 }
 
 /// Reads and parses the resolved experiment.

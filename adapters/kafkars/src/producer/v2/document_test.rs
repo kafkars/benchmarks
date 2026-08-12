@@ -8,7 +8,7 @@ use super::admission::AdmissionClock;
 use super::document::{
     COMPLETION_MODE, DocumentRequest, OWNERSHIP, PAYLOAD_CONSTRUCTION, SERIALIZATION, build,
 };
-use super::measurement::{Measurement, OfferGroup, Terminal};
+use super::measurement::{Measurement, OfferAttempt, OfferGroup, Terminal};
 use super::outstanding::OutstandingGauge;
 
 const RUN_ID: &str = "0123456789abcdef";
@@ -25,12 +25,14 @@ fn measured(
     for index in 0..groups {
         let call_start_ns = 1_000_000 * (index + 1);
         let group = OfferGroup {
-            first_sequence: index * count,
-            count,
-            admission: AdmissionClock::start(call_start_ns),
+            attempt: OfferAttempt {
+                first_sequence: index * count,
+                count,
+                admission: AdmissionClock::start(call_start_ns),
+            },
             accepted_ns: call_start_ns + 20_000,
         };
-        measurement.record_offered(&group).unwrap();
+        measurement.record_offered(&group.attempt).unwrap();
         measurement.record_accepted(&group);
         outstanding.admitted(count);
         measurement
@@ -168,12 +170,14 @@ fn the_declared_execution_says_what_the_measured_path_actually_did() {
 fn undrained_offers_are_unknown_and_stay_visible_as_outstanding() {
     let mut measurement = Measurement::closed_loop();
     let group = OfferGroup {
-        first_sequence: 0,
-        count: 10,
-        admission: AdmissionClock::start(1_000),
+        attempt: OfferAttempt {
+            first_sequence: 0,
+            count: 10,
+            admission: AdmissionClock::start(1_000),
+        },
         accepted_ns: 2_000,
     };
-    measurement.record_offered(&group).unwrap();
+    measurement.record_offered(&group.attempt).unwrap();
     measurement.record_accepted(&group);
     measurement.record_unknown(10);
     let outstanding = OutstandingGauge::default();
@@ -204,6 +208,56 @@ fn undrained_offers_are_unknown_and_stay_visible_as_outstanding() {
     );
     let reason = parsed.invalid_reason.unwrap();
     assert!(reason.contains("10 unknown"), "{reason}");
+}
+
+#[test]
+fn a_wholly_refused_batch_is_offered_never_accepted_and_still_reads_back() {
+    // The client turned the whole group away, so the public call happened and
+    // the acceptance did not. `offered` has to show the attempt — an `offered`
+    // that only counts what was accepted cannot report a refusal at all — and
+    // every total still has to line up, because the document a failed run
+    // leaves behind is the only place a reader finds out what it failed at.
+    let mut measurement = Measurement::scheduled(RATE);
+    let refused = OfferAttempt {
+        first_sequence: 0,
+        count: 256,
+        admission: AdmissionClock::start(5_000_000),
+    };
+    measurement.record_offered(&refused).unwrap();
+    measurement.record_refusal();
+    let outstanding = OutstandingGauge::default();
+
+    let document = build(&DocumentRequest {
+        run_id: RUN_ID,
+        load_mode: LoadMode::ScheduledOpenLoopFixedRate,
+        payload_bytes: 1_024,
+        expected_records: 256,
+        measured_duration_ns: 10_000_000,
+        measurement: &measurement,
+        outstanding: &outstanding,
+    })
+    .unwrap();
+    let parsed = round_trip(&document);
+
+    assert_eq!(parsed.outcomes.offered, 256, "the public call began");
+    assert_eq!(parsed.outcomes.accepted, 0);
+    assert_eq!(
+        parsed.timing.call_start_to_accepted.total, 0,
+        "no admission wait exists for an admission that never completed"
+    );
+    assert_eq!(
+        parsed.timing.intended_to_call_start.as_ref().unwrap().total,
+        256,
+        "the schema requires one lateness sample per offered record, and a \
+         refused offer is an offered record"
+    );
+    assert!(!parsed.valid);
+    let reason = parsed.invalid_reason.as_deref().unwrap();
+    assert!(reason.contains("accepted 0 of 256"), "{reason}");
+    assert!(
+        reason.contains("2 public admission attempts"),
+        "the refusal is visible as a second attempt: {reason}"
+    );
 }
 
 #[test]

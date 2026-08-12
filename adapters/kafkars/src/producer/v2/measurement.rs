@@ -38,15 +38,29 @@ impl Terminal {
     }
 }
 
-/// One offer group's immutable identity and its known timestamps.
+/// One offer group's immutable identity, as it stands when its public call
+/// begins.
+///
+/// This carries no `accepted_ns` because at this point there is none, and that
+/// absence is the point: everything the measurement records about an *offer* —
+/// the offered count, the scheduler lateness, the attempts — is derivable from
+/// this type alone, so none of it can be made conditional on the client having
+/// said yes.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct OfferGroup {
+pub(super) struct OfferAttempt {
     /// Sequence of the first offer in the group.
     pub(super) first_sequence: u64,
     /// Offers the group carries.
     pub(super) count: u64,
     /// The admission clock, started at the first attempt and never restarted.
     pub(super) admission: AdmissionClock,
+}
+
+/// One offer group the client took, and when it took it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct OfferGroup {
+    /// The identity and admission clock the attempt began with.
+    pub(super) attempt: OfferAttempt,
     /// When the call that transferred ownership returned.
     pub(super) accepted_ns: u64,
 }
@@ -104,26 +118,45 @@ impl Measurement {
 
     /// Records that a group's public-API attempt began, and how late it was.
     ///
-    /// Called once the admission call has returned, never between `call_start`
-    /// and the call itself: the lateness of a 256-record group costs 256
-    /// divisions and 256 bucket updates, and charging that to the admission
-    /// wait would be measuring the measurement. The value recorded is the same
-    /// either way, because it is derived from the group's immutable
-    /// `call_start`.
-    pub(super) fn record_offered(&mut self, group: &OfferGroup) -> Result<(), Box<dyn Error>> {
-        self.outcomes.offered = self.outcomes.offered.saturating_add(group.count);
+    /// Called once per group, at its *first* public call and before the client
+    /// has answered it, which is what keeps `offered` from being a second name
+    /// for `accepted`: a group the client refuses outright leaves `offered`
+    /// above `accepted` rather than agreeing with it by construction. Every
+    /// further attempt at the same offer is counted by [`Self::record_refusal`]
+    /// and adds no offered record, because the offer's identity has not
+    /// changed.
+    ///
+    /// The lateness of a 256-record group costs 256 divisions and 256 bucket
+    /// updates, and that cost now lands inside the group's own admission wait.
+    /// It has to: lateness is `call_start - intended`, so it cannot be computed
+    /// before `call_start` exists, and deferring it until the call returns
+    /// would make the sample's existence depend on the answer. The librdkafka
+    /// adapter pays the identical cost at the identical point
+    /// (`v2_phase.c: offer_batch`), so the two adapters' admission waits carry
+    /// the same overhead rather than differing by it.
+    pub(super) fn record_offered(&mut self, attempt: &OfferAttempt) -> Result<(), Box<dyn Error>> {
+        self.outcomes.offered = self.outcomes.offered.saturating_add(attempt.count);
         self.admission_attempts = self
             .admission_attempts
-            .saturating_add(u64::from(group.admission.attempts()));
+            .saturating_add(u64::from(attempt.admission.attempts()));
         let Some(lateness) = self.intended_to_call_start.as_mut() else {
             return Ok(());
         };
-        let call_start_ns = group.admission.call_start_ns();
-        for sequence in sequences(group) {
+        let call_start_ns = attempt.admission.call_start_ns();
+        for sequence in sequences(attempt) {
             let intended_ns = intended_ns(self.rate, sequence, call_start_ns)?;
             lateness.record(call_start_ns.saturating_sub(intended_ns));
         }
         Ok(())
+    }
+
+    /// Records one more public call at the same offer, after a refusal.
+    ///
+    /// The offer is not re-offered — it is the same offer, with the same
+    /// `intended` and the same `call_start` — so this moves the attempt count
+    /// and nothing else.
+    pub(super) const fn record_refusal(&mut self) {
+        self.admission_attempts = self.admission_attempts.saturating_add(1);
     }
 
     /// Records that the client took ownership of a group.
@@ -131,9 +164,9 @@ impl Measurement {
     /// The wait spans every attempt of the same offer, because
     /// [`AdmissionClock`] cannot be restarted.
     pub(super) fn record_accepted(&mut self, group: &OfferGroup) {
-        self.outcomes.accepted = self.outcomes.accepted.saturating_add(group.count);
-        let wait_ns = group.admission.wait_ns(group.accepted_ns);
-        for _ in 0..group.count {
+        self.outcomes.accepted = self.outcomes.accepted.saturating_add(group.attempt.count);
+        let wait_ns = group.attempt.admission.wait_ns(group.accepted_ns);
+        for _ in 0..group.attempt.count {
             self.call_start_to_accepted.record(wait_ns);
         }
     }
@@ -145,16 +178,16 @@ impl Measurement {
         terminal_ns: u64,
         terminals: impl ExactSizeIterator<Item = Terminal>,
     ) -> Result<(), Box<dyn Error>> {
-        if u64::try_from(terminals.len())? != group.count {
+        if u64::try_from(terminals.len())? != group.attempt.count {
             return Err(format!(
                 "an offer group of {} carried {} terminals",
-                group.count,
+                group.attempt.count,
                 terminals.len()
             )
             .into());
         }
-        let call_start_ns = group.admission.call_start_ns();
-        for (sequence, terminal) in sequences(group).zip(terminals) {
+        let call_start_ns = group.attempt.admission.call_start_ns();
+        for (sequence, terminal) in sequences(&group.attempt).zip(terminals) {
             let intended_ns = intended_ns(self.rate, sequence, call_start_ns)?;
             self.intended_to_terminal
                 .record(terminal_ns.saturating_sub(intended_ns));
@@ -257,8 +290,8 @@ impl Measurement {
 }
 
 /// The sequences one group carries.
-fn sequences(group: &OfferGroup) -> impl Iterator<Item = u64> {
-    (group.first_sequence..).take(usize::try_from(group.count).unwrap_or(usize::MAX))
+fn sequences(attempt: &OfferAttempt) -> impl Iterator<Item = u64> {
+    (attempt.first_sequence..).take(usize::try_from(attempt.count).unwrap_or(usize::MAX))
 }
 
 /// When the schedule wanted an offer made.

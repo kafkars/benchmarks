@@ -138,6 +138,29 @@ static int mentions_v2_output(int argc, char **argv) {
         return 0;
 }
 
+/*
+ * `--fixed-rate` names a whole argv shape rather than a value, so it may only
+ * appear at the one position that shape puts it in. Anywhere inside the
+ * twelve-argument closed-loop vector it means the caller wrote the fifteen
+ * argument shape and lost arguments on the way — and the positional parser
+ * would otherwise install the flag itself as the bootstrap string and run a
+ * closed-loop measurement against a broker address nobody named.
+ */
+static int mentions_fixed_rate(int argc, char **argv) {
+        int index;
+
+        for (index = 1; index < argc; ++index) {
+                if (strcmp(argv[index], "--fixed-rate") == 0) {
+                        fprintf(stderr,
+                                "--fixed-rate must directly follow the "
+                                "--v2-output directory and be followed by an "
+                                "offered rate and a caller count\n");
+                        return 1;
+                }
+        }
+        return 0;
+}
+
 /* Renders `<directory>/<leaf>` into a bounded buffer. */
 static int join_path(char *target,
                      size_t capacity,
@@ -201,6 +224,8 @@ int bench_parse_v2_config(int argc, char **argv, bench_config_t *config) {
                 fprintf(stderr, "invalid v2 output directory\n");
                 return -1;
         }
+        if (!fixed && mentions_fixed_rate(argc, argv))
+                return -1;
         /* Both side files are derived from the one directory the caller names,
            so the v2 shape has no path arguments of its own to disagree with. */
         if (join_path(config->v2_statistics_path,
@@ -214,6 +239,17 @@ int bench_parse_v2_config(int argc, char **argv, bench_config_t *config) {
                 return -1;
         if (fixed && parse_fixed_rate(argv[13], argv[14], config) != 0)
                 return -1;
+        /* The closed-loop v2 phase is written around exactly one caller: its
+           submitter numbers batches from zero, so a second caller would claim
+           submission index zero as well and collide on the order barrier.
+           `parse_workload` fixes the count at one; this is that assumption
+           stated where the argument vector is decided rather than only where
+           the phase runs. */
+        if (!fixed && config->callers != 1) {
+                fprintf(stderr,
+                        "closed-loop v2 admits from exactly one caller\n");
+                return -1;
+        }
         config->v2_output = argv[2];
         return 0;
 }

@@ -136,7 +136,7 @@ static int write_timing(FILE *output,
 static int write_throughput(FILE *output,
                             const bench_config_t *config,
                             const bench_v2_phase_t *phase) {
-        uint64_t duration_ns  = phase->last_terminal_ns;
+        uint64_t duration_ns   = phase->measured_duration_ns;
         uint64_t payload_total = phase->acknowledged *
                                  (uint64_t)config->payload_bytes;
         double records_per_second = 0.0;

@@ -237,7 +237,17 @@ fn phase_is_valid(phase: &PhaseResult, expected: usize) -> bool {
 }
 
 fn flush(producer: &Producer) -> Result<(), Box<dyn Error>> {
-    let deadline = Instant::now() + COMPLETION_TIMEOUT;
+    flush_until(producer, Instant::now() + COMPLETION_TIMEOUT)
+}
+
+/// Flushes within a budget the caller already owns.
+///
+/// A flush barrier can be refused for want of a flush slot, which is
+/// backpressure and worth waiting out — but only until `deadline`. The v2
+/// drain flushes inside its own delivery-timeout budget rather than starting a
+/// second one, so that a phase's bound is the one number the phase was given
+/// instead of the sum of two.
+fn flush_until(producer: &Producer, deadline: Instant) -> Result<(), Box<dyn Error>> {
     loop {
         match producer.flush().wait() {
             Ok(()) => return Ok(()),
