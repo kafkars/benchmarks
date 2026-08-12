@@ -1,0 +1,263 @@
+#!/usr/bin/env bash
+# Attest that the sibling checkouts this repository measures are exactly the
+# reviewed ones. A benchmark number is a claim about a specific stack; if the
+# stack under the harness is not the stack named in dependencies/sibling-
+# revisions.env, the number is anecdote, not evidence.
+#
+# Three checks per sibling, all inherited from kafka-client's original:
+#   1. HEAD equals the pin (the obvious one),
+#   2. the worktree is clean modulo a per-repo ignore allowance (a dirty tree
+#      means the measured bytes are not the reviewed bytes),
+#   3. no noncanonical index flags — assume-unchanged / skip-worktree /
+#      fsmonitor-valid entries make check 2 lie, so they are rejected outright.
+# Plus two cross-checks this repository adds: the pinned CLIENT revision's own
+# committed sibling env must agree with our driver/protocol pins, and (when
+# present) kafka-driver's guardrails.toml must declare our protocol pin.
+#
+# MODES. Strict when CI=true or KAFKA_BENCH_PROVENANCE=strict: any mismatch
+# exits 1. Otherwise advisory: mismatches print `provenance advisory: ...` and
+# exit 0. The advisory mode exists because a developer machine legitimately
+# sits on other branches all day, and a provenance gate that blocks `scripts/
+# check` locally just teaches people to skip the gate. CI=true always wins —
+# KAFKA_BENCH_PROVENANCE can escalate to strict but can never relax CI.
+#
+# What advisory mode does NOT forgive: a missing sibling checkout. That is not
+# stale local state, it is a repository layout error, and every downstream
+# script (adapter builds, path deps, environment capture) is broken until it is
+# fixed. Missing siblings fail in both modes.
+#
+# Advisory-mode runs are still recorded: bundles produced against unpinned
+# siblings carry dirty/mismatched provenance in their environment document and
+# are never claim-eligible.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+client_root="$repo_root/../kafka-client"
+driver_root="$repo_root/../kafka-driver"
+protocol_root="$repo_root/../kafka-protocol"
+revision_file="$repo_root/dependencies/sibling-revisions.env"
+
+mode=advisory
+if [[ "${CI:-}" == "true" || "${KAFKA_BENCH_PROVENANCE:-}" == "strict" ]]; then
+  mode=strict
+fi
+
+hard_failures=0
+soft_failures=0
+
+# hard  = broken layout; fails in both modes.
+# soft  = provenance mismatch; fails in strict, warns in advisory.
+report() {
+  local severity=$1
+  shift
+  if [[ "$severity" == hard ]]; then
+    hard_failures=$((hard_failures + 1))
+    echo "provenance failure: $*" >&2
+    return 0
+  fi
+  soft_failures=$((soft_failures + 1))
+  if [[ "$mode" == strict ]]; then
+    echo "provenance failure: $*" >&2
+  else
+    echo "provenance advisory: $*" >&2
+  fi
+}
+
+if [[ ! -f "$revision_file" ]]; then
+  echo "provenance failure: revision file is missing at $revision_file" >&2
+  exit 1
+fi
+
+revision_lines=()
+while IFS= read -r line || [[ -n "$line" ]]; do
+  if [[ -z "$line" || "$line" == "#"* ]]; then
+    continue
+  fi
+  revision_lines+=("$line")
+done < "$revision_file"
+if [[ "${#revision_lines[@]}" -ne 3 ]]; then
+  echo "provenance failure: revision file must contain exactly three assignments" >&2
+  exit 1
+fi
+if [[ ! "${revision_lines[0]}" =~ ^KAFKA_CLIENT_REVISION=([0-9a-f]{40})$ ]]; then
+  echo "provenance failure: invalid kafka-client revision assignment" >&2
+  exit 1
+fi
+KAFKA_CLIENT_REVISION="${BASH_REMATCH[1]}"
+if [[ ! "${revision_lines[1]}" =~ ^KAFKA_DRIVER_REVISION=([0-9a-f]{40})$ ]]; then
+  echo "provenance failure: invalid kafka-driver revision assignment" >&2
+  exit 1
+fi
+KAFKA_DRIVER_REVISION="${BASH_REMATCH[1]}"
+if [[ ! "${revision_lines[2]}" =~ ^KAFKA_PROTOCOL_REVISION=([0-9a-f]{40})$ ]]; then
+  echo "provenance failure: invalid kafka-protocol revision assignment" >&2
+  exit 1
+fi
+KAFKA_PROTOCOL_REVISION="${BASH_REMATCH[1]}"
+
+check_revision() {
+  local name=$1
+  local checkout=$2
+  local expected=$3
+  local actual
+  local index_state
+  local unexpected
+  local status
+  local tree
+
+  actual=$(git -C "$checkout" rev-parse --verify 'HEAD^{commit}' 2>/dev/null) || {
+    report hard "$name is not checked out at $checkout"
+    return 0
+  }
+  if [[ "$actual" != "$expected" ]]; then
+    report soft "$name revision $actual does not match reviewed revision $expected"
+  fi
+  index_state=$(LC_ALL=C git -C "$checkout" ls-files -v -f) || {
+    report soft "could not inspect $name index flags at $checkout"
+    return 0
+  }
+  while IFS= read -r entry; do
+    if [[ -n "$entry" && "$entry" != "H "* ]]; then
+      report soft "$name index contains a noncanonical tracked-path flag: $entry"
+      break
+    fi
+  done <<< "$index_state"
+  status=$(
+    LC_ALL=C git -C "$checkout" status \
+      --porcelain=v1 \
+      --untracked-files=all \
+      --ignored=matching
+  ) || {
+    report soft "could not inspect $name worktree at $checkout"
+    return 0
+  }
+  unexpected=
+  while IFS= read -r entry; do
+    if [[ -z "$entry" || "$entry" == "!! target/"* ]]; then
+      continue
+    fi
+    if [[ "$name" == "kafka-client" ]] &&
+      { [[ "$entry" == "!! node_modules/"* ]] ||
+        [[ "$entry" == "!! target/"* ]]; }; then
+      continue
+    fi
+    if [[ "$name" == "kafka-driver" ]] &&
+      { [[ "$entry" == "!! node_modules/"* ]] ||
+        [[ "$entry" == "!! kafka-driver-review-"*.zip ]]; }; then
+      continue
+    fi
+    if [[ "$name" == "kafka-protocol" ]] &&
+      { [[ "$entry" == "!! fuzz/corpus/"* ]] ||
+        [[ "$entry" == "!! kafka-wire-review-"*.zip ]] ||
+        [[ "$entry" == "!! fuzz/target/"* ]]; }; then
+      continue
+    fi
+    unexpected+="${unexpected:+$'\n'}$entry"
+  done <<< "$status"
+  if [[ -n "$unexpected" ]]; then
+    report soft "$name worktree at $checkout differs from reviewed commit $expected:"
+    echo "$unexpected" >&2
+  fi
+  tree=$(git -C "$checkout" rev-parse --verify 'HEAD^{tree}' 2>/dev/null) || {
+    report soft "could not resolve $name tree at $checkout"
+    return 0
+  }
+  echo "$name commit=$actual tree=$tree"
+}
+
+# The pin rule made executable: whatever the client revision itself declared is
+# the only legal driver/protocol pair for that client. Reading it out of the
+# pinned commit (not the client worktree) means a dirty or checked-out-elsewhere
+# client cannot launder a wrong pin into this repository.
+check_client_declared_siblings() {
+  local declared
+  local declared_driver
+  local declared_protocol
+
+  declared=$(
+    git -C "$client_root" show \
+      "$KAFKA_CLIENT_REVISION:dependencies/sibling-revisions.env" 2>/dev/null
+  ) || {
+    report soft \
+      "could not read dependencies/sibling-revisions.env from kafka-client revision $KAFKA_CLIENT_REVISION"
+    return 0
+  }
+  declared_driver=$(
+    LC_ALL=C grep -E '^KAFKA_DRIVER_REVISION=[0-9a-f]{40}$' <<< "$declared" || true
+  )
+  declared_protocol=$(
+    LC_ALL=C grep -E '^KAFKA_PROTOCOL_REVISION=[0-9a-f]{40}$' <<< "$declared" || true
+  )
+  if [[ "$(wc -l <<< "$declared_driver")" -ne 1 || -z "$declared_driver" ]]; then
+    report soft \
+      "kafka-client revision $KAFKA_CLIENT_REVISION must declare exactly one canonical KAFKA_DRIVER_REVISION"
+    return 0
+  fi
+  if [[ "$(wc -l <<< "$declared_protocol")" -ne 1 || -z "$declared_protocol" ]]; then
+    report soft \
+      "kafka-client revision $KAFKA_CLIENT_REVISION must declare exactly one canonical KAFKA_PROTOCOL_REVISION"
+    return 0
+  fi
+  declared_driver="${declared_driver#KAFKA_DRIVER_REVISION=}"
+  declared_protocol="${declared_protocol#KAFKA_PROTOCOL_REVISION=}"
+  if [[ "$declared_driver" != "$KAFKA_DRIVER_REVISION" ]]; then
+    report soft \
+      "kafka-client revision $KAFKA_CLIENT_REVISION declares kafka-driver $declared_driver but this repository pins $KAFKA_DRIVER_REVISION"
+  fi
+  if [[ "$declared_protocol" != "$KAFKA_PROTOCOL_REVISION" ]]; then
+    report soft \
+      "kafka-client revision $KAFKA_CLIENT_REVISION declares kafka-protocol $declared_protocol but this repository pins $KAFKA_PROTOCOL_REVISION"
+  fi
+  echo "kafka-client declared driver=$declared_driver protocol=$declared_protocol"
+}
+
+check_driver_protocol_revision() {
+  local declaration
+  local -a declarations=()
+  local declared
+  local driver_policy="$driver_root/guardrails.toml"
+
+  if [[ ! -f "$driver_policy" ]]; then
+    report soft "kafka-driver protocol revision policy is missing at $driver_policy"
+    return 0
+  fi
+  while IFS= read -r declaration; do
+    declarations+=("$declaration")
+  done < <(LC_ALL=C grep -E '^kafka_wire_revision[[:space:]]*=' "$driver_policy" || true)
+  if [[ "${#declarations[@]}" -ne 1 ]]; then
+    report soft "kafka-driver must declare exactly one kafka_wire_revision"
+    return 0
+  fi
+  declaration="${declarations[0]}"
+  if [[ ! "$declaration" =~ ^kafka_wire_revision[[:space:]]*=[[:space:]]*\"([0-9a-f]{40})\"$ ]]; then
+    report soft "kafka-driver kafka_wire_revision must be one canonical 40-hex TOML string"
+    return 0
+  fi
+  declared="${BASH_REMATCH[1]}"
+  if [[ "$declared" != "$KAFKA_PROTOCOL_REVISION" ]]; then
+    report soft \
+      "kafka-driver declares kafka-wire revision $declared but this repository pins $KAFKA_PROTOCOL_REVISION"
+    return 0
+  fi
+  echo "kafka-driver protocol-revision=$declared"
+}
+
+check_revision kafka-client "$client_root" "$KAFKA_CLIENT_REVISION"
+check_revision kafka-driver "$driver_root" "$KAFKA_DRIVER_REVISION"
+check_revision kafka-protocol "$protocol_root" "$KAFKA_PROTOCOL_REVISION"
+check_client_declared_siblings
+check_driver_protocol_revision
+
+if [[ "$hard_failures" -gt 0 ]]; then
+  echo "provenance: $hard_failures unrecoverable failure(s); sibling checkouts must exist beside this repository" >&2
+  exit 1
+fi
+if [[ "$soft_failures" -gt 0 ]]; then
+  if [[ "$mode" == strict ]]; then
+    echo "provenance: $soft_failures mismatch(es) in strict mode" >&2
+    exit 1
+  fi
+  echo "provenance advisory: $soft_failures mismatch(es); measurements taken now are diagnostic only, never claim-eligible" >&2
+  exit 0
+fi
+echo "provenance: siblings match dependencies/sibling-revisions.env"

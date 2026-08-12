@@ -1,0 +1,241 @@
+# Continuous integration for the benchmark lab.
+#
+# Read this before adding a lane, because the thing this workflow is careful
+# NOT to do is the whole design: **no job here measures performance.** Hosted
+# runners are shared, throttled, and neighboured by other people's builds. A
+# throughput or p99 number produced on one is not evidence about kafkars, and
+# publishing it as though it were would poison exactly the artifact this
+# repository exists to protect. CI proves the *harness* is correct, buildable,
+# and deterministic; real numbers come from controlled hardware, sealed into
+# evidence bundles, and are claim-eligible only when provenance is strict-clean.
+#
+# What each lane proves — and does not:
+#
+#   workspace             Proves the Rust control plane compiles at the MSRV,
+#                         is formatted, is clippy-clean under -D warnings, its
+#                         unit tests pass, and every schema file parses and is
+#                         registered. Proves NOTHING about the adapters, which
+#                         are separate workspaces, or about any run against a
+#                         real broker.
+#
+#   control-plane         Proves the migrated Node control plane's own tests
+#                         pass under the pinned Node. Proves NOTHING about its
+#                         ability to drive a cluster; those paths are exercised
+#                         by the diagnostic lane and by local runs.
+#
+#   adapters-conformance  The lane that earns its 35 minutes. Proves both
+#                         adapters build --locked against the REVIEWED sibling
+#                         revisions (not against whatever main happens to be),
+#                         and that the Rust and C implementations agree
+#                         byte-for-byte with the committed conformance vectors.
+#                         That is determinism and wire agreement, NOT speed and
+#                         NOT behaviour under load: two adapters can agree on
+#                         every vector and still differ wildly in throughput.
+#
+#   quality-gate          Proves every lane above actually reported success.
+#                         It exists so branch protection has exactly ONE
+#                         required check: the lane list is then an
+#                         implementation detail of this file, and adding a lane
+#                         never requires a settings change to be enforced.
+#                         `if: always()` is load-bearing — without it a
+#                         cancelled or skipped lane produces a vacuous green.
+#
+#   diagnostic            workflow_dispatch only. Stands up the three-broker
+#                         dev cluster and runs the legacy comparison end to end
+#                         to prove the plumbing survives a real broker. Its
+#                         numbers are shared-runner numbers: useful for "did it
+#                         run", inadmissible as a performance claim. Never a PR
+#                         gate; never required by branch protection.
+#
+# Branch protection: require `quality-gate` only.
+#
+# Every third-party action is pinned to a 40-hex commit, with the tag it
+# resolved to in a trailing comment (dependabot proposes bumps; a human reads
+# the diff). `persist-credentials: false` everywhere: nothing in this workflow
+# pushes, and a checkout that leaves a usable token in .git/config turns any
+# script we invoke into a potential write path.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  workspace:
+    name: workspace
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out benchmarks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        uses: ./.github/actions/setup-rust
+      # Fetch once, up front, so the check scripts can stay offline-friendly
+      # and a network blip reads as a fetch failure rather than a lint failure.
+      - name: Fetch reviewed dependencies
+        run: cargo fetch --locked
+      - name: Validate the workspace
+        run: scripts/check-workspace
+      - name: Validate the schema registry
+        run: scripts/check-schemas
+
+  control-plane:
+    name: control-plane
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out benchmarks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # package-manager-cache is off deliberately: this repository has no
+      # lockfile to key a cache on, and the control plane has no dependencies.
+      - name: Install pinned Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+      - name: Validate the legacy control plane
+        run: scripts/check-control-plane
+
+  adapters-conformance:
+    name: adapters-conformance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    # This checkout lives at kafka-benchmarks/ so the sibling repositories can
+    # be materialized next to it, reproducing the developer layout that the
+    # adapter path deps and environment capture already assume.
+    defaults:
+      run:
+        working-directory: kafka-benchmarks
+    steps:
+      - name: Check out benchmarks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: kafka-benchmarks
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        uses: ./kafka-benchmarks/.github/actions/setup-rust
+      - name: Install pinned Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+      - name: Check out reviewed sibling dependencies
+        uses: ./kafka-benchmarks/.github/actions/checkout-siblings
+        with:
+          read-token: ${{ secrets.KAFKA_SIBLING_REPOS_READ_TOKEN }}
+      # The cache key is the librdkafka version plus the first bytes of the
+      # reviewed source checksum, and nothing else: that pair fully determines
+      # the cached bytes, so there are deliberately no restore-keys — a partial
+      # match here would mean building against unreviewed sources. The runner
+      # image is part of the contract too; if this job ever leaves ubuntu-24.04,
+      # the key must change with it. A cache miss is never fatal: the bootstrap
+      # script re-downloads and re-verifies the checksum, which remains the
+      # actual trust boundary.
+      - name: Restore the reviewed librdkafka build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            kafka-benchmarks/target/benchmarks/downloads
+            kafka-benchmarks/target/benchmarks/librdkafka-*
+          key: librdkafka-2.15.0-259015220c
+      - name: Fetch reviewed adapter dependencies
+        run: cargo fetch --manifest-path adapters/kafkars/Cargo.toml --locked
+      - name: Build adapters and verify conformance vectors
+        run: scripts/check-benchmarks
+
+  quality-gate:
+    name: quality-gate
+    if: ${{ always() }}
+    needs: [workspace, control-plane, adapters-conformance]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Inspect every evidence lane
+        env:
+          WORKSPACE_RESULT: ${{ needs.workspace.result }}
+          CONTROL_PLANE_RESULT: ${{ needs['control-plane'].result }}
+          ADAPTERS_CONFORMANCE_RESULT: ${{ needs['adapters-conformance'].result }}
+        run: |
+          failures=0
+          check_result() {
+            if [[ "$2" != success ]]; then
+              echo "$1 evidence lane ended with: $2" >&2
+              failures=$((failures + 1))
+            fi
+          }
+          check_result workspace "$WORKSPACE_RESULT"
+          check_result control-plane "$CONTROL_PLANE_RESULT"
+          check_result adapters-conformance "$ADAPTERS_CONFORMANCE_RESULT"
+          test "$failures" -eq 0
+
+  diagnostic:
+    name: diagnostic
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: kafka-benchmarks
+    steps:
+      - name: Check out benchmarks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: kafka-benchmarks
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        uses: ./kafka-benchmarks/.github/actions/setup-rust
+      - name: Install pinned Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+      - name: Check out reviewed sibling dependencies
+        uses: ./kafka-benchmarks/.github/actions/checkout-siblings
+        with:
+          read-token: ${{ secrets.KAFKA_SIBLING_REPOS_READ_TOKEN }}
+      - name: Fetch reviewed adapter dependencies
+        run: cargo fetch --manifest-path adapters/kafkars/Cargo.toml --locked
+      # --wait blocks on the compose healthchecks, so a broker that never
+      # becomes reachable fails here with a cluster error instead of surfacing
+      # later as an unexplained producer timeout.
+      - name: Start the dev cluster
+        run: docker compose -f clusters/dev-compose/compose.yml up -d --wait
+      - name: Run the producer comparison
+        run: scripts/bench-producer-compare 127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094
+      # The bundle is the point of this lane. It is uploaded even on failure,
+      # because a partial bundle explains the failure; if-no-files-found stays
+      # at warn so a missing bundle never masks the upstream error that caused
+      # it. Retention is bounded: these are shared-runner diagnostics, not
+      # claim-eligible evidence, and should not accumulate as if they were.
+      - name: Upload the evidence bundle
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: diagnostic-bundle-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: kafka-benchmarks/target/benchmark-results/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Stop the dev cluster
+        if: ${{ always() }}
+        run: docker compose -f clusters/dev-compose/compose.yml down --volumes --remove-orphans

@@ -1,0 +1,99 @@
+# Materialize the reviewed client, driver, and protocol commits beside this
+# repository, exactly as dependencies/sibling-revisions.env names them.
+#
+# The runner layout this produces mirrors a developer machine:
+#
+#   $GITHUB_WORKSPACE/kafka-benchmarks   (the caller checks itself out here)
+#   $GITHUB_WORKSPACE/kafka-client
+#   $GITHUB_WORKSPACE/kafka-driver
+#   $GITHUB_WORKSPACE/kafka-protocol
+#
+# so the adapter path deps, the environment capture, and scripts/check-
+# dependency-provenance all resolve `../<sibling>` without a CI-only special
+# case. A workflow that forgets `path: kafka-benchmarks` on its own checkout
+# gets a hard provenance failure rather than a subtly wrong measurement.
+#
+# The pins are re-parsed here rather than passed in, because the env file is
+# the single source of truth; anything that could drift from it is a second
+# source of truth. Provenance runs last and runs STRICT: in CI a stale sibling
+# is a build error, not a warning.
+name: Check out sibling dependencies
+description: Materialize the reviewed kafka-client, kafka-driver, and kafka-protocol commits.
+
+inputs:
+  read-token:
+    description: Read-only token scoped to the three private sibling repositories.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Read reviewed revisions
+      id: revisions
+      shell: bash
+      run: |
+        set -euo pipefail
+        revision_file="$GITHUB_ACTION_PATH/../../../dependencies/sibling-revisions.env"
+        revision_lines=()
+        while IFS= read -r line || [[ -n "$line" ]]; do
+          if [[ -z "$line" || "$line" == "#"* ]]; then
+            continue
+          fi
+          revision_lines+=("$line")
+        done < "$revision_file"
+        if [[ "${#revision_lines[@]}" -ne 3 ]]; then
+          echo "revision file must contain exactly three assignments" >&2
+          exit 1
+        fi
+        if [[ ! "${revision_lines[0]}" =~ ^KAFKA_CLIENT_REVISION=([0-9a-f]{40})$ ]]; then
+          echo "invalid kafka-client revision assignment" >&2
+          exit 1
+        fi
+        client_revision="${BASH_REMATCH[1]}"
+        if [[ ! "${revision_lines[1]}" =~ ^KAFKA_DRIVER_REVISION=([0-9a-f]{40})$ ]]; then
+          echo "invalid kafka-driver revision assignment" >&2
+          exit 1
+        fi
+        driver_revision="${BASH_REMATCH[1]}"
+        if [[ ! "${revision_lines[2]}" =~ ^KAFKA_PROTOCOL_REVISION=([0-9a-f]{40})$ ]]; then
+          echo "invalid kafka-protocol revision assignment" >&2
+          exit 1
+        fi
+        protocol_revision="${BASH_REMATCH[1]}"
+        {
+          echo "client=$client_revision"
+          echo "driver=$driver_revision"
+          echo "protocol=$protocol_revision"
+        } >> "$GITHUB_OUTPUT"
+    - name: Check out kafka-client
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: zsumz/kafka-client-private
+        ref: ${{ steps.revisions.outputs.client }}
+        path: kafka-client
+        token: ${{ inputs.read-token }}
+        persist-credentials: false
+    - name: Check out kafka-driver
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: zsumz/kafka-driver-private
+        ref: ${{ steps.revisions.outputs.driver }}
+        path: kafka-driver
+        token: ${{ inputs.read-token }}
+        persist-credentials: false
+    - name: Check out kafka-protocol
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        repository: zsumz/kafka-protocol-private
+        ref: ${{ steps.revisions.outputs.protocol }}
+        path: kafka-protocol
+        token: ${{ inputs.read-token }}
+        persist-credentials: false
+    # The script derives its repository root from its own location, so this
+    # attests the kafka-benchmarks checkout that owns this action regardless of
+    # the step's working directory.
+    - name: Attest reviewed sibling dependencies
+      shell: bash
+      env:
+        CI: "true"
+      run: "$GITHUB_ACTION_PATH/../../../scripts/check-dependency-provenance"
