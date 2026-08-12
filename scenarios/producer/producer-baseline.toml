@@ -1,0 +1,29 @@
+name = "producer-baseline"
+duration_seconds = 120
+warmup_seconds = 30
+
+[cluster]
+partitions = [1, 12, 96]
+replication_factor = 3
+security = ["plaintext", "tls"]
+
+[producer]
+payload_bytes = [128, 1024, 16384, 262144, 1048576]
+application_threads = [1, 4, 16]
+keyed = [false, true]
+acks = "all"
+idempotence = true
+compression = ["none", "lz4", "zstd"]
+profiles = ["low-latency", "balanced", "throughput"]
+
+[measure]
+throughput_records = true
+throughput_bytes = true
+latency_percentiles = [50.0, 95.0, 99.0]
+application_cpu = true
+broker_cpu = true
+rss_bytes = true
+allocations = true
+batch_sizes = true
+request_count = true
+retries = true

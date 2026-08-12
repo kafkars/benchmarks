@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+bootstrap=${1:-}
+if [[ -z "$bootstrap" ]]; then
+  echo "usage: scripts/bench-producer-compare host:port[,host:port...] [result-root]" >&2
+  exit 64
+fi
+
+records=${KAFKARS_BENCH_RECORDS:-10000}
+warmup_records=${KAFKARS_BENCH_WARMUP_RECORDS:-1000}
+payload_bytes=${KAFKARS_BENCH_PAYLOAD_BYTES:-1024}
+partitions=${KAFKARS_BENCH_PARTITIONS:-12}
+max_outstanding=${KAFKARS_BENCH_MAX_OUTSTANDING:-8192}
+broker_version=${KAFKARS_BENCH_BROKER_VERSION:-unknown}
+identity=$(printf '%s-%s-%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" "$$" "$bootstrap")
+run_id=$(printf '%s' "$identity" | LC_ALL=C shasum -a 256 | awk '{print substr($1,1,16)}')
+bundle=${2:-"$repo_root/target/benchmark-results/$run_id"}
+if [[ -e "$bundle" ]]; then
+  echo "benchmark result target already exists: $bundle" >&2
+  exit 73
+fi
+
+binary_root=$("$repo_root/scripts/build-benchmark-adapters")
+kafkars="$binary_root/kafkars-benchmark-adapter"
+librdkafka="$binary_root/librdkafka-producer-benchmark"
+verifier="$binary_root/librdkafka-benchmark-verifier"
+topic_prefix="kafkars-bench-$run_id"
+kafkars_warmup="$topic_prefix-kafkars-warmup"
+kafkars_topic="$topic_prefix-kafkars"
+librdkafka_warmup="$topic_prefix-librdkafka-warmup"
+librdkafka_topic="$topic_prefix-librdkafka"
+topics=(
+  "$kafkars_warmup"
+  "$kafkars_topic"
+  "$librdkafka_warmup"
+  "$librdkafka_topic"
+)
+topics_created=false
+
+cleanup_topics() {
+  if [[ "$topics_created" == true ]]; then
+    set +e
+    "$kafkars" topics-delete "$bootstrap" "${topics[@]}" \
+      >"$bundle/topic-cleanup.stdout.log" \
+      2>"$bundle/topic-cleanup.stderr.log"
+    set -e
+  fi
+}
+trap cleanup_topics EXIT
+
+mkdir -p \
+  "$bundle/adapters/kafkars" \
+  "$bundle/adapters/librdkafka-c"
+cp \
+  "$repo_root/scenarios/producer/legacy-balanced-1k.toml" \
+  "$bundle/workload-template.toml"
+topics_created=true
+"$kafkars" topics-create "$bootstrap" "$partitions" 3 "${topics[@]}" \
+  >"$bundle/topic-create.stdout.log" \
+  2>"$bundle/topic-create.stderr.log"
+
+requested_order=${KAFKARS_BENCH_ORDER:-}
+case "$requested_order" in
+  "")
+    case "${run_id: -1}" in
+      0|2|4|6|8|a|c|e)
+        order=(kafkars librdkafka-c)
+        ;;
+      *)
+        order=(librdkafka-c kafkars)
+        ;;
+    esac
+    ;;
+  kafkars,librdkafka-c)
+    order=(kafkars librdkafka-c)
+    ;;
+  librdkafka-c,kafkars)
+    order=(librdkafka-c kafkars)
+    ;;
+  *)
+    echo "invalid KAFKARS_BENCH_ORDER: $requested_order" >&2
+    exit 64
+    ;;
+esac
+
+run_adapter() {
+  local adapter=$1
+  local directory="$bundle/adapters/$adapter"
+  local measured_topic
+  local warmup_topic
+
+  if [[ "$adapter" == kafkars ]]; then
+    measured_topic=$kafkars_topic
+    warmup_topic=$kafkars_warmup
+    "$kafkars" produce \
+      "$bootstrap" "$warmup_topic" "$measured_topic" "$run_id" \
+      "$warmup_records" "$records" "$payload_bytes" "$partitions" \
+      "$max_outstanding" "$directory/latency.csv" \
+      >"$directory/result.json" \
+      2>"$directory/stderr.log"
+  else
+    measured_topic=$librdkafka_topic
+    warmup_topic=$librdkafka_warmup
+    "$librdkafka" \
+      "$bootstrap" "$warmup_topic" "$measured_topic" "$run_id" \
+      "$warmup_records" "$records" "$payload_bytes" "$partitions" \
+      "$max_outstanding" "$directory/latency.csv" \
+      "$directory/client-metrics.jsonl" \
+      >"$directory/result.json" \
+      2>"$directory/stderr.log"
+  fi
+  cp "$directory/result.json" "$directory/stdout.log"
+  "$verifier" \
+    "$bootstrap" "$measured_topic" "$run_id" "$records" \
+    "$payload_bytes" "$partitions" \
+    >"$directory/verification.json" \
+    2>"$directory/verification.stderr.log"
+  "$verifier" \
+    "$bootstrap" "$warmup_topic" "$run_id" "$warmup_records" \
+    "$payload_bytes" "$partitions" \
+    >"$directory/warmup-verification.json" \
+    2>"$directory/warmup-verification.stderr.log"
+}
+
+for adapter in "${order[@]}"; do
+  run_adapter "$adapter"
+done
+
+cleanup_topics
+topics_created=false
+node "$repo_root/legacy/benchctl/seal.mjs" \
+  "$bundle" \
+  "$run_id" \
+  "$(IFS=,; echo "${order[*]}")" \
+  "$bootstrap" \
+  "$records" \
+  "$warmup_records" \
+  "$payload_bytes" \
+  "$partitions" \
+  "$max_outstanding" \
+  "$broker_version"

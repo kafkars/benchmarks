@@ -1,0 +1,63 @@
+name = "producer-balanced-1k-diagnostic"
+status = "diagnostic"
+claim_eligible = false
+load_mode = "closed-loop-capacity-point"
+records = 10000
+warmup_records = 1000
+
+[application]
+producer_instances = 1
+callers_per_producer = 1
+backpressure = "block-within-original-offer"
+queue_bytes = 67108864
+# Two bounded pipeline waves keep fifteen safe broker requests supplied without
+# turning the application window itself into the measured bottleneck.
+max_outstanding_records = 8192
+
+[application_api]
+admission_shape = "public-batch"
+completion_shape = "aggregate-batch-terminal"
+batch_records = 256
+
+[payload]
+bytes = 1024
+profile = "deterministic-ascii-envelope"
+seed = 44
+identity = "KFB1 plus 16-byte run ID plus 64-bit sequence"
+
+[producer]
+acks = "all"
+idempotence = true
+compression = "none"
+linger_ms = 5
+batch_records = 256
+batch_bytes = 65536
+request_bytes = 1048576
+delivery_timeout_ms = 60000
+partitioning = "explicit-round-robin"
+warmup_partitioning = "explicit-round-robin"
+warmup_serialized_partition_primer_records = 12
+retry_max_replacements = 600
+retry_backoff_ms = 100
+
+[native_request_concurrency]
+status = "matched-configured"
+kafkars = "max_in_flight_requests_per_broker=5; achieved peak is sealed from native metrics"
+librdkafka_c = "max.in.flight.requests.per.connection=5"
+
+[cluster]
+brokers = 3
+partitions = 12
+replication_factor = 3
+min_in_sync_replicas = 2
+security = "plaintext"
+unclean_leader_election = false
+
+[validity]
+require_complete_drain = true
+require_every_delivery_terminal = true
+require_broker_visible_identity = true
+require_no_missing_records = true
+require_no_duplicate_records = true
+require_partition_order = true
+require_exact_payload = true

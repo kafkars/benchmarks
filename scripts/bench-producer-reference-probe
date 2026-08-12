@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+bootstrap=${1:-}
+offered_rate=${2:-}
+if [[ -z "$bootstrap" || ! "$offered_rate" =~ ^[1-9][0-9]*$ ]]; then
+  echo "usage: scripts/bench-producer-reference-probe host:port[,host:port...] rate [result-root]" >&2
+  exit 64
+fi
+
+window_seconds=${KAFKARS_CAPACITY_WINDOW_SECONDS:-10}
+warmup_seconds=${KAFKARS_CAPACITY_WARMUP_SECONDS:-2}
+payload_bytes=${KAFKARS_BENCH_PAYLOAD_BYTES:-1024}
+partitions=${KAFKARS_BENCH_PARTITIONS:-12}
+max_outstanding=${KAFKARS_BENCH_MAX_OUTSTANDING:-8192}
+callers=${KAFKARS_BENCH_CALLERS:-4}
+corrected_p99_ms=${KAFKARS_CAPACITY_CORRECTED_P99_MS:-250}
+schedule_delay_p99_ms=${KAFKARS_CAPACITY_SCHEDULE_DELAY_P99_MS:-50}
+drain_tail_ms=${KAFKARS_CAPACITY_DRAIN_TAIL_MS:-1000}
+queue_slope_percent=${KAFKARS_CAPACITY_QUEUE_SLOPE_PERCENT:-1}
+minimum_queue_samples=${KAFKARS_CAPACITY_MIN_QUEUE_SAMPLES:-3}
+broker_version=${KAFKARS_BENCH_BROKER_VERSION:-unknown}
+for value in "$window_seconds" "$warmup_seconds" "$payload_bytes" \
+  "$partitions" "$max_outstanding" "$callers" "$corrected_p99_ms" \
+  "$schedule_delay_p99_ms" "$drain_tail_ms" "$queue_slope_percent" \
+  "$minimum_queue_samples"; do
+  if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "reference capacity configuration must use positive integers" >&2
+    exit 64
+  fi
+done
+if [[ "$callers" != 4 ]]; then
+  echo "reference capacity headline requires exactly four callers" >&2
+  exit 64
+fi
+
+records=$((offered_rate * window_seconds))
+warmup_records=$((offered_rate * warmup_seconds))
+if ((records <= 0 || warmup_records <= 0)); then
+  echo "reference capacity record count overflowed" >&2
+  exit 64
+fi
+identity=$(printf '%s-%s-%s-%s-%s\n' \
+  "$(date -u +%Y%m%dT%H%M%SZ)" "$$" "$bootstrap" "$offered_rate" "$records")
+run_id=$(printf '%s' "$identity" | LC_ALL=C shasum -a 256 | awk '{print substr($1,1,16)}')
+bundle=${3:-"$repo_root/target/benchmark-results/reference-probe-$run_id"}
+if [[ -e "$bundle" ]]; then
+  echo "reference probe target already exists: $bundle" >&2
+  exit 73
+fi
+
+binary_root=$("$repo_root/scripts/build-benchmark-adapters")
+kafkars="$binary_root/kafkars-benchmark-adapter"
+librdkafka="$binary_root/librdkafka-producer-benchmark"
+verifier="$binary_root/librdkafka-benchmark-verifier"
+measure="$repo_root/scripts/measure-benchmark-process"
+topic_prefix="kafkars-reference-$run_id"
+warmup_topic="$topic_prefix-warmup"
+measured_topic="$topic_prefix-measured"
+topics_created=false
+
+cleanup_topics() {
+  if [[ "$topics_created" == true ]]; then
+    set +e
+    "$kafkars" topics-delete "$bootstrap" "$warmup_topic" "$measured_topic" \
+      >"$bundle/topic-cleanup.stdout.log" \
+      2>"$bundle/topic-cleanup.stderr.log"
+    set -e
+  fi
+}
+trap cleanup_topics EXIT
+
+mkdir -p "$bundle"
+cp "$repo_root/scenarios/producer/legacy-balanced-1k-reference-capacity.toml" \
+  "$bundle/workload-template.toml"
+topics_created=true
+"$kafkars" topics-create "$bootstrap" "$partitions" 3 \
+  "$warmup_topic" "$measured_topic" \
+  >"$bundle/topic-create.stdout.log" 2>"$bundle/topic-create.stderr.log"
+"$measure" "$bundle/process-resources.txt" \
+  "$librdkafka" --fixed-rate \
+  "$bootstrap" "$warmup_topic" "$measured_topic" "$run_id" \
+  "$warmup_records" "$records" "$payload_bytes" "$partitions" \
+  "$max_outstanding" "$offered_rate" "$callers" \
+  "$bundle/latency.csv" "$bundle/client-metrics.jsonl" \
+  >"$bundle/result.json" 2>"$bundle/stderr.log"
+cp "$bundle/result.json" "$bundle/stdout.log"
+"$verifier" "$bootstrap" "$measured_topic" "$run_id" "$records" \
+  "$payload_bytes" "$partitions" \
+  >"$bundle/verification.json" 2>"$bundle/verification.stderr.log"
+"$verifier" "$bootstrap" "$warmup_topic" "$run_id" "$warmup_records" \
+  "$payload_bytes" "$partitions" \
+  >"$bundle/warmup-verification.json" \
+  2>"$bundle/warmup-verification.stderr.log"
+cleanup_topics
+topics_created=false
+node "$repo_root/legacy/benchctl/reference-probe-seal.mjs" \
+  "$bundle" "$run_id" "$records" "$warmup_records" "$payload_bytes" \
+  "$partitions" "$max_outstanding" "$offered_rate" "$callers" \
+  "$window_seconds" "$warmup_seconds" "$corrected_p99_ms" \
+  "$schedule_delay_p99_ms" "$drain_tail_ms" "$queue_slope_percent" \
+  "$minimum_queue_samples" "$bootstrap" "$broker_version"

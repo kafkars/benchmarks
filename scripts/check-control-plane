@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Legacy Node control-plane gate: the migrated benchctl unit tests.
+#
+# The Node harness under legacy/benchctl is the behavioral reference for the
+# Rust engine being built alongside it. Its tests encode what "sealed evidence"
+# has meant so far — environment identity, checksum layout, validation refusals,
+# statistics budgets — so they run on every change, not only when someone
+# remembers the legacy path still exists.
+#
+# The version floor is a guard, not a preference. These modules use the built-in
+# test runner and modern syntax that older runtimes accept only partially, and a
+# partial acceptance surfaces as a confusing parse error deep inside a test file
+# rather than as "your Node is too old". Failing loudly up front costs one line
+# of output and saves the reader that investigation. The floor matches the
+# engines range declared in package.json; changing one without the other makes
+# the declaration a lie.
+#
+# The glob stays top-level on purpose. Subdirectories under legacy/benchctl hold
+# implementation modules rather than tests, and recursing would silently change
+# which files are treated as the suite.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+required_major=22
+required_minor=18
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "check-control-plane: node was not found on PATH;" \
+    "the legacy control plane requires Node >= $required_major.$required_minor" >&2
+  exit 1
+fi
+
+node_version=$(node --version)
+numeric=${node_version#v}
+major=${numeric%%.*}
+remainder=${numeric#*.}
+minor=${remainder%%.*}
+
+if [[ ! "$major" =~ ^[0-9]+$ ]] || [[ ! "$minor" =~ ^[0-9]+$ ]]; then
+  echo "check-control-plane: could not parse the node version '$node_version'" >&2
+  exit 1
+fi
+
+if ((major < required_major)) ||
+  ((major == required_major && minor < required_minor)); then
+  echo "check-control-plane: node $node_version is too old;" \
+    "the legacy control plane requires Node >= $required_major.$required_minor" >&2
+  exit 1
+fi
+
+node --test "$repo_root/legacy/benchctl/"*.test.mjs
