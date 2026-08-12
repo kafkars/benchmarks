@@ -1,13 +1,17 @@
 //! Driving a stand-in for the C binary: what lands in the output directory,
 //! and what the status document says about each way a run can end.
 //!
-//! `/bin/echo` stands in for the benchmark: it accepts any arguments, exits
-//! zero, and prints them — so a successful run's `result.json` is the argument
-//! vector, which makes the translation observable end to end without a broker
-//! or a compiled C program. `/bin/cat` stands in for a child that fails, since
-//! it treats the vector as file names and exits non-zero, and a missing path
-//! stands in for a binary that was never built. All three exist on both
-//! platforms this repository supports, which `/bin/false` does not.
+//! `/usr/bin/true` stands in for the benchmark: it accepts any arguments,
+//! exits zero, and writes nothing — which is exactly the C program's stdout
+//! behaviour under `--v2-output`. `/bin/cat` stands in for a child that fails,
+//! since it treats the vector as file names and exits non-zero, and a missing
+//! path stands in for a binary that was never built. Both exist on every
+//! platform this repository supports, which `/bin/false` does not.
+//!
+//! No stand-in writes `result.json`, and that is the point: under
+//! `--v2-output` the result document belongs to the C program, so these tests
+//! assert the shim leaves it alone. What the child was told is pinned by the
+//! golden vectors in `translate_test.rs` instead.
 #![expect(clippy::unwrap_used, reason = "test fixtures are exact")]
 
 use std::path::{Path, PathBuf};
@@ -46,19 +50,13 @@ fn status_of(output: &Path) -> AdapterStatus {
 }
 
 #[test]
-fn a_successful_run_writes_the_result_and_a_succeeded_status() {
+fn a_successful_run_writes_a_succeeded_status() {
     let output = scratch("success");
     let experiment = experiment_file(&output, LoadMode::ClosedLoop);
 
-    let code = execute(Path::new("/bin/echo"), &experiment, &output);
+    let code = execute(Path::new("/usr/bin/true"), &experiment, &output);
 
     assert_eq!(code, EXIT_OK);
-    let result = std::fs::read_to_string(output.join(RESULT_FILE)).unwrap();
-    assert!(
-        result.contains("kfb-0123456789abcdef-librdkafka-c-warmup"),
-        "the child was not given the translated vector: {result}"
-    );
-    assert!(result.contains("latency.csv"), "{result}");
     let status = status_of(&output);
     assert_eq!(status.outcome, AdapterOutcome::Succeeded);
     assert_eq!(status.failure, None);
@@ -68,15 +66,26 @@ fn a_successful_run_writes_the_result_and_a_succeeded_status() {
 }
 
 #[test]
-fn the_fixed_rate_run_leads_with_the_flag() {
-    let output = scratch("fixed");
-    let experiment = experiment_file(&output, LoadMode::ScheduledOpenLoopFixedRate);
+fn the_shim_never_creates_the_result_document_itself() {
+    for (label, load_mode) in [
+        ("result-closed", LoadMode::ClosedLoop),
+        ("result-fixed", LoadMode::ScheduledOpenLoopFixedRate),
+    ] {
+        let output = scratch(label);
+        let experiment = experiment_file(&output, load_mode);
 
-    let code = execute(Path::new("/bin/echo"), &experiment, &output);
+        let code = execute(Path::new("/usr/bin/true"), &experiment, &output);
 
-    assert_eq!(code, EXIT_OK);
-    let result = std::fs::read_to_string(output.join(RESULT_FILE)).unwrap();
-    assert!(result.starts_with("--fixed-rate "), "{result}");
+        // The C program writes `result.json` under `--v2-output`. A shim that
+        // created it would truncate the child's own document, and an empty
+        // file left behind by a child that never wrote one would read as a
+        // measurement rather than an absence.
+        assert_eq!(code, EXIT_OK);
+        assert!(
+            !output.join(RESULT_FILE).exists(),
+            "the shim created a result document the C program owns"
+        );
+    }
 }
 
 #[test]
@@ -116,7 +125,7 @@ fn an_unreadable_experiment_still_leaves_a_status() {
     let output = scratch("unreadable");
 
     let code = execute(
-        Path::new("/bin/echo"),
+        Path::new("/usr/bin/true"),
         &output.join("does-not-exist.json"),
         &output,
     );
@@ -134,7 +143,7 @@ fn an_experiment_this_adapter_declines_is_never_spawned() {
     let path = output.join("experiment.resolved.json");
     std::fs::write(&path, pretty_bytes(&document).unwrap()).unwrap();
 
-    let code = execute(Path::new("/bin/echo"), &path, &output);
+    let code = execute(Path::new("/usr/bin/true"), &path, &output);
 
     assert_eq!(code, EXIT_FAILURE);
     let failure = status_of(&output).failure.unwrap();
@@ -152,7 +161,7 @@ fn the_output_directory_is_created_when_it_does_not_exist_yet() {
     let parent = output.parent().unwrap().to_path_buf();
     let experiment = experiment_file(&parent, LoadMode::ClosedLoop);
 
-    let code = execute(Path::new("/bin/echo"), &experiment, &output);
+    let code = execute(Path::new("/usr/bin/true"), &experiment, &output);
 
     // The directory's name is not a subject, so the adapter falls back to the
     // only librdkafka-c subject in the experiment and runs anyway.

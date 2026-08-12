@@ -95,6 +95,7 @@ fn subject(name: &str, adapter_name: &str, version: &str) -> SubjectSpec {
         adapter_name: adapter_name.to_owned(),
         adapter_version: version.to_owned(),
         command: vec![format!("target/release/{name}")],
+        role: None,
     }
 }
 

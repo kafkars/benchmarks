@@ -5,10 +5,23 @@
 #include <stdlib.h>
 #include <string.h>
 
+/*
+ * The v2 measured phase, once it owns the delivery reports.
+ *
+ * One producer handle serves the warmup and the measured phase, so one
+ * delivery callback has to serve both shapes of `msg_opaque`. This pointer is
+ * published by the main thread after the warmup has flushed to zero
+ * outstanding records and is never cleared, because librdkafka can still
+ * report deliveries while the handle is being destroyed and reading a v2 offer
+ * as a legacy delivery would be a type confusion, not a miscount.
+ */
+static _Atomic(bench_v2_phase_t *) v2_active = NULL;
+
 static void delivery_report(rd_kafka_t *producer,
                             const rd_kafka_message_t *message,
                             void *opaque) {
-        bench_delivery_t *delivery = (bench_delivery_t *)message->_private;
+        bench_v2_phase_t *v2 = atomic_load(&v2_active);
+        bench_delivery_t *delivery;
         bench_submission_t *submission;
         bench_phase_t *phase;
         uint64_t completed;
@@ -16,6 +29,11 @@ static void delivery_report(rd_kafka_t *producer,
 
         (void)producer;
         (void)opaque;
+        if (v2) {
+                bench_v2_delivery(v2, message);
+                return;
+        }
+        delivery = (bench_delivery_t *)message->_private;
         if (!delivery || !delivery->submission)
                 return;
         submission = delivery->submission;
@@ -117,17 +135,58 @@ static rd_kafka_t *create_producer(const bench_config_t *config,
         return producer;
 }
 
+/*
+ * Which of the three argv shapes this invocation is. The leading flag decides,
+ * so every legacy vector still reaches the parser it always reached and the v2
+ * shape cannot be confused for one that writes v1 evidence.
+ */
+static int parse_arguments(int argc, char **argv, bench_config_t *config) {
+        if (argc > 1 && strcmp(argv[1], "--v2-output") == 0)
+                return bench_parse_v2_config(argc, argv, config);
+        if (argc > 1 && strcmp(argv[1], "--fixed-rate") == 0)
+                return bench_parse_fixed_config(argc, argv, config);
+        return bench_parse_config(argc, argv, config);
+}
+
+/*
+ * The v2 measured phase and its document. A phase that failed still leaves a
+ * result document behind, saying so in `valid` and `invalid_reason`: evidence
+ * that a run went wrong is evidence, and a reader with nothing at all cannot
+ * tell that from an adapter that was killed.
+ */
+static int run_v2(rd_kafka_t *producer,
+                  const bench_config_t *config,
+                  bench_statistics_t *statistics,
+                  bench_v2_phase_t **kept) {
+        bench_v2_phase_t *phase = bench_v2_create(config);
+        int result;
+
+        if (!phase)
+                return -1;
+        /* The phase outlives this call: the producer handle may still report
+           deliveries against it until it is destroyed, so ownership goes back
+           to `main`, which frees it after the handle is gone. */
+        *kept = phase;
+        atomic_store(&v2_active, phase);
+        (void)bench_run_v2_phase(producer, config, phase);
+        result = bench_write_v2_report(config, phase, rd_kafka_version_str());
+        if (bench_statistics_capture(producer, statistics,
+                                     BENCH_STATISTICS_FINAL) != 0 ||
+            bench_statistics_write(statistics) != 0)
+                result = -1;
+        return result;
+}
+
 int main(int argc, char **argv) {
         bench_config_t config;
         bench_phase_t warmup = {0};
         bench_phase_t measured = {0};
+        bench_v2_phase_t *v2 = NULL;
         bench_statistics_t statistics;
         rd_kafka_t *producer;
         int result;
 
-        if ((argc > 1 && strcmp(argv[1], "--fixed-rate") == 0
-                 ? bench_parse_fixed_config(argc, argv, &config)
-                 : bench_parse_config(argc, argv, &config)) != 0)
+        if (parse_arguments(argc, argv, &config) != 0)
                 return EXIT_FAILURE;
         if (bench_statistics_open(&statistics, config.statistics_path) != 0)
                 return EXIT_FAILURE;
@@ -157,6 +216,13 @@ int main(int argc, char **argv) {
                 return EXIT_FAILURE;
         }
         bench_statistics_set_phase(&statistics, BENCH_STATISTICS_MEASURED);
+        if (config.v2_output) {
+                result = run_v2(producer, &config, &statistics, &v2);
+                rd_kafka_destroy(producer);
+                bench_v2_destroy(v2);
+                bench_statistics_destroy(&statistics);
+                return result == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+        }
         if ((config.fixed_rate
                  ? bench_run_fixed_phase(producer, &config, &measured)
                  : bench_run_closed_phase(producer, &config, config.topic,

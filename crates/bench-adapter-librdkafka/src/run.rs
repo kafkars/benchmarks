@@ -3,12 +3,14 @@
 //!
 //! # Where the output goes
 //!
-//! The C program prints its result document on stdout and writes its two side
-//! files to paths it is given. This shim redirects the child's stdout straight
-//! into `<output>/result.json` rather than reading and re-emitting it: the
-//! result carries floating-point measurements, and a document that is never
-//! re-serialized can never be re-rounded. Stderr is inherited, so the control
-//! plane's own capture is the single place a subject's diagnostics land.
+//! Under `--v2-output` the C program writes `result.json` and
+//! `client-metrics.jsonl` into the output directory itself, so this shim never
+//! touches the result document: it does not create it, redirect into it, or
+//! re-serialize it. A measurement that is never re-rendered can never be
+//! re-rounded, and a shim that does not open the file cannot truncate a
+//! document the child is still writing. Both of the child's streams are
+//! inherited, so the control plane's own capture is the single place a
+//! subject's diagnostics land.
 //!
 //! # No timeout here
 //!
@@ -33,7 +35,7 @@ use std::time::SystemTime;
 use bench_schema::{AdapterStatus, ResolvedExperiment, pretty_bytes};
 
 use crate::arguments::{EXIT_FAILURE, EXIT_OK};
-use crate::translate::{self, RESULT_FILE, STATUS_FILE};
+use crate::translate::{self, STATUS_FILE};
 use crate::{time, validate};
 
 /// Runs one experiment through the C binary and returns the process exit code.
@@ -109,16 +111,10 @@ fn attempt(binary: &Path, experiment: &Path, output: &Path) -> Result<i32, Failu
     }
     let arguments = translate::arguments(&document, &subject, output)
         .map_err(|reason| Failure::new("translate", reason))?;
-    let result = std::fs::File::create(output.join(RESULT_FILE)).map_err(|error| {
-        Failure::new(
-            "spawn",
-            format!("create {}: {error}", output.join(RESULT_FILE).display()),
-        )
-    })?;
     let mut child = Command::new(binary)
         .args(&arguments)
         .stdin(Stdio::null())
-        .stdout(Stdio::from(result))
+        .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| Failure::new("spawn", format!("spawn {}: {error}", binary.display())))?;

@@ -17,12 +17,14 @@ fn output() -> PathBuf {
 }
 
 #[test]
-fn the_closed_loop_vector_is_the_eleven_legacy_positionals() {
+fn the_closed_loop_vector_leads_with_the_v2_output_directory() {
     let argv = arguments(&experiment(LoadMode::ClosedLoop), "librdkafka-c", &output()).unwrap();
 
     assert_eq!(
         argv,
         vec![
+            "--v2-output",
+            "/tmp/bundle/adapters/librdkafka-c",
             "127.0.0.1:39092,127.0.0.1:39093",
             "kfb-0123456789abcdef-librdkafka-c-warmup",
             "kfb-0123456789abcdef-librdkafka-c",
@@ -32,14 +34,12 @@ fn the_closed_loop_vector_is_the_eleven_legacy_positionals() {
             "1024",
             "12",
             "8192",
-            "/tmp/bundle/adapters/librdkafka-c/latency.csv",
-            "/tmp/bundle/adapters/librdkafka-c/client-metrics.jsonl",
         ]
     );
 }
 
 #[test]
-fn the_fixed_rate_vector_leads_with_the_flag_and_adds_rate_and_callers() {
+fn the_fixed_rate_vector_puts_the_flag_after_the_directory_and_adds_rate_and_callers() {
     let argv = arguments(
         &experiment(LoadMode::ScheduledOpenLoopFixedRate),
         "librdkafka-c",
@@ -50,6 +50,8 @@ fn the_fixed_rate_vector_leads_with_the_flag_and_adds_rate_and_callers() {
     assert_eq!(
         argv,
         vec![
+            "--v2-output",
+            "/tmp/bundle/adapters/librdkafka-c",
             "--fixed-rate",
             "127.0.0.1:39092,127.0.0.1:39093",
             "kfb-0123456789abcdef-librdkafka-c-warmup",
@@ -62,8 +64,6 @@ fn the_fixed_rate_vector_leads_with_the_flag_and_adds_rate_and_callers() {
             "8192",
             "100000",
             "4",
-            "/tmp/bundle/adapters/librdkafka-c/latency.csv",
-            "/tmp/bundle/adapters/librdkafka-c/client-metrics.jsonl",
         ]
     );
 }
@@ -78,11 +78,44 @@ fn the_vector_lengths_match_what_the_c_parser_demands() {
     )
     .unwrap();
 
-    // `bench_parse_config` refuses anything but `argc == 12`, and
-    // `bench_parse_fixed_config` anything but `argc == 15`; argv[0] is the
-    // program, which this vector deliberately excludes.
+    // `bench_parse_v2_config` refuses anything but `argc == 12` for the
+    // closed-loop shape and `argc == 15` for the fixed-rate one, which must
+    // carry `--fixed-rate` at argv[3]; argv[0] is the program, which this
+    // vector deliberately excludes.
     assert_eq!(closed.len(), 11);
     assert_eq!(fixed.len(), 14);
+    assert_eq!(fixed[2], "--fixed-rate");
+}
+
+#[test]
+fn no_vector_names_a_v1_evidence_file() {
+    for load_mode in [LoadMode::ClosedLoop, LoadMode::ScheduledOpenLoopFixedRate] {
+        let argv = arguments(&experiment(load_mode), "librdkafka-c", &output()).unwrap();
+
+        // The C program refuses a vector that mixes the contracts, and it
+        // derives both of its own output paths from the directory, so naming
+        // one here would be both a refusal and a second opinion about where
+        // the evidence lives.
+        assert!(
+            !argv.iter().any(|argument| argument.contains("latency.csv")),
+            "{argv:?}"
+        );
+        assert!(
+            !argv
+                .iter()
+                .any(|argument| argument.contains("client-metrics.jsonl")),
+            "{argv:?}"
+        );
+    }
+}
+
+#[test]
+fn an_output_directory_whose_derived_paths_would_not_fit_is_refused() {
+    let deep = PathBuf::from(format!("/tmp/{}", "d".repeat(4_090)));
+
+    let error = arguments(&experiment(LoadMode::ClosedLoop), "librdkafka-c", &deep).unwrap_err();
+
+    assert!(error.contains("derived output path"), "{error}");
 }
 
 #[test]

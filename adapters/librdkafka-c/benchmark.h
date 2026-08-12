@@ -9,6 +9,8 @@
 
 #include <rdkafka.h>
 
+#include "histogram.h"
+
 #define BENCH_RUN_ID_BYTES 16U
 #define BENCH_MIN_PAYLOAD_BYTES 64U
 #define BENCH_QUEUE_BYTES 67108864U
@@ -22,6 +24,10 @@
 #define BENCH_RETRY_BACKOFF_MS 100U
 #define BENCH_STATISTICS_INTERVAL_MS 100U
 #define BENCH_STATISTICS_BUFFER_BYTES 33554432U
+#define BENCH_PATH_BYTES 4096U
+#define BENCH_V2_RESULT_FILE "result.json"
+#define BENCH_V2_STATISTICS_FILE "client-metrics.jsonl"
+#define BENCH_V2_QUEUE_FULL_BACKOFF_NS 200000U
 
 typedef struct bench_config_s {
         const char *bootstrap;
@@ -38,6 +44,11 @@ typedef struct bench_config_s {
         uint64_t offered_records_per_second;
         size_t callers;
         int fixed_rate;
+        /* Output directory of the v2 evidence contract; NULL on every legacy
+           invocation, which is what keeps those byte-identical. */
+        const char *v2_output;
+        char v2_result_path[BENCH_PATH_BYTES];
+        char v2_statistics_path[BENCH_PATH_BYTES];
 } bench_config_t;
 
 typedef enum bench_statistics_phase_e {
@@ -99,8 +110,70 @@ struct bench_phase_s {
         bench_fixed_state_t *fixed;
 };
 
+/*
+ * One offer of the v2 evidence contract: an immutable identity carrying four
+ * timestamps, all nanoseconds since the measured phase began. `call_start_ns`
+ * is written once, before the application blocks for admission, and is never
+ * rewritten by a queue-full retry of the same offer — that reset is the defect
+ * the v2 path exists to remove.
+ */
+typedef struct bench_offer_s {
+        uint64_t intended_ns;
+        uint64_t call_start_ns;
+        uint64_t accepted_ns;
+        size_t caller;
+        int published;
+        int active;
+} bench_offer_t;
+
+/*
+ * Everything the v2 measured path accumulates. Its memory is bounded by the
+ * outstanding-record ceiling and the histogram layout, never by run length:
+ * the slab holds one entry per offer that can be in flight at once, and each
+ * histogram is a fixed array of buckets.
+ */
+typedef struct bench_v2_phase_s {
+        pthread_mutex_t lock;
+        pthread_cond_t changed;
+        int lock_ready;
+        int condition_ready;
+        int fatal;
+        int closed;
+        size_t active_submitters;
+        size_t submission_count;
+
+        bench_offer_t *slab;
+        size_t slab_capacity;
+        size_t *free_slots;
+        size_t free_count;
+        size_t *caller_outstanding;
+        char *payload_pool;
+        unsigned char *key_pool;
+        rd_kafka_message_t *message_pool;
+        uint64_t *intended_pool;
+
+        uint64_t started_ns;
+        uint64_t offered;
+        uint64_t accepted;
+        uint64_t acknowledged;
+        uint64_t failed;
+        uint64_t timed_out;
+        uint64_t unknown;
+        uint64_t outstanding;
+        uint64_t max_outstanding_observed;
+        uint64_t last_terminal_ns;
+
+        bench_histogram_t intended_to_terminal;
+        bench_histogram_t accepted_to_terminal;
+        bench_histogram_t call_start_to_accepted;
+        bench_histogram_t intended_to_call_start;
+
+        const bench_config_t *config;
+} bench_v2_phase_t;
+
 int bench_parse_config(int argc, char **argv, bench_config_t *config);
 int bench_parse_fixed_config(int argc, char **argv, bench_config_t *config);
+int bench_parse_v2_config(int argc, char **argv, bench_config_t *config);
 int bench_allocate_closed_phase(bench_phase_t *phase, size_t records);
 int bench_run_closed_phase(rd_kafka_t *producer,
                            const bench_config_t *config,
@@ -164,5 +237,15 @@ int bench_statistics_callback(rd_kafka_t *producer,
                               char *json,
                               size_t json_len,
                               void *opaque);
+bench_v2_phase_t *bench_v2_create(const bench_config_t *config);
+void bench_v2_destroy(bench_v2_phase_t *phase);
+int bench_run_v2_phase(rd_kafka_t *producer,
+                       const bench_config_t *config,
+                       bench_v2_phase_t *phase);
+void bench_v2_delivery(bench_v2_phase_t *phase,
+                       const rd_kafka_message_t *message);
+int bench_write_v2_report(const bench_config_t *config,
+                          const bench_v2_phase_t *phase,
+                          const char *adapter_version);
 
 #endif

@@ -37,6 +37,7 @@ common_c_flags=(
   "$c_root/fixed_phase.c" \
   "$c_root/fixed_report.c" \
   "$c_root/fixed_state.c" \
+  "$c_root/histogram.c" \
   "$c_root/lifecycle.c" \
   "$c_root/metadata.c" \
   "$c_root/payload.c" \
@@ -45,6 +46,8 @@ common_c_flags=(
   "$c_root/statistics.c" \
   "$c_root/producer.c" \
   "$c_root/record.c" \
+  "$c_root/v2_phase.c" \
+  "$c_root/v2_report.c" \
   "$librdkafka_root/src/librdkafka.a" \
   -lm -lz -ldl -lpthread \
   -o "$binary_root/librdkafka-producer-benchmark"
@@ -56,6 +59,12 @@ common_c_flags=(
   "$c_root/schedule.c" \
   "$c_root/schedule_vector.c" \
   -o "$binary_root/librdkafka-schedule-vector"
+# The histogram vector links nothing: its encoding is the cross-language
+# contract, so it has to build and answer even before librdkafka exists.
+"$compiler" "${common_c_flags[@]}" \
+  "$c_root/histogram.c" \
+  "$c_root/histogram_vector.c" \
+  -o "$binary_root/librdkafka-histogram-vector"
 "$compiler" "${common_c_flags[@]}" \
   "$c_root/payload.c" \
   "$c_root/verifier_client.c" \

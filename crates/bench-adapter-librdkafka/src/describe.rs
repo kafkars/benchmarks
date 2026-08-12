@@ -27,19 +27,22 @@ pub(crate) const ADAPTER_NAME: &str = "librdkafka-c";
 /// The pinned librdkafka release this repository builds and measures.
 pub(crate) const LIBRDKAFKA_VERSION: &str = "2.15.0";
 
-/// Result document the C program prints for a closed-loop run.
-pub(crate) const CLOSED_LOOP_RESULT_SCHEMA: &str = "kafkars.producer-benchmark.v1";
-
-/// Result document the C program prints for a fixed-rate run.
-pub(crate) const FIXED_RATE_RESULT_SCHEMA: &str = "kafkars.producer-fixed-load.v1";
+/// Result document the C program writes for either load mode.
+///
+/// One schema now covers both, because the v2 document names its own load mode
+/// instead of encoding it in the schema id. The legacy stdout verbs still print
+/// `kafkars.producer-benchmark.v1` and `kafkars.producer-fixed-load.v1`, but
+/// nothing on the protocol path asks for those any more: `run` drives the
+/// `--v2-output` shape, which writes `result.json` itself.
+pub(crate) const RESULT_SCHEMA: &str = "kafkars.producer-benchmark.v2";
 
 /// Returns the capability document for the pinned C adapter.
 pub(crate) fn description() -> AdapterDescription {
     let mut result_schemas = BTreeMap::new();
-    result_schemas.insert(LoadMode::ClosedLoop, CLOSED_LOOP_RESULT_SCHEMA.to_owned());
+    result_schemas.insert(LoadMode::ClosedLoop, RESULT_SCHEMA.to_owned());
     result_schemas.insert(
         LoadMode::ScheduledOpenLoopFixedRate,
-        FIXED_RATE_RESULT_SCHEMA.to_owned(),
+        RESULT_SCHEMA.to_owned(),
     );
     AdapterDescription {
         schema: AdapterDescription::SCHEMA.to_owned(),
