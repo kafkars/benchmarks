@@ -11,4 +11,14 @@ publish = false
 [lints]
 workspace = true
 
+# `serde_json` is deliberately taken without the `preserve_order` feature: this
+# crate's canonical bytes are byte-sorted because the map type behind
+# `serde_json::Value` is a `BTreeMap`, and a feature that swaps it for an
+# insertion-ordered map would silently change every identity this crate
+# computes. A guard test fails if that ever happens through feature
+# unification.
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+toml = { workspace = true }
