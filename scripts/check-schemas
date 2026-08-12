@@ -11,9 +11,6 @@
 # Both directions are checked. A listed identifier without a file is a missing
 # schema; a *.schema.json file that nothing lists is a stray, which usually
 # means a rename left the old document behind for readers to trip over.
-#
-# TODO(integration wave): once schemas/ exists, delete the missing-directory
-# escape below so that an absent schemas/ is a hard failure.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -49,8 +46,8 @@ schema_ids=(
 )
 
 if [ ! -d "$schemas_dir" ]; then
-  echo "schemas/ not present yet (wave 2)"
-  exit 0
+  echo "check-schemas: schemas/ directory is missing" >&2
+  exit 1
 fi
 
 # Node is the pinned runtime for this repository, so it is also the JSON parser
