@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Executable architecture policy: the repository measured against its own
+# `guardrails.toml`.
+#
+# The rules — per-category file budgets, declarative facades, a `//!` contract
+# on every file, unit tests that name a subject, and no async runtime anywhere
+# in the harness's resolved dependency graph — were review conventions before
+# they were code. This lane is what makes them fail on the change that breaks
+# them rather than on the change months later that finally notices.
+#
+# `--nocapture` is the point of having a separate lane rather than relying on
+# the workspace test sweep: advisories print on every run, pass or fail, and
+# they are the early warning about files heading for a cap. Suppressed, they
+# would only ever appear once something was already broken.
+#
+# What this lane deliberately does NOT read: `adapters/kafkars/Cargo.lock`. That
+# adapter is a separate workspace built against the client under test, and the
+# client brings whatever dependency graph it brings. The runtime ban has always
+# been about what the *harness* links.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+cargo test --locked -p bench-guardrails -- --nocapture

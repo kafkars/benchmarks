@@ -74,6 +74,21 @@ they hash to, and the statistics computed over them. It never reaches a broker,
 spawns a process, or reads a clock, so a reporting bug can never move a
 measurement.
 
+Beside the four roles, and belonging to none of them, is
+`crates/bench-guardrails`: a test-only crate that reads the hand-authored
+`guardrails.toml` and asserts the repository still has the shape this document
+describes. It walks `crates/` and `adapters/kafkars/src`, classifies every Rust
+file as facade, implementation, test, or auxiliary, and measures each against
+its category's advisory target and its failing gate; it also checks that every
+file opens with a `//!` contract, that `lib.rs` and `mod.rs` stay declarative,
+that each `*_test.rs` names a subject and lives behind `#[cfg(test)]`, and that
+no banned async runtime appears in the root `Cargo.lock`. A file may exceed its
+gate only through a `[budgets].baseline` entry carrying its exact length and a
+justification, which becomes an error the moment the file fits again — so the
+list of exceptions is a work queue that empties rather than a ceiling that
+fills. The crate is deliberately outside the evidence path: it constrains how
+this repository is written, and can never influence what a measurement says.
+
 ## The evidence path
 
 A number moves through four documents on its way from a record to a sentence,

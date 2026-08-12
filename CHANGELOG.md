@@ -27,8 +27,24 @@ not permitted and appears instead as a new schema id.
   repetition count and coefficient of variation alongside the mean, plus the
   minimum-repetition and noise-budget thresholds inherited from the legacy
   control plane;
-- `scripts/check` as the single gate, composing the workspace, schema,
-  control-plane, and dependency-provenance lanes;
+- `scripts/check` as the single gate, composing the workspace, guardrails,
+  schema, control-plane, and dependency-provenance lanes;
+- `bench-guardrails` and `guardrails.toml`, which turn the source-shape rules in
+  `AGENTS.md` from review conventions into a test. The crate classifies every
+  Rust file under `crates/` and `adapters/kafkars/src` as facade,
+  implementation, test, or auxiliary and measures it against that category's
+  advisory target and failing gate (80/120, 240/300, 300/500, 300/500), and it
+  checks that every file opens with a `//!` contract, that `lib.rs` and `mod.rs`
+  carry declarations and re-exports only, that each `*_test.rs` has a subject
+  beside it and a `#[cfg(test)]` declaration somewhere in its crate, and that no
+  banned async runtime appears in the root `Cargo.lock` — the kafkars adapter's
+  lock stays exempt, because the client under test brings its own graph. A file
+  over its gate is admissible only through a `[budgets].baseline` entry carrying
+  its exact length and a justification; because the length is exact, such a file
+  may neither grow nor silently shrink, and an entry whose file now fits, or has
+  gone, is itself an error, so the exception list is a queue that empties rather
+  than a ceiling that fills. This closes the guardrails deferral recorded in
+  `AGENTS.md` at bootstrap;
 - `kafkars.producer-benchmark.v2`, the measurement document of the
   four-timestamp offer model: every offer carries one immutable identity and its
   intended, call-start, accepted, and terminal instants, none of which is reset

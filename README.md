@@ -280,10 +280,13 @@ scripts/check
 ```
 
 That is the single gate, and it runs on a clean clone with nothing beside it. It
-formats, lints, tests, and documents the Rust workspace, checks the schema
-registry against `schemas/`, asserts the librdkafka pin reads the same in every
-place it is written down, runs the legacy control-plane tests and the offline
-model-summary contract, and reports on sibling-checkout provenance.
+formats, lints, tests, and documents the Rust workspace, measures the source
+tree against the architecture policy in `guardrails.toml` — per-category file
+budgets, declarative facades, module contracts, and no async runtime anywhere in
+the harness's own lock file — checks the schema registry against `schemas/`,
+asserts the librdkafka pin reads the same in every place it is written down,
+runs the legacy control-plane tests and the offline model-summary contract, and
+reports on sibling-checkout provenance.
 
 Provenance is the one lane that behaves differently on a bare clone: the sibling
 checkouts it attests are `kafka-client`, `kafka-driver`, and `kafka-protocol`
