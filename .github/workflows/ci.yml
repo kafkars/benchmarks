@@ -51,12 +51,22 @@
 #                         `if: always()` is load-bearing — without it a
 #                         cancelled or skipped lane produces a vacuous green.
 #
-#   diagnostic            workflow_dispatch only. Stands up the three-broker
-#                         dev cluster and runs the legacy comparison end to end
-#                         to prove the plumbing survives a real broker. Its
-#                         numbers are shared-runner numbers: useful for "did it
-#                         run", inadmissible as a performance claim. Never a PR
-#                         gate; never required by branch protection.
+#   diagnostic            The PR-pack cadence: stands up the three-broker dev
+#                         cluster and runs `benchctl pack` over
+#                         scenarios/packs/pr.toml — one balanced attempt through
+#                         the real verb surface — to prove the plumbing survives
+#                         a real broker. It runs on pull requests and on
+#                         workflow_dispatch, and it is `continue-on-error: true`
+#                         and absent from quality-gate.needs, which together are
+#                         the whole argument: its numbers are shared-runner
+#                         numbers, useful for "did it run" and inadmissible as a
+#                         performance claim, so it must be able to fail without
+#                         blocking a merge. A fork has no
+#                         KAFKA_SIBLING_REPOS_READ_TOKEN, so the sibling
+#                         checkout step fails there and the whole job fails
+#                         harmlessly — that is the expected outcome on a fork,
+#                         not a misconfiguration. Never a PR gate; never
+#                         required by branch protection.
 #
 # Branch protection: require `quality-gate` only.
 #
@@ -226,12 +236,21 @@ jobs:
 
   diagnostic:
     name: diagnostic
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+    # Non-gating by construction. This lane exists to notice that the harness
+    # stopped being able to run at all; it is not evidence, and it must never be
+    # the reason a correct change cannot merge. `quality-gate` does not list it
+    # in `needs`, and this flag keeps a red diagnostic from turning the whole
+    # workflow run red.
+    continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     defaults:
       run:
         working-directory: kafka-benchmarks
+    env:
+      BOOTSTRAP: 127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094
+      PACK_INPUTS: target/pr-pack-inputs
     steps:
       - name: Check out benchmarks
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -245,19 +264,53 @@ jobs:
         with:
           node-version: "24.19.0"
           package-manager-cache: false
+      # A fork cannot read this secret, so this step fails there and the job
+      # ends red under continue-on-error. That is deliberate: the alternative is
+      # a lane that silently measures nothing and reports success.
       - name: Check out reviewed sibling dependencies
         uses: ./kafka-benchmarks/.github/actions/checkout-siblings
         with:
           read-token: ${{ secrets.KAFKA_SIBLING_REPOS_READ_TOKEN }}
-      - name: Fetch reviewed adapter dependencies
-        run: cargo fetch --manifest-path adapters/kafkars/Cargo.toml --locked
+      # The same key the conformance lane uses, guarded by the same
+      # scripts/check-librdkafka-pin: the librdkafka version plus the first
+      # bytes of the reviewed source checksum fully determine the cached bytes,
+      # so there are deliberately no restore-keys.
+      - name: Restore the reviewed librdkafka build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            kafka-benchmarks/target/benchmarks/downloads
+            kafka-benchmarks/target/benchmarks/librdkafka-*
+          key: librdkafka-2.15.0-259015220c
+      - name: Fetch reviewed dependencies
+        run: |
+          cargo fetch --locked
+          cargo fetch --manifest-path adapters/kafkars/Cargo.toml --locked
+      # The shared generator builds the adapters and the release control plane
+      # and writes the two per-machine inputs, exactly as
+      # scripts/bench-suite-acceptance and the nightly do. Building here rather
+      # than inside the pack step keeps a compile failure legible as one, and
+      # means the cluster is not started for a run that was never going to
+      # happen.
+      - name: Build the adapters and the control plane
+        run: scripts/generate-subject-config "$PACK_INPUTS" "$BOOTSTRAP"
       # --wait blocks on the compose healthchecks, so a broker that never
       # becomes reachable fails here with a cluster error instead of surfacing
       # later as an unexplained producer timeout.
       - name: Start the dev cluster
         run: docker compose -f clusters/dev-compose/compose.yml up -d --wait
-      - name: Run the producer comparison
-        run: scripts/bench-producer-compare 127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094
+      # The reviewed PR pack, through the real verb surface, rather than the
+      # legacy comparison script: what this lane is for is proving that the
+      # thing a person runs still runs.
+      - name: Run the pull-request pack
+        run: |
+          target/release/benchctl pack \
+            --manifest scenarios/packs/pr.toml \
+            --subjects "$PACK_INPUTS/subjects.toml" \
+            --cluster "$PACK_INPUTS/cluster.toml" \
+            --bootstrap "$BOOTSTRAP" \
+            --results results \
+            --reports reports
       # The bundle is the point of this lane. It is uploaded even on failure,
       # because a partial bundle explains the failure; if-no-files-found stays
       # at warn so a missing bundle never masks the upstream error that caused
@@ -268,7 +321,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: diagnostic-bundle-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
-          path: kafka-benchmarks/target/benchmark-results/
+          path: |
+            kafka-benchmarks/results/
+            kafka-benchmarks/reports/
           if-no-files-found: warn
           retention-days: 30
       - name: Stop the dev cluster

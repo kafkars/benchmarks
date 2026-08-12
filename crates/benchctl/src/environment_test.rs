@@ -102,6 +102,36 @@ fn the_toolchain_records_one_line_for_each_tool_it_looked_for() {
 }
 
 #[test]
+fn the_toolchain_records_the_build_identity_a_version_alone_does_not_carry() {
+    let document = capture(&[], BOOTSTRAP, SystemTime::now());
+
+    // These tests are compiled with debug assertions on, so the profile the
+    // capture reads off this binary is the one it is running as.
+    assert_eq!(
+        document.toolchain.get("build_profile").map(String::as_str),
+        Some(if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        })
+    );
+    // A constant, and documented as one: every build path in this repository
+    // passes --locked, so the honest record is "true" rather than a probe of a
+    // flag nobody passes at capture time.
+    assert_eq!(
+        document.toolchain.get("cargo_locked").map(String::as_str),
+        Some("true")
+    );
+    // Unset and empty are the same fact, and both read as the string every
+    // other unavailable probe uses rather than as an empty value.
+    let flags = document.toolchain.get("rustflags").unwrap();
+    assert!(!flags.is_empty(), "an empty string would read as no answer");
+    if std::env::var("RUSTFLAGS").is_err() {
+        assert_eq!(flags, UNAVAILABLE);
+    }
+}
+
+#[test]
 fn the_host_facts_are_filled_in_or_explicitly_unavailable() {
     let document = capture(&[], BOOTSTRAP, SystemTime::now());
 

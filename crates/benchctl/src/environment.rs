@@ -116,15 +116,59 @@ fn repository_state(path: &Path) -> RepositoryState {
     }
 }
 
-/// Reads the versions of the tools that built whatever is being measured.
+/// Reads the versions of the tools that built whatever is being measured, and
+/// the three build-identity facts that decide what those tools produced.
+///
+/// A compiler version alone does not identify a binary. The same `rustc` with
+/// `-C target-cpu=native` and without it emits different code, a debug build
+/// and a release build of the same source differ by an order of magnitude on
+/// exactly the axis this repository measures, and a build resolved against a
+/// drifted lock file is a build of different dependencies. All three are
+/// recorded here so that a bundle says which of them was in force rather than
+/// leaving a reader to assume the defaults.
 fn toolchain() -> BTreeMap<String, String> {
-    ["rustc", "cargo", "cc"]
+    let mut toolchain: BTreeMap<String, String> = ["rustc", "cargo", "cc"]
         .into_iter()
         .map(|tool| {
             let version = first_line(run(tool, &["--version"]));
             (tool.to_owned(), version)
         })
-        .collect()
+        .collect();
+    toolchain.insert("rustflags".to_owned(), rustflags());
+    toolchain.insert("build_profile".to_owned(), BUILD_PROFILE.to_owned());
+    // Constant, and deliberately recorded as one. Every build path in this
+    // repository — `scripts/build-benchmark-adapters`, `scripts/check-*`, the
+    // CI lanes, and the release procedure — passes `--locked`, so a resolution
+    // that silently updated a dependency would fail the build rather than
+    // produce a bundle. Writing the constant down means a future path that
+    // drops the flag has to change this line to stay honest, instead of leaving
+    // the bundle quietly claiming something that stopped being true.
+    toolchain.insert("cargo_locked".to_owned(), "true".to_owned());
+    toolchain
+}
+
+/// Which profile the running `benchctl` was compiled with.
+///
+/// Read off this binary rather than probed, because the question is what built
+/// the control plane that is sealing this bundle, and a debug control plane is
+/// a signal about the whole attempt.
+const BUILD_PROFILE: &str = if cfg!(debug_assertions) {
+    "debug"
+} else {
+    "release"
+};
+
+/// The `RUSTFLAGS` in force, or [`UNAVAILABLE`] when the variable is unset.
+///
+/// Unset and empty are the same fact here — no flags were added — but they are
+/// reported as [`UNAVAILABLE`] rather than as an empty string so that the value
+/// reads the same way as every other probe that had nothing to report.
+fn rustflags() -> String {
+    std::env::var("RUSTFLAGS")
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| UNAVAILABLE.to_owned())
 }
 
 /// Reads the machine the attempt runs on.

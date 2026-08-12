@@ -85,6 +85,7 @@ pub(super) fn build(request: &DocumentRequest<'_>) -> Result<ProducerBenchmarkV2
         throughput: throughput(request, outcomes),
         queue: QueueObservation {
             max_outstanding_observed: request.outstanding.maximum(),
+            max_outstanding_bytes_observed: Some(request.outstanding.maximum_bytes()),
             final_outstanding: request.outstanding.current(),
         },
         // Self-reported process resources are a named deferred check in the

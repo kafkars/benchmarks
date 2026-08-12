@@ -293,3 +293,83 @@ fn a_group_wide_sigint_is_an_interrupt_and_not_a_crash() {
     assert_interrupted_bundle(&results);
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn a_run_prints_the_bundle_it_sealed_and_leaves_no_empty_pending_directory() {
+    let dir = scratch("prints-bundle");
+    let (subjects, cluster) = write_fixtures(&dir, "ok");
+    let results = dir.join("results");
+
+    let output = Command::new(BENCHCTL)
+        .args(run_arguments(&subjects, &cluster, &results))
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let last = stdout
+        .lines()
+        .last()
+        .unwrap_or_else(|| panic!("run printed nothing:\n{stdout}"));
+    let printed = PathBuf::from(last);
+    assert!(
+        printed.join("status.json").is_file(),
+        "the last line is not a sealed bundle: {last}"
+    );
+    assert_eq!(printed, find_bundle(&results).root());
+    // `results/pending/` is where a workspace lives until it has an experiment
+    // id. An empty one left in the evidence tree reads as an attempt somebody
+    // lost.
+    assert!(
+        !results.join("pending").exists(),
+        "an empty pending directory was left behind"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn resolve_prints_the_experiment_id_with_and_without_an_out_file() {
+    let dir = scratch("resolve-prints-id");
+    let (subjects, cluster) = write_fixtures(&dir, "ok");
+    let mut arguments = run_arguments(&subjects, &cluster, &dir.join("results"));
+    // The same inputs, minus `run`'s results root.
+    arguments[0] = "resolve".to_owned();
+    let base: Vec<String> = arguments
+        .iter()
+        .take(arguments.len() - 2)
+        .cloned()
+        .collect();
+
+    let piped = Command::new(BENCHCTL).args(&base).output().unwrap();
+    assert_eq!(piped.status.code(), Some(0));
+    let identity = String::from_utf8_lossy(&piped.stderr)
+        .lines()
+        .find_map(|line| line.strip_prefix("experiment_id: ").map(str::to_owned))
+        .unwrap_or_else(|| {
+            panic!(
+                "resolve printed no experiment id:\n{}",
+                String::from_utf8_lossy(&piped.stderr)
+            )
+        });
+    assert_eq!(identity.len(), 64, "{identity}");
+    // Without --out, stdout is the document alone, so a shell pipeline still
+    // reads exactly one JSON value.
+    let document = String::from_utf8_lossy(&piped.stdout);
+    assert!(document.trim_start().starts_with('{'), "{document}");
+    assert!(!document.contains("experiment_id: "), "{document}");
+
+    // With --out the document goes to the file and the id is still reported:
+    // "under what identity would this run" is a question either way.
+    let out = dir.join("resolved.json");
+    let mut with_out = base.clone();
+    with_out.push("--out".to_owned());
+    with_out.push(out.to_str().unwrap().to_owned());
+    let written = Command::new(BENCHCTL).args(&with_out).output().unwrap();
+    assert_eq!(written.status.code(), Some(0));
+    assert!(out.is_file());
+    assert!(
+        String::from_utf8_lossy(&written.stderr).contains(&format!("experiment_id: {identity}")),
+        "{}",
+        String::from_utf8_lossy(&written.stderr)
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}

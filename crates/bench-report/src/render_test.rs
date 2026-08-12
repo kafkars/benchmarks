@@ -146,8 +146,27 @@ fn every_report_carries_the_diagnostic_banner() {
 fn numeric_columns_are_right_aligned_in_markdown() {
     let markdown = render_markdown_suite(&golden_summary("render-alignment"));
 
-    assert!(markdown.contains("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"));
+    assert!(markdown.contains(
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+    ));
     assert!(markdown.contains("| --- | --- | ---: | ---: | ---: | --- | --- |"));
+}
+
+#[test]
+fn a_closed_loop_scorecard_reports_lateness_as_absent_rather_than_zero() {
+    // The golden fixture is closed-loop, so there was no schedule to be late
+    // against. A zero in that column would read as a schedule kept perfectly.
+    let markdown = render_markdown_suite(&golden_summary("render-lateness"));
+    let html = render_html_suite(&golden_summary("render-lateness-html"));
+
+    let scorecard = markdown
+        .lines()
+        .find(|line| line.starts_with("| kafkars | head |"))
+        .unwrap_or_else(|| panic!("no scorecard row for the head subject"));
+    assert!(scorecard.contains(NOT_REPORTED), "{scorecard}");
+    assert!(html.contains("Lateness p99 (ms)"));
+    assert!(html.contains("Accepted-to-terminal p99 (ms)"));
+    assert!(html.contains("CPU per 1M ack (core-s)"));
 }
 
 #[test]

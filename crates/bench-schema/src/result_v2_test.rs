@@ -57,6 +57,7 @@ fn fixture(load_mode: LoadMode) -> ProducerBenchmarkV2 {
         },
         queue: QueueObservation {
             max_outstanding_observed: 4,
+            max_outstanding_bytes_observed: Some(4_096),
             final_outstanding: 1,
         },
         resources: None,

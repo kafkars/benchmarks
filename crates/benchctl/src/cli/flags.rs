@@ -5,13 +5,26 @@
 //! a usage error rather than a last-one-wins surprise: a command line that says
 //! `--results` twice has two different intentions in it, and picking one
 //! silently is how a run lands somewhere nobody looked.
+//!
+//! # The name is checked before the value
+//!
+//! [`collect_flags`] takes the verb's own set of option names and rejects a name
+//! that is not in it *before* looking for a value. The order is the whole point.
+//! `--turbo` with nothing after it used to report "`--turbo` needs a value",
+//! which tells a reader the option exists and they got the syntax wrong — the
+//! opposite of the truth, and the kind of message that sends somebody looking
+//! for the value it wants instead of for the flag that does exist.
 
 use std::collections::BTreeMap;
 
 use crate::error::{CtlError, CtlResult};
 
-/// Splits `--name value` and `--name=value` pairs, refusing repeats.
-pub(super) fn collect_flags(arguments: &[String]) -> CtlResult<BTreeMap<String, String>> {
+/// Splits `--name value` and `--name=value` pairs, refusing repeats and any
+/// name outside `known`.
+pub(super) fn collect_flags(
+    arguments: &[String],
+    known: &[&str],
+) -> CtlResult<BTreeMap<String, String>> {
     let mut flags = BTreeMap::new();
     let mut index = 0;
     while index < arguments.len() {
@@ -21,6 +34,20 @@ pub(super) fn collect_flags(arguments: &[String]) -> CtlResult<BTreeMap<String, 
                 "unexpected argument {argument:?}; every option starts with --"
             )));
         };
+        let name = flag.split_once('=').map_or(flag, |(name, _)| name);
+        if name.is_empty() {
+            return Err(CtlError::usage("-- is not an option"));
+        }
+        if !known.contains(&name) {
+            return Err(CtlError::usage(format!(
+                "unknown option --{name}; this verb takes {}",
+                known
+                    .iter()
+                    .map(|option| format!("--{option}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
         let (name, value) = if let Some((name, value)) = flag.split_once('=') {
             index += 1;
             (name.to_owned(), value.to_owned())
@@ -31,9 +58,6 @@ pub(super) fn collect_flags(arguments: &[String]) -> CtlResult<BTreeMap<String, 
             index += 2;
             (flag.to_owned(), value.clone())
         };
-        if name.is_empty() {
-            return Err(CtlError::usage("-- is not an option"));
-        }
         if flags.insert(name.clone(), value).is_some() {
             return Err(CtlError::usage(format!(
                 "--{name} was given more than once"
@@ -83,9 +107,36 @@ pub(super) fn order(value: &str) -> CtlResult<Vec<String>> {
     Ok(names)
 }
 
-pub(super) fn reject_unknown(flags: &BTreeMap<String, String>) -> CtlResult<()> {
-    if let Some(name) = flags.keys().next() {
-        return Err(CtlError::usage(format!("unknown option --{name}")));
+/// Reads `--bootstrap` and checks every endpoint in it looks like `host:port`.
+///
+/// Checked here rather than left to the client, because this string is written
+/// into the runtime binding and the environment document of every bundle the
+/// attempt seals. A typo that reaches those documents is a sealed, immutable
+/// record of a cluster nobody ran against; the same typo caught at parse time
+/// costs one line of stderr.
+///
+/// The check is deliberately shallow — a name that resolves is a question for
+/// the network, not for an argument parser — but a value with no port, an empty
+/// host, or a port that is not a number cannot be an endpoint under any
+/// resolution.
+pub(super) fn bootstrap(flags: &mut BTreeMap<String, String>) -> CtlResult<String> {
+    let value = required(flags, "bootstrap")?;
+    for endpoint in value.split(',') {
+        let endpoint = endpoint.trim();
+        let invalid = |why: &str| {
+            CtlError::usage(format!(
+                "--bootstrap expects comma-separated host:port endpoints; {endpoint:?} {why}"
+            ))
+        };
+        let (host, port) = endpoint
+            .rsplit_once(':')
+            .ok_or_else(|| invalid("has no port"))?;
+        if host.is_empty() {
+            return Err(invalid("has no host"));
+        }
+        if port.parse::<u16>().is_err() {
+            return Err(invalid("has no port a broker could listen on"));
+        }
     }
-    Ok(())
+    Ok(value)
 }

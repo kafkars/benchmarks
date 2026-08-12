@@ -53,8 +53,20 @@ pub(crate) struct ResultFixture {
     pub(crate) resources: Option<ProcessResources>,
     /// Bundle-relative path of the native statistics stream.
     pub(crate) native_metrics_path: Option<String>,
+    /// What the adapter declared it did in the measured path.
+    pub(crate) declared: DeclaredExecution,
     /// The adapter's own validity verdict.
     pub(crate) valid: bool,
+}
+
+/// The declaration both shipped adapters would make about matched work.
+pub(crate) fn matched_declaration() -> DeclaredExecution {
+    DeclaredExecution {
+        payload_construction: "prebuilt-pool".to_owned(),
+        ownership: "copy-in".to_owned(),
+        completion_mode: "public-future".to_owned(),
+        serialization: "excluded".to_owned(),
+    }
 }
 
 impl Default for ResultFixture {
@@ -77,6 +89,7 @@ impl Default for ResultFixture {
                 system_cpu_ns: 1_000_000_000,
             }),
             native_metrics_path: None,
+            declared: matched_declaration(),
             valid: true,
         }
     }
@@ -101,12 +114,7 @@ impl ResultFixture {
             adapter_version: "0.1.0".to_owned(),
             run_id: self.run_id.clone(),
             load_mode,
-            declared: DeclaredExecution {
-                payload_construction: "prebuilt-pool".to_owned(),
-                ownership: "copy-in".to_owned(),
-                completion_mode: "public-future".to_owned(),
-                serialization: "excluded".to_owned(),
-            },
+            declared: self.declared.clone(),
             outcomes: OfferOutcomes {
                 offered: accepted,
                 accepted,
@@ -131,6 +139,7 @@ impl ResultFixture {
             },
             queue: QueueObservation {
                 max_outstanding_observed: 512,
+                max_outstanding_bytes_observed: Some(512 * 1_024),
                 final_outstanding: self.final_outstanding,
             },
             resources: self.resources,

@@ -203,3 +203,80 @@ fn a_repetition_that_cannot_be_sealed_stops_the_suite_and_is_the_exit_code() {
 
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+#[test]
+fn two_matched_fake_subjects_pass_the_execution_surface_gate_and_stay_inconclusive() {
+    // The offline proof of the wave's P0. Both subjects are the same fake
+    // adapter, so they declare the same measured work and the gate must pass —
+    // the negative direction, a fixture whose declarations disagree, is
+    // asserted in bench-report's `surface_test`.
+    let dir = scratch("matched-surface");
+    let results = dir.join("results");
+    let reports = dir.join("reports");
+    let (subjects, cluster) =
+        common::harness::write_fixtures(&dir, "ok", &["kafkars", "librdkafka-c"]);
+    let mut arguments = common_arguments(
+        "suite",
+        &repo_root().join("scenarios/producer/legacy-balanced-1k.toml"),
+        &subjects,
+        &cluster,
+        &results,
+        &reports,
+    );
+    arguments.push("--repetitions".to_owned());
+    arguments.push("2".to_owned());
+
+    let (code, _stdout, stderr) = benchctl_output(&arguments);
+    assert_eq!(code, 0, "stderr:\n{stderr}");
+
+    let directory = only_report_directory(&reports);
+    let summary =
+        SuiteSummary::from_slice(&std::fs::read(directory.join("suite-summary.json")).unwrap())
+            .unwrap();
+    let gate = summary
+        .gates
+        .iter()
+        .find(|gate| gate.name == "matched-execution-surface")
+        .unwrap_or_else(|| panic!("no execution-surface gate: {:?}", summary.gates));
+    assert!(gate.passed, "{}", gate.detail);
+    assert!(
+        !summary
+            .notes
+            .iter()
+            .any(|note| note.contains("product-surface difference")),
+        "two identical adapters have no product-surface difference: {:?}",
+        summary.notes
+    );
+    // Neither attribution metric may carry a pass/fail gate.
+    for field in [
+        "p99_accepted_to_terminal_ns",
+        "p99_intended_to_call_start_ns",
+    ] {
+        assert!(
+            !summary.gates.iter().any(|gate| gate.name.contains(field)),
+            "{field} carries a gate it must not"
+        );
+    }
+
+    // The new observation fields reach the sealed document.
+    let observation = summary.attempts[0]
+        .subjects
+        .first()
+        .unwrap_or_else(|| panic!("no subject observation"));
+    assert!(observation.declared.is_some());
+    assert!(observation.p99_accepted_to_terminal_ns > 0);
+    assert!(
+        observation
+            .cpu_core_seconds_per_million_acknowledged
+            .is_some_and(|value| value > 0.0)
+    );
+
+    // Two repetitions is below the paired-repetition minimum, so the packet is
+    // inconclusive and says which way it leaned instead of asserting it.
+    let packet =
+        AnalysisPacket::from_slice(&std::fs::read(directory.join("analysis-packet.json")).unwrap())
+            .unwrap();
+    assert_eq!(packet.verdict, bench_schema::Verdict::Inconclusive);
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}

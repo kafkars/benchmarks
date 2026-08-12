@@ -10,10 +10,17 @@
 //!
 //! An interval that straddles the threshold is not a small effect, it is an
 //! unresolved one, and the gate says so rather than rounding it to a verdict.
-//! Three gates are not about any pair: at least one attempt has to be valid, a
-//! comparison needs [`MINIMUM_PAIRED_REPETITIONS`] valid attempts, and every
-//! compared pair's goodput and p99 *ratio* has to vary by no more than
-//! [`COEFFICIENT_OF_VARIATION_BUDGET`].
+//! Four gates are not about any pair's interval: at least one attempt has to be
+//! valid, a comparison needs [`MINIMUM_PAIRED_REPETITIONS`] valid attempts,
+//! every compared pair's goodput and p99 *ratio* has to vary by no more than
+//! [`COEFFICIENT_OF_VARIATION_BUDGET`], and both sides of every comparison have
+//! to have been doing the same work — see [`surface`](super::surface).
+//!
+//! A per-metric gate exists only for a metric
+//! [`SuiteMetric::claimable`] admits. Scheduler lateness and the
+//! accepted-to-terminal portion are attribution: they locate a difference and
+//! may not assert one, so they appear in the pairs table and in every rendering
+//! and never in a pass or a fail.
 
 use bench_schema::{GateOutcome, PairedRatio, SubjectDispersion, SuiteAttempt};
 
@@ -23,6 +30,7 @@ use super::comparison::Comparison;
 use super::metric::{SuiteMetric, metric_of_field};
 use super::pairs::pair_passes;
 use super::report::SuiteOptions;
+use super::surface::SurfaceReview;
 
 /// Every gate the suite checked, in the order it checked them.
 pub(super) fn gates(
@@ -30,6 +38,7 @@ pub(super) fn gates(
     pairs: &[PairedRatio],
     pair_dispersion: &[SubjectDispersion],
     valid: &[&SuiteAttempt],
+    surface: &SurfaceReview,
     options: &SuiteOptions,
 ) -> Vec<GateOutcome> {
     let mut gates = vec![
@@ -103,8 +112,10 @@ pub(super) fn gates(
         },
     });
 
+    gates.push(surface.gate.clone());
+
     for comparison in comparisons {
-        for metric in SuiteMetric::ALL {
+        for metric in SuiteMetric::ALL.into_iter().filter(|m| m.claimable()) {
             let Some(pair) = pairs.iter().find(|pair| {
                 pair.numerator_subject == comparison.numerator
                     && pair.denominator_subject == comparison.denominator

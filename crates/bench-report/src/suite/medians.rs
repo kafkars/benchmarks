@@ -55,18 +55,58 @@ pub(super) fn subject_medians(
             Some(SubjectMedians {
                 name: subject.name.clone(),
                 role: subject.role.clone(),
+                declared: agreed_declaration(&observations),
                 acknowledged_records_per_second: median_of(&observations, SuiteMetric::Goodput)
                     .unwrap_or(0.0),
                 p50_intended_to_terminal_ns: median_ns(&observations, SuiteMetric::P50Latency),
                 p99_intended_to_terminal_ns: median_ns(&observations, SuiteMetric::P99Latency),
                 p999_intended_to_terminal_ns: median_ns(&observations, SuiteMetric::P999Latency),
                 p99_admission_wait_ns: median_ns(&observations, SuiteMetric::P99AdmissionWait),
+                p99_intended_to_call_start_ns: complete_median(
+                    &observations,
+                    SuiteMetric::SchedulerLateness,
+                )
+                .map(round_to_u64),
+                p99_accepted_to_terminal_ns: median_ns(
+                    &observations,
+                    SuiteMetric::AcceptedToTerminal,
+                ),
                 max_rss_bytes: complete_median(&observations, SuiteMetric::MaxRssBytes)
                     .map(round_to_u64),
                 cpu_core_seconds: complete_median(&observations, SuiteMetric::CpuCoreSeconds),
+                cpu_core_seconds_per_million_acknowledged: complete_cpu_per_million(&observations),
             })
         })
         .collect()
+}
+
+/// The declaration every observation agreed on, or `None` when they did not.
+///
+/// Disagreement is not averaged into a plausible-looking answer: a subject
+/// whose declared execution surface changed between repetitions has no single
+/// declaration, and the `matched-execution-surface` gate reads the per-attempt
+/// values rather than this one for exactly that reason.
+fn agreed_declaration(
+    observations: &[&SuiteSubjectObservation],
+) -> Option<bench_schema::DeclaredExecution> {
+    let first = observations.first()?.declared.clone()?;
+    observations
+        .iter()
+        .all(|observation| observation.declared.as_ref() == Some(&first))
+        .then_some(first)
+}
+
+/// The median CPU cost per million acknowledged records, when every observation
+/// reported one.
+fn complete_cpu_per_million(observations: &[&SuiteSubjectObservation]) -> Option<f64> {
+    let values: Vec<f64> = observations
+        .iter()
+        .filter_map(|observation| observation.cpu_core_seconds_per_million_acknowledged)
+        .collect();
+    if values.len() != observations.len() {
+        return None;
+    }
+    median(&values)
 }
 
 /// The median of one metric over one subject's observations.

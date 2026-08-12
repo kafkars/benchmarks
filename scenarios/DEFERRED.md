@@ -12,9 +12,17 @@ A scenario that resolves and is then declined by every subject produces a
 sealed bundle full of refusals, which is worse than an entry in a list —
 it looks like evidence.
 
-Adapter limits below are cited from `adapters/kafkars/src/protocol.rs` and
-`crates/bench-adapter-librdkafka/src/validate.rs`, which are the two places
+Adapter limits below are cited from the kafkars adapter's protocol module —
+`adapters/kafkars/src/protocol/verdict.rs` decides what is refused,
+`describe.rs` declares what the adapter claims it can do, and `settings.rs`
+holds the compile-time client settings the refusals are written against — and
+from `crates/bench-adapter-librdkafka/src/validate.rs`. Those are the places
 that decide what runs.
+
+**How much of the matrix is authored.** `scenarios/producer/headline/` holds 6
+scenarios against the design document's 12 to 18. Every missing row has its axis
+named in a section below, with the specific thing that refuses it; nothing in
+the matrix is absent without an entry here.
 
 ## Application concurrency: 16 callers, and multiple producers
 

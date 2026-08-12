@@ -50,6 +50,15 @@ pub enum CtlErrorKind {
     /// The experiment, subjects, or cluster input was invalid before any
     /// attempt workspace existed.
     InvalidExperiment,
+    /// A named input file was missing, unreadable, or not the document the flag
+    /// asked for.
+    ///
+    /// Shares [`EXIT_INVALID`] with [`Self::InvalidExperiment`], because from a
+    /// caller's point of view both are "the inputs were wrong before anything
+    /// ran". They are separate kinds only so the *message* can be true: a
+    /// missing `--llm-summary` file reported as an invalid experiment sends a
+    /// reader to look at their scenario, which is the one file that was fine.
+    InvalidInput,
     /// The attempt directory already exists; refusing to reuse evidence paths.
     AttemptExists,
     /// Sealing failed to write evidence; the primary failure is already on
@@ -88,6 +97,13 @@ impl CtlError {
         Self::new(CtlErrorKind::InvalidExperiment, message)
     }
 
+    /// Creates a [`CtlErrorKind::InvalidInput`] error naming the flag that
+    /// carried the offending path.
+    #[must_use]
+    pub fn invalid_input(flag: &str, message: impl std::fmt::Display) -> Self {
+        Self::new(CtlErrorKind::InvalidInput, format!("--{flag}: {message}"))
+    }
+
     /// Creates a [`CtlErrorKind::AttemptExists`] error.
     #[must_use]
     pub fn attempt_exists(message: impl Into<String>) -> Self {
@@ -123,7 +139,7 @@ impl CtlError {
     pub fn exit_code(&self) -> i32 {
         match self.kind {
             CtlErrorKind::Usage => EXIT_USAGE,
-            CtlErrorKind::InvalidExperiment => EXIT_INVALID,
+            CtlErrorKind::InvalidExperiment | CtlErrorKind::InvalidInput => EXIT_INVALID,
             CtlErrorKind::AttemptExists => EXIT_ATTEMPT_EXISTS,
             CtlErrorKind::Seal => EXIT_SEAL_WRITE,
             CtlErrorKind::Internal => EXIT_INTERNAL,
@@ -136,6 +152,7 @@ impl fmt::Display for CtlError {
         let kind = match self.kind {
             CtlErrorKind::Usage => "usage",
             CtlErrorKind::InvalidExperiment => "invalid experiment",
+            CtlErrorKind::InvalidInput => "invalid input",
             CtlErrorKind::AttemptExists => "attempt exists",
             CtlErrorKind::Seal => "seal",
             CtlErrorKind::Internal => "internal",

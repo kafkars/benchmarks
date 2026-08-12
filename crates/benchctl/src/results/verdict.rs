@@ -7,7 +7,8 @@
 //! does not cover here.
 
 use bench_schema::{
-    Classification, Comparison, ComparisonPair, PRODUCER_BENCHMARK_V2, SubjectValidity,
+    Classification, Comparison, ComparisonPair, PRODUCER_BENCHMARK_V2, SUBJECT_ROLE_BASE,
+    SubjectValidity,
 };
 
 use super::outcome::SubjectOutcome;
@@ -20,7 +21,7 @@ use super::outcome::SubjectOutcome;
 /// footnote nobody reads: a bundle states what it did not check, in the same
 /// document that states what it did. `benchctl suite` answers the first two
 /// across attempts; one attempt still cannot.
-pub const DEFERRED_CHECKS: [&str; 7] = [
+pub const DEFERRED_CHECKS: [&str; 9] = [
     "bootstrap-confidence-intervals",
     "paired-repetition-suites",
     "latency-csv-row-validation",
@@ -28,6 +29,11 @@ pub const DEFERRED_CHECKS: [&str; 7] = [
     "librdkafka-statistics-summaries",
     "compressed-payload-coverage",
     "process-resource-capture",
+    // Two objectives `SloSpec` declares and nothing evaluates. Named here
+    // rather than only in `bench_report::slo`'s module contract, because a
+    // reader meets the list in the sealed bundle and never opens that file.
+    "slo-drain-tail",
+    "slo-queue-growth-slope",
 ];
 
 /// Builds the attempt's classification from its subjects.
@@ -66,10 +72,25 @@ pub fn classify(subjects: &[SubjectOutcome], extra_reasons: &[String]) -> Classi
 ///
 /// Subjects are comparable only when every one of them produced a readable
 /// `kafkars.producer-benchmark.v2` result: ratios between documents of different
-/// shapes would be comparing different measurements. The baseline is the first
-/// subject in execution order, and every later subject is a candidate against
-/// it, so a ratio above one on goodput and below one on latency both favour the
-/// candidate.
+/// shapes would be comparing different measurements. Every other subject is a
+/// candidate against the baseline, so a ratio above one on goodput and below one
+/// on latency both favour the candidate.
+///
+/// # Which subject the ratio divides by
+///
+/// The baseline is the subject the experiment labelled `base`, whenever one is
+/// labelled. Execution order is the fallback, and only the fallback.
+///
+/// The difference is not cosmetic. `benchctl suite` alternates which subject
+/// runs first across repetitions — that is the whole point of paired blocking —
+/// so under an execution-order baseline the same suite seals `head/base` in one
+/// repetition and `base/head` in the next, and a reader comparing two
+/// `comparison.json` files from one suite sees the ratio invert for no reason
+/// the documents explain. It also keeps `anchor` out of the denominator: an
+/// anchor is the fixed reference that says whether the *machine* moved, and a
+/// ratio against it is not the comparison the experiment asked for. When a base
+/// exists the anchor can never be the denominator, because the base is found
+/// first.
 ///
 /// Both ratios come from the v2 document itself. Goodput is
 /// `throughput.acknowledged_records_per_second`; latency is the 99th percentile
@@ -106,28 +127,26 @@ pub fn compare(order: &[String], subjects: &[SubjectOutcome]) -> Comparison {
     }
     let comparable = reasons.is_empty();
     let mut pairs = Vec::new();
-    if comparable {
-        if let Some((baseline, candidates)) = ordered.split_first() {
-            for candidate in candidates {
-                pairs.push(ComparisonPair {
-                    baseline: baseline.name.clone(),
-                    candidate: candidate.name.clone(),
-                    acknowledged_goodput_ratio: ratio(
-                        candidate.evidence.goodput(),
-                        baseline.evidence.goodput(),
-                    ),
-                    p99_latency_ratio: ratio(
-                        candidate
-                            .evidence
-                            .intended_to_terminal_p99_ns()
-                            .map(|value| value as f64),
-                        baseline
-                            .evidence
-                            .intended_to_terminal_p99_ns()
-                            .map(|value| value as f64),
-                    ),
-                });
-            }
+    if comparable && let Some(baseline) = baseline_of(&ordered) {
+        for candidate in ordered.iter().filter(|entry| entry.name != baseline.name) {
+            pairs.push(ComparisonPair {
+                baseline: baseline.name.clone(),
+                candidate: candidate.name.clone(),
+                acknowledged_goodput_ratio: ratio(
+                    candidate.evidence.goodput(),
+                    baseline.evidence.goodput(),
+                ),
+                p99_latency_ratio: ratio(
+                    candidate
+                        .evidence
+                        .intended_to_terminal_p99_ns()
+                        .map(|value| value as f64),
+                    baseline
+                        .evidence
+                        .intended_to_terminal_p99_ns()
+                        .map(|value| value as f64),
+                ),
+            });
         }
     }
     Comparison {
@@ -136,6 +155,16 @@ pub fn compare(order: &[String], subjects: &[SubjectOutcome]) -> Comparison {
         pairs,
         reasons,
     }
+}
+
+/// The subject every ratio divides by: the declared `base`, else the first in
+/// execution order.
+fn baseline_of<'a>(ordered: &[&'a SubjectOutcome]) -> Option<&'a SubjectOutcome> {
+    ordered
+        .iter()
+        .find(|subject| subject.role.as_deref() == Some(SUBJECT_ROLE_BASE))
+        .or_else(|| ordered.first())
+        .copied()
 }
 
 /// Divides two measurements, refusing anything that would not be a number.

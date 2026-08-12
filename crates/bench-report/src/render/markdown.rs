@@ -14,7 +14,7 @@ use crate::suite::{SubjectEconomics, metric_of_field};
 use super::economics::write_markdown_economics;
 use super::format::{
     SCORECARD_ALIGNMENT, SCORECARD_HEADER, direction_word, dispersion_role, format_mib, format_ms,
-    format_rate, format_ratio, format_seconds, pass_word, valid_count, verdict_word,
+    format_rate, format_ratio, format_seconds, optional_ms, pass_word, valid_count, verdict_word,
 };
 use super::{DIAGNOSTIC_BANNER, NOT_REPORTED};
 
@@ -69,7 +69,9 @@ fn write_markdown_scorecard(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(
         out,
         "Medians over the valid attempts. Latency is offer-to-terminal, so it includes \
-         admission wait.\n"
+         admission wait. Lateness and accepted-to-terminal are attribution: they locate a \
+         difference inside a subject and cannot establish one, because both are improved by \
+         refusing work.\n"
     );
     let _ = writeln!(out, "{SCORECARD_HEADER}");
     let _ = writeln!(out, "{SCORECARD_ALIGNMENT}");
@@ -183,7 +185,7 @@ fn write_markdown_attempts(out: &mut String, summary: &SuiteSummary) {
 /// One scorecard row.
 fn markdown_median_row(median: &SubjectMedians) -> String {
     format!(
-        "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
         median.name,
         median.role.clone().unwrap_or_else(|| "-".to_owned()),
         format_rate(median.acknowledged_records_per_second),
@@ -191,8 +193,13 @@ fn markdown_median_row(median: &SubjectMedians) -> String {
         format_ms(median.p99_intended_to_terminal_ns),
         format_ms(median.p999_intended_to_terminal_ns),
         format_ms(median.p99_admission_wait_ns),
+        optional_ms(median.p99_intended_to_call_start_ns),
+        format_ms(median.p99_accepted_to_terminal_ns),
         median
             .cpu_core_seconds
+            .map_or_else(|| NOT_REPORTED.to_owned(), format_seconds),
+        median
+            .cpu_core_seconds_per_million_acknowledged
             .map_or_else(|| NOT_REPORTED.to_owned(), format_seconds),
         median
             .max_rss_bytes

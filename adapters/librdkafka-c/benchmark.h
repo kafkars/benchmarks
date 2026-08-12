@@ -163,6 +163,13 @@ typedef struct bench_v2_phase_s {
         uint64_t unknown;
         uint64_t outstanding;
         uint64_t max_outstanding_observed;
+        /* The same two figures in payload bytes. Accumulated at the admit and
+           terminal sites rather than multiplied out of the record count
+           afterwards: the run's records are one fixed size today, so the two
+           agree, and the moment a variable-size payload profile exists the
+           multiplication would silently become wrong while this stays right. */
+        uint64_t outstanding_bytes;
+        uint64_t max_outstanding_bytes_observed;
         /* Schedule epoch to end of drain, on the phase's own monotonic clock:
            the interval the document's throughput is over. */
         uint64_t measured_duration_ns;

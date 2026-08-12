@@ -17,17 +17,24 @@ pub fn render_table(manifest: &PackManifest, outcomes: &[EntryOutcome]) -> Strin
         .filter(|outcome| outcome.exit_code != 0)
         .count();
     let _ = writeln!(text, "\n## Pack {} ({})\n", manifest.name, manifest.cadence);
-    let _ = writeln!(text, "| # | scenario | verb | repetitions | exit |");
-    let _ = writeln!(text, "| ---: | --- | --- | ---: | ---: |");
+    let _ = writeln!(
+        text,
+        "| # | scenario | verb | repetitions | exit | evidence |"
+    );
+    let _ = writeln!(text, "| ---: | --- | --- | ---: | ---: | --- |");
     for (index, outcome) in outcomes.iter().enumerate() {
         let _ = writeln!(
             text,
-            "| {} | `{}` | {} | {} | {} |",
+            "| {} | `{}` | {} | {} | {} | {} |",
             index + 1,
             outcome.scenario,
             outcome.plan.map_or("—", EntryPlan::as_str),
             outcome.repetitions,
-            outcome.exit_code
+            outcome.exit_code,
+            outcome
+                .evidence
+                .as_ref()
+                .map_or_else(|| "—".to_owned(), |path| format!("`{path}`"))
         );
     }
     let _ = writeln!(
@@ -35,6 +42,12 @@ pub fn render_table(manifest: &PackManifest, outcomes: &[EntryOutcome]) -> Strin
         "\n{} of {} entries exited 0.",
         outcomes.len() - failed,
         outcomes.len()
+    );
+    let _ = writeln!(
+        text,
+        "\nA `run` entry names its sealed bundle above. A `suite` or `capacity` entry writes a \
+         whole report set and prints every path in it as it goes, so there is no single file to \
+         name here."
     );
     text
 }

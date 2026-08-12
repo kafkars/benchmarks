@@ -13,7 +13,7 @@ use crate::economics::STATISTICS_FILE_NAME;
 use crate::suite::{SubjectEconomics, SuiteReport};
 
 use super::findings::{anomalies, findings, verdict};
-use super::metrics::{MetricTable, economics_metrics, number_metrics};
+use super::metrics::{MetricTable, PairIds, economics_metrics, number_metrics};
 
 /// Builds the analysis packet for a suite summary.
 ///
@@ -37,6 +37,15 @@ impl SuiteReport {
 fn packet(summary: &SuiteSummary, economics: &[SubjectEconomics]) -> AnalysisPacket {
     let mut metrics = MetricTable::default();
     let pair_ids = number_metrics(&mut metrics, summary);
+    // Attribution pairs are numbered and citable, so prose may point at them —
+    // and are kept out of everything that decides. A verdict drawn from the
+    // accepted-to-terminal portion would say "faster" about a client that got
+    // there by refusing work for longer.
+    let claimable: Vec<PairIds> = pair_ids
+        .iter()
+        .filter(|entry| entry.metric.claimable())
+        .cloned()
+        .collect();
     let economics_ids = economics_metrics(&mut metrics, economics);
 
     let runs_total = u32::try_from(summary.attempts.len()).unwrap_or(u32::MAX);
@@ -53,7 +62,7 @@ fn packet(summary: &SuiteSummary, economics: &[SubjectEconomics]) -> AnalysisPac
                 .map(|attempt| attempt.bundle_digest.clone())
                 .collect(),
         },
-        verdict: verdict(valid_attempts, &pair_ids, summary.practical_threshold),
+        verdict: verdict(valid_attempts, &claimable, summary.practical_threshold),
         scenario_name: summary.scenario_name.clone(),
         subjects: packet_subjects(summary),
         validity: PacketValidity {
@@ -64,13 +73,13 @@ fn packet(summary: &SuiteSummary, economics: &[SubjectEconomics]) -> AnalysisPac
         metrics: metrics.entries,
         deterministic_findings: findings(
             summary,
-            &pair_ids,
+            &claimable,
             &economics_ids,
             economics,
             runs_valid,
             runs_total,
         ),
-        anomalies: anomalies(summary, &pair_ids, valid_attempts),
+        anomalies: anomalies(summary, &claimable, valid_attempts),
         evidence_refs: evidence_refs(summary, economics),
     }
 }

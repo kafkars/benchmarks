@@ -46,6 +46,12 @@ pub struct EntryOutcome {
     pub plan: Option<EntryPlan>,
     /// The exit code that verb returned.
     pub exit_code: i32,
+    /// Where this entry's evidence landed, when the entry is a single attempt.
+    ///
+    /// Absent for `suite` and `capacity`, which write a whole report set and
+    /// print every path in it as they go; naming one of those files here would
+    /// be picking a favourite out of four.
+    pub evidence: Option<String>,
 }
 
 /// Runs the pack and returns the process exit code.
@@ -113,6 +119,7 @@ fn run_entry(
                 repetitions: entry.repetitions,
                 plan: None,
                 exit_code: error.exit_code(),
+                evidence: None,
             };
         }
     };
@@ -135,8 +142,13 @@ fn run_entry(
         seed: command.seed,
         order: None,
     };
+    let mut evidence = None;
     let exit_code = match plan {
-        EntryPlan::Run => run_once(command, &common),
+        EntryPlan::Run => {
+            let (code, bundle) = run_once(command, &common);
+            evidence = bundle;
+            code
+        }
         EntryPlan::Suite => suite::execute(&SuiteCommand {
             common,
             results_root: command.results_root.clone(),
@@ -160,17 +172,26 @@ fn run_entry(
         repetitions: entry.repetitions,
         plan: Some(plan),
         exit_code,
+        evidence,
     }
 }
 
-/// Runs a single attempt, the way `benchctl run` does.
-fn run_once(command: &PackCommand, common: &CommonArguments) -> i32 {
+/// Runs a single attempt the way `benchctl run` does, and reports where it
+/// sealed.
+fn run_once(command: &PackCommand, common: &CommonArguments) -> (i32, Option<String>) {
     let inputs = match pipeline::load(common) {
         Ok(inputs) => inputs,
         Err(error) => {
             eprintln!("benchctl: {error}");
-            return error.exit_code();
+            return (error.exit_code(), None);
         }
     };
-    pipeline::attempt(&inputs, common, &command.results_root, command.budget).exit_code()
+    let end = pipeline::attempt(&inputs, common, &command.results_root, command.budget);
+    let bundle = end
+        .sealed()
+        .map(|sealed| sealed.paths.root().display().to_string());
+    if let Some(path) = &bundle {
+        println!("{path}");
+    }
+    (end.exit_code(), bundle)
 }

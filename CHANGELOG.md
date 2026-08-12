@@ -138,8 +138,133 @@ not permitted and appears instead as a new schema id.
   through `KAFKA_BENCH_CLIENT_ROOT`. Restoring the upstream shape in the name of
   fidelity would break no test and would attribute this repository's git state
   to the client under measurement in every bundle sealed afterwards.
+- the `matched-execution-surface` gate in `kafkars.suite-summary.v1`. A ratio
+  between two measurements is only a comparison when both sides measured the
+  same thing, and `docs/EVIDENCE.md` has always said a reader "should require
+  equal `payload_construction`" — this is that obligation as a gate rather than
+  as advice. It fails when the two sides of a compared pair declare a different
+  `payload_construction` or `serialization`, naming both values, and when a pair
+  carries no declaration to check at all. Unequal `ownership` and
+  `completion_mode` become named notes instead: those are real product-surface
+  differences between the two clients' public APIs, and refusing to compare them
+  would refuse to compare the clients as they exist. A failing gate also becomes
+  a deterministic finding in the analysis packet, because it changes what every
+  other finding there means;
+- three attribution fields on every suite observation and median, appended to
+  `kafkars.suite-summary.v1`: `declared` (what the adapter said was in the
+  measured path), `p99_intended_to_call_start_ns` (scheduler lateness, absent
+  rather than zero for a closed-loop run), and `p99_accepted_to_terminal_ns`
+  (the client-internal portion). All three locate a difference and none may
+  establish one, so they are paired, rendered, and citable from the packet, and
+  no gate is written over any of them and none feeds the packet verdict — a
+  client that refuses admission for longer looks better on the last of them by
+  construction, which is the exact substitution v2 was minted to prevent;
+- `cpu_core_seconds_per_million_acknowledged` beside `cpu_core_seconds`, in the
+  same schema and in the scorecard. Total CPU is not comparable between subjects
+  that moved different amounts of traffic; absent, never zero, when the platform
+  reported no resources or nothing was acknowledged to divide by;
+- `queue.max_outstanding_bytes_observed` in `kafkars.producer-benchmark.v2`,
+  stamped by both adapters at the same admit and terminal sites the record
+  high-water is updated at. Accumulated rather than multiplied out of the record
+  count afterwards: today's fixed payload size makes the two agree, and a
+  variable-size payload profile would silently make the multiplication wrong;
+- an optional `provenance` block in `kafkars.llm-summary.v1` — model, prompt
+  version, reasoning effort, response id, the digests of the packet in and the
+  summary out, and when it was written.
+  `scripts/benchmark-openai-summary` now embeds it *and* keeps writing the
+  `llm-provenance.json` sidecar: the sidecar because the surrounding tooling
+  reads it and a rejected summary still leaves one, the embed because a summary
+  that has been moved arrives without its sidecar. `output_sha256` covers the
+  model's own bytes with `provenance` removed, since a digest cannot cover the
+  field carrying it, and the strict output schema does not offer the model a
+  `provenance` field;
+- `--offline-reply` on `scripts/benchmark-openai-summary`, which replays a
+  captured provider response instead of calling the API. The guardrail still
+  runs, so `scripts/benchmark-openai-summary-test` now exercises the whole reply
+  path — the embed, the sidecar, and the invariant that no markdown is rendered
+  for a summary nothing accepted — with no network, no key, and no toolchain;
+- build identity in `kafkars.benchmark-environment.v2`'s toolchain map:
+  `rustflags`, `build_profile` read off the running `benchctl`, and a documented
+  constant `cargo_locked`. A compiler version alone does not identify a binary;
+- `slo-drain-tail` and `slo-queue-growth-slope` in every classification's
+  `deferred_checks`. `SloSpec` declares them and nothing evaluates them, and
+  until now that was written down only in a module contract a bundle reader
+  never opens;
+- a "First run, no cluster" section at the top of the README. `fake-adapter`
+  speaks the whole adapter protocol and plays all three cluster tools, so a
+  complete sealed bundle takes under a second against no broker — and until now
+  the word "fake" appeared in no markdown file in the repository;
+- `benchctl run` prints the bundle it sealed as its last line of stdout, on
+  every exit code, and `benchctl resolve` prints the `experiment_id` on stderr
+  so stdout stays exactly one JSON document. The pack table gained an evidence
+  column naming each single-attempt entry's bundle;
+- `--bootstrap` endpoints are checked as `host:port` at parse time. A typo used
+  to seal silently into the runtime binding and the environment document of an
+  immutable bundle;
+- the deferred subject-revision model, the two unwritten cadences, the parked
+  cross-repository trigger, and the three unbuilt LLM summary flavors are now
+  named in `docs/ROADMAP.md`. The first states plainly that `base` and `head`
+  mean two externally built binaries against one shared sibling pin today, so
+  two client *revisions* cannot be compared in one attempt;
 
 ### Changed
+
+- **the `bench-report` render goldens were regenerated.** `crates/bench-report/golden/suite.md`
+  and `suite.html` gained three scorecard columns (lateness p99,
+  accepted-to-terminal p99, CPU per million acknowledged), one gate row
+  (`matched-execution-surface`), one paired-comparison row, and three dispersion
+  rows. This is a deliberate regeneration under the carve-out in `AGENTS.md`:
+  the goldens pin what a reader is shown, the change adds columns and rows
+  without altering any previously reported number, and no schema id moved. Every
+  other golden and every conformance vector is byte-identical;
+- the attempt-level `comparison.json` divides by the subject the experiment
+  labelled `base`, falling back to execution order only when no role is
+  declared. `benchctl suite` alternates which subject runs first, so under the
+  old rule one suite sealed `head/base` in one repetition and `base/head` in the
+  next — reproduced live before this changed — and a reader comparing two
+  comparison documents from one suite saw the ratio invert for no reason the
+  documents explained. The anchor can no longer become a denominator when a base
+  exists;
+- the packet verdict is `inconclusive` when fewer than the five paired
+  repetitions a comparison needs were valid, however far past the threshold the
+  intervals sit. A bootstrap over two paired blocks is an interval over two
+  numbers. The directional read is not discarded: it moves into a deterministic
+  finding that names the direction and the repetition count in one sentence;
+- a finding in `kafkars.llm-summary.v1` must cite at least one metric.
+  `findings` entries are asserted as fact and an uncited one reads exactly like
+  a cited one while resting on nothing; a statement the model cannot attach to a
+  number is a hypothesis, and `hypotheses` is deliberately not required to cite.
+  Stating no findings at all is still fine;
+- `ci.yml`'s `diagnostic` job runs on pull requests as well as
+  `workflow_dispatch`, under `continue-on-error: true` and still absent from
+  `quality-gate.needs`, and it now runs `benchctl pack --manifest
+  scenarios/packs/pr.toml` through `scripts/generate-subject-config` rather than
+  the legacy `scripts/bench-producer-compare`. Its numbers are shared-runner
+  numbers and it must be able to fail without blocking a merge; a fork has no
+  sibling-checkout token, so the job fails there harmlessly by design;
+- an unknown option is reported as one before anything looks for its value.
+  `--turbo` with nothing after it used to say it needed a value, which tells a
+  reader the option exists and they got the syntax wrong;
+- a missing `--llm-summary` file, a `--bundle` that is not a sealed bundle, and
+  a rejected summary are reported as invalid *input* naming the flag, rather
+  than as an invalid experiment — the one input that was fine. Exit code 65 is
+  unchanged;
+- `scripts/check-dependency-provenance` reports a cross-check whose input could
+  not be read as uncheckable rather than as a mismatch. On a bare clone the two
+  derived checks have nothing to compare, and calling that a mismatch told a
+  reader two revisions disagreed when nothing had been compared;
+- `results/pending/` is removed when the last workspace has moved out of it.
+  An empty directory left in the evidence tree reads as an attempt somebody
+  lost; the removal is best-effort and never fails a run whose bundle is already
+  sealed;
+- `scenarios/producer/producer-baseline.toml` opens with a header saying it is
+  the design document's non-executable reference matrix and that the resolver
+  refuses it on purpose. The explanation existed only in a Rust module contract;
+- `scenarios/DEFERRED.md` points at the decomposed
+  `adapters/kafkars/src/protocol/{verdict,describe,settings}.rs` rather than the
+  `protocol.rs` that no longer holds those decisions, and says plainly that the
+  headline set is 6 scenarios against the design's 12 to 18, with every missing
+  row's axis listed;
 
 - `analysis/prompts/producer-comparison.v1.md` no longer says that nothing in
   this repository invokes a language model. Nothing on a *measurement's path*

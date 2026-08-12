@@ -64,9 +64,9 @@ pub use rng::{Rng, split_mix64};
 pub use slo::{MAX_FAILED_RECORDS, SloVerdict, evaluate_slo};
 pub use stats::{geometric_mean, histogram_percentile, median};
 pub use suite::{
-    DEFAULT_PRACTICAL_THRESHOLD, SubjectEconomics, SuiteMetric, SuiteOptions, SuiteReport,
-    UNSEALED_DIGEST, metric_of_field, pair_passes, pair_regresses, summarize_suite,
-    summarize_suite_report,
+    DEFAULT_PRACTICAL_THRESHOLD, MATCHED_EXECUTION_SURFACE, SubjectEconomics, SuiteMetric,
+    SuiteOptions, SuiteReport, UNSEALED_DIGEST, metric_of_field, pair_passes, pair_regresses,
+    summarize_suite, summarize_suite_report,
 };
 pub use summary::{
     COEFFICIENT_OF_VARIATION_BUDGET, MINIMUM_PAIRED_REPETITIONS, PositiveValueSummary,

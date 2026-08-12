@@ -21,6 +21,8 @@
   <span> · </span>
   <a href="#layout">Layout</a>
   <span> · </span>
+  <a href="#first-run-no-cluster">First run</a>
+  <span> · </span>
   <a href="#the-engine">Engine</a>
   <span> · </span>
   <a href="#ci-and-the-nightly">CI</a>
@@ -91,6 +93,80 @@ The adapters are deliberately not workspace members. A subject must be built
 against its own pinned dependency graph, not against whatever this workspace
 happens to resolve.
 
+## First run, no cluster
+
+Before anything else, and before any of the setup below: the whole pipeline
+runs offline. `fake-adapter` is a subject that speaks the entire adapter
+protocol and invents a measurement, and it also plays all three cluster tools,
+so a complete attempt — resolve, spawn, "verify", seal — takes under a second
+against no broker at all. It is how you see what a sealed bundle *is* before
+deciding whether you want a cluster.
+
+```sh
+git clone https://github.com/zsumz/kafka-benchmarks && cd kafka-benchmarks
+cargo build --release --locked -p benchctl   # builds fake-adapter too
+```
+
+Two input files. They are per-machine and are never committed, so write them
+yourself — that is the same thing `scripts/generate-subject-config` does for a
+real run:
+
+```toml
+# subjects.toml — both subjects are the fake adapter.
+# The roles say which side of the comparison each subject is; they participate
+# in the experiment id, so swapping them is a different experiment.
+[[subjects]]
+name = "base-subject"
+role = "base"
+command = ["target/release/fake-adapter"]
+
+[[subjects]]
+name = "head-subject"
+role = "head"
+command = ["target/release/fake-adapter"]
+```
+
+```toml
+# cluster.toml — no broker is contacted.
+# Topic management and read-back verification are configured tools rather than
+# adapter verbs, so they are named here; offline they are the same binary.
+name = "offline"
+bootstrap = "127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094"
+broker_version = "none — nothing is contacted"
+security = "plaintext"
+brokers = 3
+lifecycle = "externally managed by the caller"
+
+[tools]
+topic_create = ["target/release/fake-adapter", "topics-create"]
+topic_delete = ["target/release/fake-adapter", "topics-delete"]
+verify = ["target/release/fake-adapter", "verify"]
+```
+
+Then one attempt. `run` prints the bundle it sealed as its last line:
+
+```sh
+bundle=$(target/release/benchctl run \
+  --experiment scenarios/producer/legacy-balanced-1k.toml \
+  --subjects subjects.toml \
+  --cluster cluster.toml \
+  --bootstrap 127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094 \
+  --results results | tail -n 1)
+
+target/release/benchctl report --bundle "$bundle" --out reports/attempt.md
+```
+
+Read `$bundle` rather than the report first. `status.json` says how far the
+machinery got, `classification.json` says whether the evidence may be believed
+and names every check this attempt did *not* perform, `comparison.json` divides
+by the declared `base`, `adapters/<subject>/result.json` is the measurement
+itself, and `checksums.txt` with `bundle.json` are what make the whole thing
+re-verifiable. Every file in a sealed bundle, and who is entitled to have
+written it, is in [`docs/EVIDENCE.md`](./docs/EVIDENCE.md).
+
+The numbers are invented. Nothing about this run is evidence about a Kafka
+client — the point is that the shape of the evidence is real.
+
 ## The engine
 
 `benchctl` is the control plane. It resolves a scenario into an experiment,
@@ -106,7 +182,11 @@ and the profile are per-machine and are not committed;
 `scripts/bench-m0-acceptance` writes its own under `target/m0-acceptance`.
 
 Every example below is one command against those inputs. Build the binary and
-set the two variables first:
+set the two variables first — note that
+`scripts/generate-subject-config` builds the **real** adapters, so unlike the
+offline path above it needs the three sibling checkouts and a bootstrapped
+librdkafka (which it downloads and builds on first use). On a bare clone it
+will fail, and the offline path above is the one that works:
 
 ```sh
 cargo build --release --locked -p benchctl
@@ -117,9 +197,11 @@ inputs=target/quickstart
 scripts/generate-subject-config "$inputs" "$bootstrap"
 ```
 
-**`resolve`** prints the resolved experiment and its `experiment_id` without
-touching the cluster. It is how you ask what would run, and under what identity,
-before spending a cluster on it.
+**`resolve`** prints the resolved experiment on stdout and its `experiment_id`
+on stderr, without touching the cluster. It is how you ask what would run, and
+under what identity, before spending a cluster on it. The id goes to stderr so
+that stdout stays exactly one JSON document for a pipeline to read, and it is
+printed with `--out` too.
 
 ```sh
 benchctl resolve \
@@ -134,13 +216,16 @@ benchctl resolve \
 `results/<experiment-id>/<attempt-id>/`. A subject that fails records its
 failure and the others still run, because "A crashed and B did not" is evidence.
 
+Its last line of stdout is the bundle it sealed, on every exit code — a crashed
+attempt is exactly when you most want the directory.
+
 ```sh
-benchctl run \
+bundle=$(benchctl run \
   --experiment scenarios/producer/headline/payload-16k-12p.toml \
   --subjects "$inputs/subjects.toml" \
   --cluster "$inputs/cluster.toml" \
   --bootstrap "$bootstrap" \
-  --results results
+  --results results | tail -n 1)
 ```
 
 **`suite`** repeats one scenario as paired blocks, alternating which subject
@@ -189,12 +274,10 @@ write their own reports as they go; this is how you read a single attempt after
 the fact. It reaches no broker and rewrites no bundle, so a reporting bug cannot
 move a measurement.
 
-A bundle is `results/<experiment-id>/<attempt-id>/`, so the most recent one is
-whichever directory holds the newest `status.json`:
+A bundle is `results/<experiment-id>/<attempt-id>/`, and `run` printed the one
+it sealed:
 
 ```sh
-bundle=$(dirname "$(ls -t results/*/*/status.json | head -n 1)")
-
 benchctl report --bundle "$bundle" --out reports/attempt.md
 ```
 
@@ -257,7 +340,14 @@ conclude from each field are in [`docs/EVIDENCE.md`](./docs/EVIDENCE.md).
 `scenarios/producer/headline/` is the predeclared headline set: a 128-byte
 latency floor, the balanced 1 KiB default, a 96-partition fanout point, a 16 KiB
 payload point, a deliberate overload with a declared SLO, and a balanced
-capacity search. Each file opens with the question it exists to answer.
+capacity search. Each file opens with the question it exists to answer, and each
+resolves.
+
+One file under `scenarios/` deliberately does not:
+`scenarios/producer/producer-baseline.toml` is the design document's parameter
+matrix, where every value is a list of settings to sweep rather than one
+setting. It is a reference for which axes exist, kept beside the runnable set
+and refused by the resolver on purpose.
 
 The 256 KiB and 900 KB payload points are not in that set. They moved to
 `scenarios/producer/deferred/` because the client under test declines records
@@ -298,6 +388,8 @@ What needs the siblings is anything that builds or runs a real subject:
 | Command | Needs |
 | --- | --- |
 | `scripts/check` | nothing but the pinned Rust and Node toolchains |
+| the offline first run above | nothing but the pinned Rust toolchain |
+| `scripts/generate-subject-config` | the three sibling checkouts, plus a librdkafka it downloads and builds on first use |
 | `scripts/check-benchmarks` | the three sibling checkouts, plus a bootstrapped librdkafka |
 | `scripts/bench-m0-acceptance`, `scripts/bench-suite-acceptance` | the above, plus a running broker |
 | `KAFKA_BENCH_PROVENANCE=strict scripts/check-dependency-provenance` | the siblings, on their pinned revisions and clean |

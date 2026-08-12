@@ -401,3 +401,73 @@ fn the_usage_text_names_every_verb() {
         );
     }
 }
+
+#[test]
+fn an_unknown_flag_is_named_before_anything_looks_for_its_value() {
+    // `--turbo` with nothing after it used to report that it needed a value,
+    // which tells a reader the option exists and they got the syntax wrong.
+    let error = parse(&arguments(&format!("{MINIMAL_RUN} --turbo"))).unwrap_err();
+
+    assert_eq!(error.kind(), CtlErrorKind::Usage);
+    assert!(
+        error.message().starts_with("unknown option --turbo"),
+        "{error}"
+    );
+    assert!(
+        !error.message().contains("needs a value"),
+        "an option that does not exist cannot be missing one: {error}"
+    );
+    // The same is true when a value *was* supplied.
+    assert!(
+        parse(&arguments(&format!("{MINIMAL_RUN} --turbo yes")))
+            .unwrap_err()
+            .message()
+            .starts_with("unknown option --turbo")
+    );
+    // And the message says what this verb does take, so the next attempt is a
+    // correction rather than another guess.
+    assert!(
+        parse(&arguments(&format!("{MINIMAL_RUN} --turbo yes")))
+            .unwrap_err()
+            .message()
+            .contains("--experiment")
+    );
+}
+
+#[test]
+fn a_bootstrap_endpoint_that_cannot_be_one_is_refused_at_parse_time() {
+    // A typo here is sealed into the runtime binding and the environment
+    // document of every bundle the attempt writes, and a sealed bundle is
+    // immutable. One line of stderr now costs less than an immutable record of
+    // a cluster nobody ran against.
+    for bad in [
+        "localhost",
+        "localhost:",
+        "localhost:not-a-port",
+        ":9092",
+        "127.0.0.1:9092,localhost",
+        "127.0.0.1:9092,127.0.0.1:99999",
+    ] {
+        let line =
+            format!("run --experiment s.toml --subjects s.toml --cluster c.toml --bootstrap {bad}");
+        assert_eq!(usage_kind(&line), CtlErrorKind::Usage, "{bad}");
+    }
+    for good in [
+        "localhost:9092",
+        "127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094",
+        "broker.internal:9093",
+        "[::1]:9092",
+    ] {
+        let line = format!(
+            "run --experiment s.toml --subjects s.toml --cluster c.toml --bootstrap {good}"
+        );
+        assert_eq!(run_of(&line).common.bootstrap, good);
+    }
+    // `pack` binds the same endpoints and checks them the same way.
+    assert_eq!(
+        usage_kind(
+            "pack --manifest p.toml --subjects s.toml --cluster c.toml --bootstrap localhost"
+        ),
+        CtlErrorKind::Usage
+    );
+}

@@ -110,7 +110,7 @@ pub use identity::{
     identity_document, is_digest_hex, sha256_hex,
 };
 pub use legacy::{KnownProducerResult, LegacyLatency, LegacyPercentiles, VerifierReport};
-pub use llm::{Confidence, LlmFinding, LlmHypothesis, LlmSummary};
+pub use llm::{Confidence, LlmFinding, LlmHypothesis, LlmProvenance, LlmSummary};
 pub use lock::{SubjectLockEntry, SubjectsLock};
 pub use packet::{
     AnalysisPacket, PacketFinding, PacketMetric, PacketSource, PacketSubject, PacketValidity,

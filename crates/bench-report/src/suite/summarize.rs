@@ -21,6 +21,7 @@ use super::gates::gates;
 use super::medians::{pair_dispersion, subject_dispersion, subject_medians};
 use super::pairs::paired_ratios;
 use super::report::{SubjectEconomics, SuiteOptions, SuiteReport};
+use super::surface::review_execution_surface;
 
 /// Summarizes a set of sealed bundles into `kafkars.suite-summary.v1`.
 ///
@@ -119,7 +120,19 @@ pub fn summarize_suite_report(
     let mut dispersion = subject_dispersion(&subjects, &valid);
     dispersion.extend(pair_dispersion.iter().cloned());
     let pairs = paired_ratios(&comparisons, &medians, &valid, options)?;
-    let gates = gates(&comparisons, &pairs, &pair_dispersion, &valid, options);
+    // A product-surface difference is reported beside the numbers rather than
+    // instead of them: the note travels into every rendering, and the ratio it
+    // qualifies stays exactly where it was.
+    let surface = review_execution_surface(&comparisons, &valid);
+    notes.extend(surface.notes.iter().cloned());
+    let gates = gates(
+        &comparisons,
+        &pairs,
+        &pair_dispersion,
+        &valid,
+        &surface,
+        options,
+    );
     let economics = subject_economics(&subjects, &loaded, &attempts, &mut notes);
 
     let repetitions = u32::try_from(bundle_roots.len()).unwrap_or(u32::MAX);

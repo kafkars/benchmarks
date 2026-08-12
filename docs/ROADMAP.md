@@ -8,6 +8,88 @@ Workloads that cannot run are a different list, in
 [`../scenarios/DEFERRED.md`](../scenarios/DEFERRED.md). This file is about the
 harness.
 
+## The subject-revision model
+
+The largest gap in the harness, and the one most likely to be mistaken for a
+feature that already exists.
+
+**What "base" and "head" mean today.** Two externally built binaries, named by
+absolute path in a `subjects.toml` that `scripts/generate-subject-config`
+writes, plus one shared sibling pin in
+`dependencies/sibling-revisions.env`. The adapter is built once, against that
+one pinned `kafka-client` revision, and both subjects in a comparison are
+whatever binaries happen to be on disk. **Two client revisions therefore cannot
+be compared in a single attempt.** A `head/base` pair today is two adapter
+builds a human arranged, and nothing in the sealed bundle proves they differ in
+the way the operator believes: `kafkars.subjects-lock.v1` records each binary's
+digest, which detects a swap but cannot say which client revision produced it.
+
+The interim pattern is a git worktree: check the two client revisions out side
+by side, build the adapter against each, and name the two binaries as two
+subjects. It works, it is what the acceptance scripts assume, and it is
+entirely outside the harness — nothing validates that the worktree was clean,
+nothing records which revision each binary came from, and nothing stops a stale
+binary from being compared against a fresh one.
+
+**What the model would be.** A `subjects/` directory of reviewed subject
+definitions, each naming its component revisions — client, driver, protocol —
+rather than a path. The control plane would check each definition out
+content-keyed under `target/subjects/<hash>`, so the same revision set is built
+once and reused, and two definitions that differ in any component get different
+directories by construction. A dirty worktree would be rejected outright rather
+than recorded and hoped about, because a subject whose source cannot be named
+is a measurement of something nobody can rebuild. The build identity of each —
+compiler, flags, profile, lock state, the fields
+`kafkars.benchmark-environment.v2` now records for the control plane's own
+build — would be captured per subject rather than once for the attempt.
+
+Deferred because it is a checkout-and-build subsystem rather than a field, and
+because the pieces it would rest on landed only recently: per-subject roles in
+the experiment identity, the subjects lock, and the build-identity fields in the
+environment document. Doing it before those existed would have meant inventing
+them inside it.
+
+## Cadences that have no workflow yet
+
+`scenarios/packs/` declares three cadences and `.github/workflows/` implements
+two of them. The PR pack runs in `ci.yml`'s non-gating `diagnostic` job and the
+nightly pack in `nightly.yml`; the **weekly** and **release** cadences are
+described in the packs and in `RELEASING.md` and have no workflow authored.
+
+Deferred rather than stubbed, because a scheduled workflow that runs a pack
+nobody has agreed the shape of produces evidence on a cadence nobody asked for —
+and because both of these want a stable runner, which this repository does not
+have. Running them on a shared hosted runner would produce weekly and release
+numbers with exactly the properties that make the nightly's numbers
+inadmissible, on artifacts that sound authoritative.
+
+## Cross-repository trigger from a product pull request
+
+The design's intent is that a pull request against `kafka-client` can ask this
+lab for a comparison. **Parked, not deferred**: implementing it requires adding
+a workflow to `kafka-client`, and this repository's standing constraint is that
+it does not modify sibling repositories. The half that lives here — a manifest,
+a `workflow_dispatch` entry point, and the PR pack — already exists; the half
+that lives there has to be a decision made there.
+
+## The remaining LLM summary flavors
+
+`scripts/benchmark-openai-summary` narrates one analysis packet under one
+committed prompt, `analysis/prompts/producer-comparison.v1.md`. Three more
+flavors are named in the design and none is built:
+
+- a **design comparison** summary, which reads a packet against the performance
+  contract rather than against another subject;
+- a **release report**, which would summarize a release's evidence set — and is
+  blocked by the same thing the release cadence is;
+- a **pull-request comment renderer**, which would turn a validated summary into
+  the comment body a bot posts.
+
+Each is a prompt artifact and a renderer, not new machinery: the guardrail that
+makes a summary evidence is `benchctl packet`, and it is already
+flavor-agnostic. They are deferred because a prompt is a reviewed document, and
+three unreviewed ones would be three ways to say something nobody checked.
+
 ## Protocol-aware loopback lab
 
 A broker-free lane that speaks enough of the wire protocol to answer engine

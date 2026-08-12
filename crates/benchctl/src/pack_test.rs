@@ -183,21 +183,28 @@ fn the_table_names_every_entry_and_counts_the_ones_that_exited_zero() {
                 repetitions: 3,
                 plan: Some(EntryPlan::Suite),
                 exit_code: 0,
+                evidence: None,
             },
             EntryOutcome {
                 scenario: "b.toml".to_owned(),
                 repetitions: 1,
                 plan: None,
                 exit_code: 65,
+                evidence: Some("results/abcd1234/20260812T101500Z-0123abcd".to_owned()),
             },
         ],
     );
     assert!(
-        table.contains("| 1 | `a.toml` | suite | 3 | 0 |"),
+        table.contains("| 1 | `a.toml` | suite | 3 | 0 | — |"),
         "{table}"
     );
     // An entry that could never be planned has no verb to name, and printing a
     // dash is more honest than guessing which one it would have been.
-    assert!(table.contains("| 2 | `b.toml` | — | 1 | 65 |"), "{table}");
+    assert!(
+        table.contains(
+            "| 2 | `b.toml` | — | 1 | 65 | `results/abcd1234/20260812T101500Z-0123abcd` |"
+        ),
+        "{table}"
+    );
     assert!(table.contains("1 of 2 entries exited 0."), "{table}");
 }

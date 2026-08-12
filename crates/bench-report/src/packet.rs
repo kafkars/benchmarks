@@ -13,12 +13,14 @@
 //! # Layout
 //!
 //! - `metrics` — the metric table, and the id layout every citation depends on.
+//! - `costs` — what each reporting subject spent per acknowledged record.
 //! - `findings` — the statements the deterministic layer makes, and the verdict
 //!   rule nothing downstream may disagree with.
 //! - `assemble` — the pass that puts one packet together.
 //! - `validate` — the one check a model-written summary has to pass.
 
 mod assemble;
+mod costs;
 mod findings;
 mod metrics;
 mod validate;
