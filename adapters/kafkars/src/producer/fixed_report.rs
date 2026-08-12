@@ -69,7 +69,7 @@ pub(super) fn build(
     let acknowledged = f64::from(u32::try_from(phase.acknowledged)?);
     let (uncorrected, corrected, schedule_delay) = phase.latency_reports();
     Ok(FixedProducerReport {
-        schema: "kafkars.producer-fixed-load.v1",
+        schema: crate::protocol::LEGACY_FIXED_RATE_RESULT_SCHEMA,
         adapter: "kafkars",
         adapter_version: env!("CARGO_PKG_VERSION"),
         run_id: common.run_id.clone(),

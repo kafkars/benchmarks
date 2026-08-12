@@ -1,0 +1,6 @@
+# Both files here are exact bytes. The golden is one adapter's stdout and the
+# input is what produced it, so a line-ending rewrite on checkout would change
+# the vector the C and Rust adapters are held to. Opt both out of all
+# normalization, exactly as the other conformance goldens are.
+*.vector -text
+*.input -text

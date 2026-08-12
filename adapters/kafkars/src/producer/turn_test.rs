@@ -2,7 +2,7 @@
 
 use std::error::Error;
 
-use super::admission_turn::AdmissionTurn;
+use super::turn::AdmissionTurn;
 
 #[test]
 fn retries_retain_the_same_turn_until_admission() -> Result<(), Box<dyn Error>> {

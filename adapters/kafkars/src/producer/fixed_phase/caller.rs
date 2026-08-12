@@ -18,8 +18,8 @@ use kafkars::{Producer, Record, SendBatch, SendBatchResult};
 
 use crate::schedule::ScheduledBatch;
 
-use super::{FixedPhaseResult, FixedPhaseSpec, admission_turn::AdmissionTurn, result};
-use crate::producer::{COMPLETION_TIMEOUT, batch_phase::result::records};
+use super::{FixedPhaseResult, FixedPhaseSpec, result};
+use crate::producer::{COMPLETION_TIMEOUT, batch_phase::result::records, turn::AdmissionTurn};
 
 #[derive(Debug)]
 pub(super) struct Slot {

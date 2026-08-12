@@ -6,17 +6,27 @@
 //! This adapter keeps its legacy positional commands (`produce`,
 //! `produce-fixed`, `payload`, `schedule`, `topics-*`) exactly as they were,
 //! because the migrated Node control plane still drives them and its evidence
-//! has to stay comparable. The protocol verbs added here are a second door into
-//! the same rooms: they parse a `kafkars.experiment.v1` document, map it onto
-//! the very same argument structs the legacy commands build, and call the very
-//! same phase code. Nothing about the measured path is duplicated, so the two
-//! surfaces cannot measure different things.
+//! has to stay comparable. The protocol verbs parse a `kafkars.experiment.v1`
+//! document and map it onto the very same argument structs the legacy commands
+//! build — the workload, the client configuration, and the phase shapes are
+//! one thing, resolved in one place.
 //!
-//! The result document is byte-identical between the two doors as well. Both
-//! render through [`producer::RunOutcome::render`]; the legacy arm prints the
-//! line to stdout and this module writes the same line, newline-terminated,
-//! into `result.json` — which is exactly what the legacy shell redirect
-//! produced.
+//! What the protocol verbs no longer share is the *instrumentation*. `run`
+//! drives `producer::v2`, whose admission clock spans queue-full retries and
+//! whose evidence is bounded histograms rather than per-record arrays. That is
+//! a change in what is measured, and applying it to the legacy verbs would
+//! redefine measurements already sealed under their name. The two paths
+//! therefore differ deliberately, and say so with two schema ids.
+//!
+//! The result documents deliberately differ. The legacy arm prints
+//! `kafkars.producer-benchmark.v1` on stdout, exactly as it always has,
+//! because a control plane's sealed evidence cannot be redefined after the
+//! fact. This module writes `kafkars.producer-benchmark.v2`: the same phase
+//! shapes, admitted through the same client configuration, but measured with
+//! an admission clock that survives queue-full retries and stored in bounded
+//! histograms rather than per-record arrays. Two schema ids is how that
+//! difference is stated honestly — the file layout is unchanged, one JSON line
+//! and the newline the legacy shell redirect added.
 //!
 //! # Declining is a first-class answer
 //!
@@ -44,7 +54,7 @@ use std::{
 
 use bench_schema::{
     AdapterCapabilities, AdapterDescription, AdapterStatus, ArrivalModel, ExperimentKind, LoadMode,
-    ResolvedExperiment, SubjectSpec, ValidateReport, pretty_bytes,
+    ProducerBenchmarkV2, ResolvedExperiment, SubjectSpec, ValidateReport, pretty_bytes,
 };
 
 use crate::{
@@ -55,13 +65,25 @@ use crate::{
 /// Adapter name, matching the subject name the legacy harness used.
 pub(crate) const ADAPTER_NAME: &str = "kafkars";
 
-/// Result document this adapter writes for a closed-loop run.
-pub(crate) const CLOSED_LOOP_RESULT_SCHEMA: &str = "kafkars.producer-benchmark.v1";
+/// Result document this adapter writes on the protocol path, in both load
+/// modes.
+///
+/// One schema for both, because v2 describes offers rather than phases: a
+/// closed-loop and a fixed-rate measurement differ in whether their offers had
+/// a schedule, which the document says in `load_mode` and in the presence of
+/// `timing.intended_to_call_start`, not in its shape.
+pub(crate) const RESULT_SCHEMA: &str = ProducerBenchmarkV2::SCHEMA;
 
-/// Result document this adapter writes for a fixed-rate run.
-pub(crate) const FIXED_RATE_RESULT_SCHEMA: &str = "kafkars.producer-fixed-load.v1";
+/// Result document the legacy `produce` verb still prints on stdout.
+pub(crate) const LEGACY_CLOSED_LOOP_RESULT_SCHEMA: &str = "kafkars.producer-benchmark.v1";
 
-/// Per-record latency evidence, written next to the result.
+/// Result document the legacy `produce-fixed` verb still prints on stdout.
+pub(crate) const LEGACY_FIXED_RATE_RESULT_SCHEMA: &str = "kafkars.producer-fixed-load.v1";
+
+/// Per-record latency evidence the legacy verbs write next to their result.
+///
+/// The protocol path writes no such file: run-sized per-record rows are
+/// precisely the evidence v2's bounded histograms replace.
 pub(crate) const LATENCY_FILE: &str = "latency.csv";
 
 /// The measurement document the control plane seals.
@@ -128,18 +150,19 @@ pub(crate) fn run(experiment_path: &Path, output: &Path) -> Result<(), Box<dyn E
     let started_at = utc_rfc3339_millis(SystemTime::now());
     std::fs::create_dir_all(output)?;
     match execute(experiment_path, output) {
-        Ok(outcome) => {
-            let status = if outcome.valid {
-                AdapterStatus::succeeded(started_at, now())
-            } else {
-                AdapterStatus::failed("drain", outcome.invalid_reason, started_at, now())
-            };
-            write_status(output, &status)?;
-            if outcome.valid {
-                Ok(())
-            } else {
-                Err(outcome.invalid_reason.into())
-            }
+        Ok(document) if document.valid => {
+            write_status(output, &AdapterStatus::succeeded(started_at, now()))?;
+            Ok(())
+        }
+        Ok(document) => {
+            let reason = document
+                .invalid_reason
+                .unwrap_or_else(|| "the measurement was declared invalid".to_owned());
+            write_status(
+                output,
+                &AdapterStatus::failed("drain", reason.clone(), started_at, now()),
+            )?;
+            Err(reason.into())
         }
         Err(failure) => {
             let reason = failure.to_string();
@@ -154,7 +177,7 @@ pub(crate) fn run(experiment_path: &Path, output: &Path) -> Result<(), Box<dyn E
 
 /// The measured path: parse, decline or accept, translate, produce, seal the
 /// result document.
-fn execute(experiment_path: &Path, output: &Path) -> Result<producer::RunOutcome, Box<dyn Error>> {
+fn execute(experiment_path: &Path, output: &Path) -> Result<ProducerBenchmarkV2, Box<dyn Error>> {
     let experiment = read_experiment(experiment_path)?;
     let subject = subject_of(&experiment, Some(output))?.name.clone();
     let verdict = report(&experiment, Some(&subject));
@@ -165,14 +188,30 @@ fn execute(experiment_path: &Path, output: &Path) -> Result<producer::RunOutcome
         )
         .into());
     }
-    let outcome = match experiment.load_mode {
-        LoadMode::ClosedLoop => producer::run(&produce_arguments(&experiment, &subject, output)?),
+    let document = match experiment.load_mode {
+        LoadMode::ClosedLoop => {
+            producer::run_closed_loop_v2(&produce_arguments(&experiment, &subject, output)?)
+        }
         LoadMode::ScheduledOpenLoopFixedRate => {
-            producer::run_fixed(&fixed_arguments(&experiment, &subject, output)?)
+            producer::run_fixed_rate_v2(&fixed_arguments(&experiment, &subject, output)?)
         }
     }?;
-    std::fs::write(output.join(RESULT_FILE), format!("{}\n", outcome.json))?;
-    Ok(outcome)
+    write_result(output, &document)?;
+    Ok(document)
+}
+
+/// Writes the measurement as one JSON line, after it has checked itself.
+///
+/// The document validates before it is written rather than after it is read,
+/// so a measurement whose own accounting does not add up never becomes a file
+/// and can never be sealed into a bundle. A reader who finds a `result.json`
+/// here is therefore reading something that already satisfied
+/// [`ProducerBenchmarkV2::validate`] on the writing side.
+fn write_result(output: &Path, document: &ProducerBenchmarkV2) -> Result<(), Box<dyn Error>> {
+    document.validate()?;
+    let line = serde_json::to_string(document)?;
+    std::fs::write(output.join(RESULT_FILE), format!("{line}\n"))?;
+    Ok(())
 }
 
 /// Returns the capability document for this adapter.
@@ -184,10 +223,10 @@ fn execute(experiment_path: &Path, output: &Path) -> Result<producer::RunOutcome
 /// repository's sibling layout.
 pub(crate) fn description() -> AdapterDescription {
     let mut result_schemas = std::collections::BTreeMap::new();
-    result_schemas.insert(LoadMode::ClosedLoop, CLOSED_LOOP_RESULT_SCHEMA.to_owned());
+    result_schemas.insert(LoadMode::ClosedLoop, RESULT_SCHEMA.to_owned());
     result_schemas.insert(
         LoadMode::ScheduledOpenLoopFixedRate,
-        FIXED_RATE_RESULT_SCHEMA.to_owned(),
+        RESULT_SCHEMA.to_owned(),
     );
     AdapterDescription {
         schema: AdapterDescription::SCHEMA.to_owned(),
@@ -200,10 +239,17 @@ pub(crate) fn description() -> AdapterDescription {
             transactions: false,
             tls: false,
             compression: vec!["none".to_owned()],
-            completion_modes: vec!["aggregate-batch-terminal".to_owned()],
+            completion_modes: vec![producer::V2_COMPLETION_MODE.to_owned()],
             // Records are handed to the client as owned `Bytes`, so admission
-            // moves the buffer rather than copying it.
-            ownership_modes: vec!["owned-handoff".to_owned()],
+            // moves the buffer rather than copying it. The second entry is the
+            // narrower thing the v2 path declares having done: the same owned
+            // handoff, with the bytes copied from a pool built before the
+            // measured interval. A reader who checks a measurement's
+            // `declared.ownership` against this list must find it here.
+            ownership_modes: vec![
+                "owned-handoff".to_owned(),
+                producer::V2_OWNERSHIP.to_owned(),
+            ],
             metric_families: vec![
                 "latency".to_owned(),
                 "throughput".to_owned(),
