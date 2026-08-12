@@ -103,6 +103,48 @@ fn a_child_that_fails_keeps_its_exit_code_and_says_so() {
     assert!(failure.reason.contains("exited with 1"), "{failure:?}");
 }
 
+/// A benchmark stand-in that kills itself, for the one ending that has no exit
+/// code at all.
+fn self_killing_binary(directory: &Path) -> PathBuf {
+    let path = directory.join("dies-on-signal.sh");
+    std::fs::write(&path, "#!/bin/sh\nkill -9 $$\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    path
+}
+
+#[test]
+#[cfg(unix)]
+fn a_child_that_dies_on_a_signal_says_which_signal() {
+    // A signalled death has no exit code, and reporting it as one filed an
+    // out-of-memory kill, a segmentation fault, and a supervisor's own SIGKILL
+    // under the same sentence as a benchmark that ran and disagreed with
+    // itself. Those are different findings and the status document has to be
+    // able to tell them apart.
+    let output = scratch("signal-death");
+    let experiment = experiment_file(&output, LoadMode::ClosedLoop);
+    let binary = self_killing_binary(&output);
+
+    let code = execute(&binary, &experiment, &output);
+
+    assert_eq!(code, EXIT_FAILURE);
+    let status = status_of(&output);
+    assert_eq!(status.outcome, AdapterOutcome::Failed);
+    let failure = status.failure.unwrap();
+    assert_eq!(failure.stage, "run");
+    assert!(
+        failure.reason.contains("died on signal 9"),
+        "the signal number is the whole finding: {failure:?}"
+    );
+    assert!(
+        !failure.reason.contains("exited with"),
+        "a process that died on a signal never exited with anything: {failure:?}"
+    );
+}
+
 #[test]
 fn a_binary_that_cannot_be_spawned_is_a_spawn_failure() {
     let output = scratch("spawn-failure");

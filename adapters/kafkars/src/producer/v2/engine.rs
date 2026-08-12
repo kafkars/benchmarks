@@ -18,13 +18,16 @@ use kafkars::{
     ErrorKind, KafkaError, Producer, Record, RecordMetadata, SendBatch, SendBatchResult,
 };
 
-use crate::producer::turn::{AdmissionPermit, AdmissionTurn};
+use crate::producer::{
+    flush_until,
+    turn::{AdmissionPermit, AdmissionTurn},
+};
 
 use super::{
     PhaseContext,
     admission::AdmissionClock,
     clock::RunClock,
-    measurement::{Measurement, OfferGroup, Terminal},
+    measurement::{Measurement, OfferAttempt, OfferGroup, Terminal},
     outstanding::OutstandingGauge,
     slab::OfferSlab,
 };
@@ -136,6 +139,23 @@ impl<'a> OfferEngine<'a> {
     /// scheduler lateness, the admission wait — is derived from that one
     /// immutable value, so none of it can be recomputed against a later
     /// attempt.
+    ///
+    /// # Where the two brackets start
+    ///
+    /// The caller's own outstanding-budget wait is *over* by the time this is
+    /// entered, and the stamp below is the first thing that happens; everything
+    /// after it — the submission-order turn, the client's call, every
+    /// queue-full retry of the same offer — is inside the admission wait.
+    /// `docs/EVIDENCE.md` states that bracket normatively and the librdkafka
+    /// adapter takes its stamp at the same point
+    /// (`v2_phase.c: await_budget_then_stamp`), so the two adapters'
+    /// `call_start_to_accepted` and `intended_to_call_start` divide the same
+    /// wall-clock interval in the same place.
+    ///
+    /// The offer is counted as *offered* immediately after the stamp, while the
+    /// client has still said nothing about it, so a refused or failed admission
+    /// leaves `offered` above `accepted` rather than agreeing with it because
+    /// the same line recorded both.
     pub(super) fn admit(
         &mut self,
         records: Vec<Record>,
@@ -149,22 +169,29 @@ impl<'a> OfferEngine<'a> {
         if self.active_offers.saturating_add(count) > self.budget {
             return Err("an offer group was admitted past the offer budget".into());
         }
+        // The bracket opens here, before the engine's own bookkeeping, because
+        // the C adapter reserves its slab entry inside the bracket too. What
+        // the harness spends between the budget gate and the client's call is
+        // the harness's to account for, in both adapters.
+        let mut attempt = OfferAttempt {
+            first_sequence,
+            count,
+            admission: AdmissionClock::start(self.clock.now_ns()),
+        };
         let index = self.slab.reserve()?;
         let wake = Arc::new(GroupWake {
             index,
             sender: self.sender.clone(),
             queued: AtomicBool::new(false),
         });
+        self.measurement.record_offered(&attempt)?;
         let mut pending = records;
-        let mut admission = AdmissionClock::start(self.clock.now_ns());
         loop {
             let permit = order.wait()?;
             let operation = self.producer.send_batch(pending);
             let accepted_ns = self.clock.now_ns();
             let group = OfferGroup {
-                first_sequence,
-                count,
-                admission,
+                attempt,
                 accepted_ns,
             };
             let slot = Slot {
@@ -174,24 +201,36 @@ impl<'a> OfferEngine<'a> {
             };
             match poll_slot(slot) {
                 SlotPoll::Parked(slot) => {
-                    self.measurement.record_offered(&group)?;
-                    self.measurement.record_accepted(&group);
                     self.slab.store(index, slot)?;
                     self.active_offers = self.active_offers.saturating_add(count);
                     self.outstanding.admitted(count);
-                    return complete(permit);
+                    // The turn is released before the histograms are touched:
+                    // the client has the bytes, so the next caller's admission
+                    // may begin, and the cost of recording this group must not
+                    // be charged to that caller's admission wait.
+                    complete(permit)?;
+                    self.measurement.record_accepted(&group);
+                    return Ok(());
                 }
                 SlotPoll::Ready(result) => match classify(result, count)? {
                     Admission::Accepted(deliveries) => {
                         let terminal_ns = self.clock.now_ns();
                         self.slab.release(index)?;
-                        self.measurement.record_offered(&group)?;
+                        // The client owned this group, however briefly, so the
+                        // outstanding gauge sees it: `max_outstanding_observed`
+                        // must be the same statistic in both adapters, and the
+                        // C adapter counts an offer from the moment its slot is
+                        // reserved.
+                        self.outstanding.admitted(count);
+                        self.outstanding.settled(count);
+                        complete(permit)?;
                         self.measurement.record_accepted(&group);
                         self.record_terminals(&group, terminal_ns, &deliveries)?;
-                        return complete(permit);
+                        return Ok(());
                     }
                     Admission::Refused(returned) => {
-                        admission.rejected();
+                        attempt.admission.rejected();
+                        self.measurement.record_refusal();
                         pending = returned;
                         abandon(permit);
                         thread::yield_now();
@@ -241,19 +280,41 @@ impl<'a> OfferEngine<'a> {
         }
     }
 
-    /// Waits out the outstanding offers, then counts what never resolved.
+    /// Waits out the outstanding offers, flushes the client, then counts what
+    /// never resolved.
     ///
     /// The deadline is the client's own delivery timeout: past it, a record
     /// that has not reached a terminal is not going to. Those offers are
     /// counted as `unknown` rather than assumed lost or assumed delivered,
     /// because the adapter genuinely does not know which, and they stay
     /// visible as the run's final outstanding depth.
+    ///
+    /// # Why the flush is here and not after
+    ///
+    /// The phase used to snapshot `unknown` and then flush, so records the
+    /// flush was about to deliver had already been counted as offers with no
+    /// terminal — the adapter blamed the client for work it had not yet asked
+    /// it to finish. The flush therefore happens first, inside the same
+    /// deadline rather than after it (a 60-second drain followed by a
+    /// 65-second flush is a 125-second bound nobody chose), and `unknown` is
+    /// whatever is genuinely left afterwards. The librdkafka adapter drains in
+    /// the same order: `rd_kafka_flush`, then the snapshot under the lock.
     pub(super) fn drain(&mut self, timeout: Duration) -> Result<(), Box<dyn Error>> {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or("the drain deadline overflowed")?;
         while self.active_offers > 0 && self.settle(deadline)? {}
-        while self.active_offers > 0 && self.sweep()? {}
+        flush_until(self.producer, deadline)?;
+        while self.active_offers > 0 && self.settle(deadline)? {}
+        // One sweep always runs, because a lost wake is exactly the case this
+        // path exists for; further sweeps only while the drain budget lasts,
+        // since each one polls every slab entry and past the deadline the
+        // answer is `unknown` either way.
+        while self.active_offers > 0 && self.sweep()? {
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
         self.measurement.record_unknown(self.active_offers);
         Ok(())
     }
@@ -286,9 +347,9 @@ impl<'a> OfferEngine<'a> {
                 SlotPoll::Ready(result) => {
                     let terminal_ns = self.clock.now_ns();
                     self.slab.release(index)?;
-                    self.active_offers = self.active_offers.saturating_sub(group.count);
-                    self.outstanding.settled(group.count);
-                    match classify(result, group.count)? {
+                    self.active_offers = self.active_offers.saturating_sub(group.attempt.count);
+                    self.outstanding.settled(group.attempt.count);
+                    match classify(result, group.attempt.count)? {
                         Admission::Accepted(deliveries) => {
                             self.record_terminals(&group, terminal_ns, &deliveries)?;
                             settled = true;
@@ -315,6 +376,7 @@ impl<'a> OfferEngine<'a> {
         for (index, delivery) in deliveries.iter().enumerate() {
             if let Err(error) = delivery {
                 let sequence = group
+                    .attempt
                     .first_sequence
                     .saturating_add(u64::try_from(index).unwrap_or(u64::MAX));
                 self.measurement.note_failure(sequence, error);
@@ -347,9 +409,9 @@ impl<'a> OfferEngine<'a> {
                 SlotPoll::Ready(result) => {
                     let terminal_ns = self.clock.now_ns();
                     self.slab.release(index)?;
-                    self.active_offers = self.active_offers.saturating_sub(group.count);
-                    self.outstanding.settled(group.count);
-                    match classify(result, group.count)? {
+                    self.active_offers = self.active_offers.saturating_sub(group.attempt.count);
+                    self.outstanding.settled(group.attempt.count);
+                    match classify(result, group.attempt.count)? {
                         Admission::Accepted(deliveries) => {
                             self.record_terminals(&group, terminal_ns, &deliveries)?;
                             return Ok(true);

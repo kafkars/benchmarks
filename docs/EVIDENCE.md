@@ -79,7 +79,7 @@ Every offer owns one immutable identity and four monotonic timestamps:
 | Timestamp | Meaning |
 |---|---|
 | `intended` | When the schedule said this record should be offered |
-| `call_start` | When the application entered the client's admission call |
+| `call_start` | When the application began admitting this offer: after its own budget wait, before the client's call |
 | `accepted` | When the client took ownership of the bytes |
 | `terminal` | When the record reached acknowledgement, failure, or timeout |
 
@@ -95,10 +95,73 @@ timestamps give the four distributions:
 - `call_start_to_accepted` — `accepted - call_start`. Admission wait,
   including every retry of the same offer.
 - `intended_to_call_start` — `call_start - intended`. Scheduler lateness,
-  present exactly when a schedule existed.
+  present exactly when a schedule existed. It carries the application's own
+  outstanding-budget wait, because that is what a schedule slipping under
+  backpressure looks like.
 
 The clock is always `monotonic-ns`. Wall clocks name things; monotonic
 clocks measure them.
+
+### Where `call_start` is taken
+
+Two of the four distributions meet at `call_start`, so where it is stamped
+decides which of them a wait lands in. The point is therefore normative
+rather than incidental, and it is this:
+
+> `call_start` is taken *after* the application's own outstanding-budget
+> wait and *before* anything that is part of the admission itself.
+
+**Excluded: the harness's own backpressure.** Both adapters cap how many
+offers they will let the client own at once, and a caller that has reached
+its cap waits for a completion before offering again. That wait is the
+harness's policy rather than the client's behaviour, and folding it into the
+admission wait would report a client as slow for obeying a bound the harness
+chose. It is not thereby hidden. Under `scheduled-open-loop-fixed-rate` it
+delays the public call and so appears in full in `intended_to_call_start`,
+which is where a reader watches the schedule slip. Under `closed-loop` there
+is no schedule to be late against, so the wait is deliberately invisible in
+every latency and visible only in throughput: a closed-loop caller that
+spends longer waiting for its own budget offers fewer records per second and
+reports the same per-offer latency, which is what a closed-loop measurement
+means.
+
+**Included: everything the offer then waits through.** The harness's
+submission-order serialization — the fixed-rate callers take turns so that
+the public call sequence is the schedule's own rather than the operating
+system's — then the client's admission call, then every queue-full retry of
+the same offer. An offer refused nine times and taken on the tenth carries
+all ten attempts in one `call_start_to_accepted` sample, because they are
+attempts at one offer whose identity never changed.
+
+Both adapters also do the offer's own bookkeeping inside this bracket —
+counting it as offered, and under a schedule recording its lateness samples —
+rather than after the client has answered. That is what lets `offered` count
+public calls that began, so that a refused batch reports `offered` above
+`accepted` instead of agreeing with it by construction; and doing it on both
+sides means the few microseconds it costs are common to both rather than a
+difference between them.
+
+Both shipped adapters implement this bracket at one place each: `kafkars` in
+`OfferEngine::admit`, where `AdmissionClock::start` runs after the caller's
+budget loop and before `AdmissionOrder::wait`; and `librdkafka-c` in
+`await_budget_then_stamp`, which performs the budget wait and the stamp in
+that order in one function so the two cannot drift apart. **A future adapter
+must take its stamp at the same point.** Two adapters that bracket
+differently produce `call_start_to_accepted` values that are not comparable
+and `intended_to_call_start` values that are not comparable either, while
+both documents still satisfy every invariant below — which would put the
+difference in exactly the place a reader cannot see it.
+
+### The measured interval
+
+`throughput.measured_duration_ns` is the phase's own wall clock — from the
+schedule epoch, or from the first offer under closed loop, to the end of the
+drain — read from the same monotonic clock as the four timestamps. It is not
+the last terminal that happened to arrive: a phase whose offers all ended
+`unknown` has no last terminal at all, and calling that interval zero divides
+a goodput by nothing. Both adapters measure this interval the same way, so
+the `acknowledged_records_per_second` of two subjects are over spans that can
+be compared.
 
 ### Accounting invariants
 

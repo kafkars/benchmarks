@@ -146,13 +146,28 @@ pub(crate) fn run_fixed_rate_v2(
 /// with its own symptom, and the run reported the consequence instead of the
 /// cause. The measurement's error is therefore the one that survives, and a
 /// close failure is appended to it rather than substituted for it.
+///
+/// A close failure after a *good* measurement is not a failure of the run
+/// either. The offers were made, the client answered them, and the terminals
+/// were observed and recorded; what happened afterwards is teardown of a
+/// process that is about to exit, and every attempt runs in a fresh one, so
+/// there is no state a hung close can carry into the next. Throwing the
+/// document away would delete evidence that was already complete and leave a
+/// reader with nothing to read but the shutdown. The warning goes to stderr,
+/// which the control plane captures, so the hiccup stays visible without being
+/// mistaken for the result.
 pub(super) fn seal<T>(
     outcome: Result<T, Box<dyn Error>>,
     closed: Result<(), Box<dyn Error>>,
 ) -> Result<T, Box<dyn Error>> {
     match (outcome, closed) {
         (Ok(document), Ok(())) => Ok(document),
-        (Ok(_), Err(close)) => Err(close),
+        (Ok(document), Err(close)) => {
+            eprintln!(
+                "kafkars: the measurement completed and the session then failed to close: {close}"
+            );
+            Ok(document)
+        }
         (Err(failure), Ok(())) => Err(failure),
         (Err(failure), Err(close)) => {
             Err(format!("{failure}; the session then failed to close: {close}").into())
@@ -186,8 +201,10 @@ fn measure_closed_loop(
         prime_partitions: false,
     };
     let measurement = closed_loop::run(&context, shape, Measurement::closed_loop())?;
+    // The phase's drain has already flushed the client and counted what
+    // remained afterwards, so the measured interval ends here and there is
+    // nothing left to push out.
     let measured_duration_ns = context.clock.at(Instant::now());
-    super::flush(&session.producer)?;
     document::build(&DocumentRequest {
         run_id: &arguments.run_id,
         load_mode: LoadMode::ClosedLoop,
@@ -222,7 +239,6 @@ fn measure_fixed_rate(
         offered_records_per_second: arguments.offered_records_per_second,
         outstanding: &outstanding,
     })?;
-    super::flush(&session.producer)?;
     document::build(&DocumentRequest {
         run_id: &common.run_id,
         load_mode: LoadMode::ScheduledOpenLoopFixedRate,
@@ -265,8 +281,9 @@ fn warm_up(
         budget,
         prime_partitions: true,
     };
+    // The warmup's own drain flushes, so its acknowledgement count below is
+    // taken after the client was asked to finish rather than before.
     let warmup = closed_loop::run(&context, shape, Measurement::closed_loop())?;
-    super::flush(&session.producer)?;
     let outcomes = warmup.outcomes();
     if outcomes.acknowledged != records || outcomes.failed != 0 || outcomes.timed_out != 0 {
         return Err(format!(

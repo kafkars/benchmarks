@@ -113,9 +113,11 @@ struct bench_phase_s {
 /*
  * One offer of the v2 evidence contract: an immutable identity carrying four
  * timestamps, all nanoseconds since the measured phase began. `call_start_ns`
- * is written once, before the application blocks for admission, and is never
- * rewritten by a queue-full retry of the same offer — that reset is the defect
- * the v2 path exists to remove.
+ * is written once, after the application's own outstanding-budget wait and
+ * before anything that is part of admission, and is never rewritten by a
+ * queue-full retry of the same offer — that reset is the defect the v2 path
+ * exists to remove. `docs/EVIDENCE.md` states that bracket normatively, and
+ * `await_budget_then_stamp` in `v2_phase.c` is the only place it is taken.
  */
 typedef struct bench_offer_s {
         uint64_t intended_ns;
@@ -161,7 +163,9 @@ typedef struct bench_v2_phase_s {
         uint64_t unknown;
         uint64_t outstanding;
         uint64_t max_outstanding_observed;
-        uint64_t last_terminal_ns;
+        /* Schedule epoch to end of drain, on the phase's own monotonic clock:
+           the interval the document's throughput is over. */
+        uint64_t measured_duration_ns;
 
         bench_histogram_t intended_to_terminal;
         bench_histogram_t accepted_to_terminal;
