@@ -1,14 +1,15 @@
 //! Entry point for the `benchctl` control plane.
 //!
-//! **This binary is a stub.** The command surface is fixed by the design —
-//! `benchctl resolve` and `benchctl run` — but no verb is implemented yet, so
-//! every invocation is reported as a usage error. Exit code `64` is the usage
-//! slot in this repository's exit-code table and is deliberately distinct from
-//! the sealed-outcome codes, so a caller can already tell "you asked wrongly"
-//! apart from "the attempt failed" before any attempt exists.
+//! The binary is deliberately a shell: it hands the argument vector to
+//! [`benchctl::cli::run`] and exits with the code that comes back. Everything
+//! worth testing — parsing, resolution, supervision, sealing — lives in the
+//! library, so an integration test drives exactly the same code path this
+//! process does rather than an approximation of it.
+//!
+//! Nothing here decides an exit code. The table lives in `error.rs`, because a
+//! caller reading `20` must be able to find one place that says what 20 means.
 #![forbid(unsafe_code)]
 
 fn main() {
-    eprintln!("usage: benchctl <resolve|run> --experiment <path> [options] (not implemented yet)");
-    std::process::exit(64);
+    std::process::exit(benchctl::cli::run(&std::env::args().collect::<Vec<_>>()));
 }

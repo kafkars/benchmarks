@@ -1,0 +1,88 @@
+{
+  "schema": "kafkars.subjects-lock.v1",
+  "subjects": [
+    {
+      "binary_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "command": [
+        "target/release/kafkars-benchmark-adapter",
+        "--adapter-protocol"
+      ],
+      "describe": {
+        "capabilities": {
+          "completion_modes": [
+            "aggregate-batch-terminal"
+          ],
+          "compression": [
+            "none"
+          ],
+          "consumer": false,
+          "idempotence": true,
+          "metric_families": [
+            "latency",
+            "throughput"
+          ],
+          "ownership_modes": [
+            "client-owned"
+          ],
+          "producer": true,
+          "tls": false,
+          "transactions": false
+        },
+        "name": "kafkars",
+        "result_schemas": {
+          "closed-loop": "kafkars.producer-benchmark.v1"
+        },
+        "schema": "kafkars.adapter.v1",
+        "version": "0.1.0"
+      },
+      "name": "kafkars",
+      "validate": {
+        "reasons": [],
+        "schema": "kafkars.adapter-validate.v1",
+        "supported": true
+      }
+    },
+    {
+      "binary_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "command": [
+        "target/release/bench-adapter-librdkafka",
+        "--binary",
+        "target/librdkafka/librdkafka-producer-benchmark"
+      ],
+      "describe": {
+        "capabilities": {
+          "completion_modes": [
+            "aggregate-batch-terminal"
+          ],
+          "compression": [
+            "none"
+          ],
+          "consumer": false,
+          "idempotence": true,
+          "metric_families": [
+            "latency",
+            "throughput"
+          ],
+          "ownership_modes": [
+            "client-owned"
+          ],
+          "producer": true,
+          "tls": false,
+          "transactions": false
+        },
+        "name": "librdkafka-c",
+        "result_schemas": {
+          "closed-loop": "kafkars.producer-benchmark.v1"
+        },
+        "schema": "kafkars.adapter.v1",
+        "version": "2.15.0"
+      },
+      "name": "librdkafka-c",
+      "validate": {
+        "reasons": [],
+        "schema": "kafkars.adapter-validate.v1",
+        "supported": true
+      }
+    }
+  ]
+}

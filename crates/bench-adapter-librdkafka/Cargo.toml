@@ -11,4 +11,9 @@ publish = false
 [lints]
 workspace = true
 
+# The shim speaks the protocol documents and spawns one child. It deliberately
+# does not depend on `benchctl`: an adapter that imported the control plane
+# would stop being replaceable by an adapter somebody else wrote, which is the
+# whole reason the protocol is documents and processes rather than a trait.
 [dependencies]
+bench-schema.workspace = true
