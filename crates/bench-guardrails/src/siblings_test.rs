@@ -58,7 +58,9 @@ fn a_test_whose_subject_vanished_is_reported() {
 }
 
 #[test]
-fn a_subject_one_directory_up_is_not_a_sibling() {
+fn a_test_inside_its_own_subjects_directory_is_a_sibling() {
+    // a/b/b_test.rs is the unit test of a/b.rs: it lives inside the subject's
+    // privacy boundary, so it needs no sibling b.rs in its own directory.
     let files = [
         source(
             "crates/demo/src/lib.rs",
@@ -66,6 +68,25 @@ fn a_subject_one_directory_up_is_not_a_sibling() {
         ),
         source("crates/demo/src/phase.rs", ""),
         source("crates/demo/src/phase/phase_test.rs", ""),
+    ];
+    let findings = sibling_findings(&files);
+    assert!(
+        findings.iter().all(|finding| !finding.contains("orphan")),
+        "accepted shape reported as orphan: {findings:?}"
+    );
+}
+
+#[test]
+fn a_mismatched_test_inside_a_subject_directory_is_still_an_orphan() {
+    // Only a/b/b_test.rs is inside its own subject; a/b/inner_test.rs with no
+    // inner.rs beside it names a subject that does not exist.
+    let files = [
+        source(
+            "crates/demo/src/lib.rs",
+            "//! c\n#[cfg(test)]\nmod inner_test;\n",
+        ),
+        source("crates/demo/src/phase.rs", ""),
+        source("crates/demo/src/phase/inner_test.rs", ""),
     ];
 
     assert_eq!(
