@@ -1,0 +1,16 @@
+# Subject list fixture for the resolver goldens.
+#
+# The commands are deliberately fake. This test pins how a subject list maps
+# into a resolved experiment and a subjects lock, and it must keep running on a
+# machine where neither adapter has been built.
+[[subjects]]
+name = "kafkars"
+command = ["target/release/kafkars-benchmark-adapter", "--adapter-protocol"]
+
+[[subjects]]
+name = "librdkafka-c"
+command = [
+  "target/release/bench-adapter-librdkafka",
+  "--binary",
+  "target/librdkafka/librdkafka-producer-benchmark",
+]

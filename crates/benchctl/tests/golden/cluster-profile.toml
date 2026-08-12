@@ -1,0 +1,17 @@
+# Cluster profile fixture for the resolver goldens.
+#
+# It describes the three-broker KRaft cluster under `clusters/dev-compose/`,
+# because that is the cluster the migrated balanced-1k scenario was written
+# against. The tool argument vectors are the legacy ones, prefix-form: the
+# control plane appends the positional arguments each tool already expects.
+name = "dev-compose"
+bootstrap = "127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094"
+broker_version = "4.3.1"
+brokers = 3
+security = "plaintext"
+lifecycle = "externally managed by the caller"
+
+[tools]
+topic_create = ["target/release/kafkars-benchmark-adapter", "topics-create"]
+topic_delete = ["target/release/kafkars-benchmark-adapter", "topics-delete"]
+verify = ["target/librdkafka/librdkafka-benchmark-verifier"]

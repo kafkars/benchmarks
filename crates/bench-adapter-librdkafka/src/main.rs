@@ -1,11 +1,6 @@
 //! Adapter-protocol shim in front of the unmodified librdkafka C benchmark
 //! binary.
 //!
-//! **This binary is a stub.** It carries the contract below so that the
-//! workspace graph and the lint gate are real from the first commit; the
-//! translation lands in a following wave. Every invocation is reported as a
-//! usage error with exit code `64`.
-//!
 //! # Why a shim instead of a change to the C program
 //!
 //! The reference client is the thing being compared against, so the reference
@@ -16,29 +11,60 @@
 //! rewritten to suit this harness — and it keeps the C build reproducible
 //! against the pinned librdkafka anchor.
 //!
-//! # What this binary will own
+//! # Argument surface
 //!
-//! - A `--binary <path>` prefix naming the C executable to drive, followed by
-//!   one of the three protocol verbs.
-//! - `describe --json` — a static capability document for the pinned
-//!   librdkafka version. The version actually linked at run time is reported
-//!   separately inside the result document rather than being trusted here.
-//! - `validate --experiment <resolved.json>` — checking a resolved experiment
-//!   against what the C argument surface can express, and reporting the reasons
-//!   when it cannot.
-//! - `run --experiment <resolved.json> --output <dir>` — translating the
-//!   resolved experiment into the exact legacy positional argument vector,
-//!   capturing the child's stdout as `result.json`, and writing `status.json`
-//!   from the child's exit, including when the child fails.
+//! ```text
+//! bench-adapter-librdkafka --binary <path> describe --json
+//! bench-adapter-librdkafka --binary <path> validate --experiment <resolved.json>
+//! bench-adapter-librdkafka --binary <path> run --experiment <resolved.json> --output <dir>
+//! ```
 //!
-//! Validity is not decided here. The verifier and the topic tool stay outside
-//! the adapter protocol as separately configured tools, because an adapter must
-//! never be in a position to vouch for its own run.
+//! `--binary` comes first because it is configuration, not a verb argument: the
+//! subject list names the shim *and* the C binary it drives, and the control
+//! plane appends the verb and its flags to that prefix unchanged.
+//!
+//! # Which subject am I?
+//!
+//! A resolved experiment describes every subject, including topics per subject,
+//! so a subject that does not know its own name cannot pick its topics. The
+//! control plane's output directory is `adapters/<subject>/`, so the directory's
+//! last component is the answer; when it is not a subject name — a `validate`
+//! call has no output directory at all — the shim falls back to the unique
+//! subject whose `adapter_name` is [`describe::ADAPTER_NAME`], and refuses when
+//! that is ambiguous rather than guessing.
+//!
+//! # Layout
+//!
+//! - `arguments` — the argv surface and its parse table.
+//! - `describe` — the static capability document.
+//! - `validate` — what the C argument surface can and cannot express.
+//! - `translate` — resolved experiment → the exact legacy positional argv.
+//! - `run` — spawning the child, capturing its result, sealing its status.
+//! - `time` — UTC timestamps for the status document.
 #![forbid(unsafe_code)]
 
+mod arguments;
+mod describe;
+mod run;
+mod time;
+mod translate;
+mod validate;
+
+#[cfg(test)]
+mod arguments_test;
+#[cfg(test)]
+mod describe_test;
+#[cfg(test)]
+mod fixture;
+#[cfg(test)]
+mod run_test;
+#[cfg(test)]
+mod time_test;
+#[cfg(test)]
+mod translate_test;
+#[cfg(test)]
+mod validate_test;
+
 fn main() {
-    eprintln!(
-        "usage: bench-adapter-librdkafka --binary <path> <describe|validate|run> [options] (not implemented yet)"
-    );
-    std::process::exit(64);
+    std::process::exit(arguments::run(&std::env::args().collect::<Vec<_>>()));
 }

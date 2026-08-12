@@ -5,6 +5,9 @@ version = 4
 [[package]]
 name = "bench-adapter-librdkafka"
 version = "0.1.0"
+dependencies = [
+ "bench-schema",
+]
 
 [[package]]
 name = "bench-report"
