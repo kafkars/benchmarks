@@ -23,6 +23,8 @@
   <span> · </span>
   <a href="#the-engine">Engine</a>
   <span> · </span>
+  <a href="#ci-and-the-nightly">CI</a>
+  <span> · </span>
   <a href="#evidence">Evidence</a>
   <span> · </span>
   <a href="#scenarios-and-packs">Scenarios</a>
@@ -159,6 +161,21 @@ benchctl capacity \
   --bootstrap "$bootstrap"
 ```
 
+**`pack`** runs every entry of one reviewed manifest, in the order it states.
+It takes no `--experiment` — the manifest names the scenarios — and dispatches
+each entry to the verb its repetition count implies: two or more is a `suite`,
+one is a `run`, and one over a scenario carrying a `[search]` section is a
+`capacity` ladder. It contributes no statistic of its own, so the evidence it
+leaves is exactly what typing those verbs by hand would have left.
+
+```sh
+benchctl pack \
+  --manifest scenarios/packs/nightly.toml \
+  --subjects "$inputs/subjects.toml" \
+  --cluster "$inputs/cluster.toml" \
+  --bootstrap "$bootstrap"
+```
+
 **`report`** reads one sealed bundle and renders it. `suite` and `capacity`
 write their own reports as they go; this is how you read a single attempt after
 the fact. It reaches no broker and rewrites no bundle, so a reporting bug cannot
@@ -169,6 +186,41 @@ benchctl report \
   --bundle "results/$experiment_id/$attempt_id" \
   --out reports/attempt.md
 ```
+
+**`packet`** checks prose against the analysis packet a suite derived, and is
+the only thing that makes a model-written summary evidence. It exits 0 when the
+summary's verdict is the packet's and every citation resolves, and 65 when it is
+not — see [CI and the nightly](#ci-and-the-nightly) below.
+
+```sh
+benchctl packet \
+  --suite reports/"$experiment_id"/*-suite/suite-summary.json \
+  --llm-summary reports/"$experiment_id"/*-suite/llm-summary.json
+```
+
+## CI and the nightly
+
+`.github/workflows/ci.yml` proves the harness is correct, buildable, and
+deterministic on every pull request. No job in it measures performance: hosted
+runners are shared and throttled, and a number produced on one is not evidence
+about a client. Branch protection requires exactly one check, `quality-gate`.
+
+`.github/workflows/nightly.yml` runs `benchctl pack` over
+`scenarios/packs/nightly.toml` against the dev compose cluster at 08:00 UTC,
+uploads the sealed `results/` and `reports/` trees for 30 days, and then asks a
+model to narrate each suite's analysis packet with
+`scripts/benchmark-openai-summary` — reading `OPENAI_API_KEY` from repository
+secrets and `OPENAI_MODEL` / `OPENAI_REASONING_EFFORT` from repository variables
+(defaulting to `gpt-5.5` and `high`), skipping the narration with a printed line
+when the key is unset. Its numbers are shared-runner diagnostics and are never a
+comparison between clients; what it proves is that the whole path still runs.
+
+The summary is prose over the packet and nothing else — the model never sees an
+evidence bundle — and it is only rendered once `benchctl packet` has bound it to
+that packet. A rejected summary is reported in the run summary and does **not**
+fail the workflow: narration is commentary on evidence, and may never be the
+reason evidence is discarded. `scripts/benchmark-openai-summary-test` proves the
+request contract offline, with no network and no key, on every pull request.
 
 ## Evidence
 
@@ -194,7 +246,7 @@ Each file opens with the question it exists to answer.
 `scenarios/packs/` says which of those belong to which cadence — `pr.toml` is
 one balanced attempt, `nightly.toml` is the whole set at three repetitions plus
 one capacity search. A pack is a reviewed manifest of scenario paths and
-repetition counts; the runner that executes one is a later loop.
+repetition counts, and `benchctl pack` is what runs one.
 
 Workloads from the design document's matrix that cannot run yet are listed, with
 the specific thing that refuses each one, in

@@ -29,6 +29,7 @@
 //! - `interrupt` — SIGINT/SIGTERM latch (supervisor).
 //! - `suite` — N attempts of one experiment, then one summary.
 //! - `capacity` — the rate ladder, and where it stopped.
+//! - `pack` — one cadence's scenarios, dispatched to the verbs above.
 //! - `report` — rendering sealed evidence, and binding prose to it.
 #![forbid(unsafe_code)]
 
@@ -39,6 +40,7 @@ pub mod cli;
 pub mod environment;
 mod error;
 pub mod interrupt;
+pub mod pack;
 pub mod pipeline;
 pub mod probe;
 pub mod report;
@@ -71,6 +73,8 @@ mod environment_test;
 mod error_test;
 #[cfg(test)]
 mod interrupt_test;
+#[cfg(test)]
+mod pack_test;
 #[cfg(test)]
 mod probe_test;
 #[cfg(test)]

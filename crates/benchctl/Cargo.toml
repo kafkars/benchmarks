@@ -14,6 +14,11 @@ workspace = true
 [dependencies]
 bench-report.workspace = true
 bench-schema.workspace = true
+# A pack manifest is a human-authored TOML input like a scenario, so it is
+# parsed by the same crate pair the schema crate uses rather than by a
+# hand-rolled reader that would accept keys nobody reviewed.
+serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 signal-hook.workspace = true
+toml.workspace = true

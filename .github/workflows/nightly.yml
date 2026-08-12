@@ -1,0 +1,224 @@
+# The nightly pack: the whole headline producer set, against a real broker,
+# every night.
+#
+# Read the CI header first — the rule it states holds here too, and holds
+# harder. **This workflow produces no evidence about kafkars.** It runs on a
+# shared, throttled, noisy-neighboured hosted runner against three brokers in
+# containers on that same runner, which means the load generator, the subject,
+# and the cluster are all competing for the same cores. Every throughput and
+# every percentile it prints is a fact about a GitHub runner, and quoting one as
+# a client comparison would poison exactly the artifact this repository exists
+# to protect. `claim_eligible` is false in every document it writes, and the
+# reports carry the diagnostic banner saying so.
+#
+# What it does prove, and what makes it worth 180 minutes a night:
+#
+#   * the pack runner still walks a reviewed manifest end to end — resolve,
+#     spawn, produce, verify, seal — for every headline scenario, not just the
+#     one a pull request happens to run;
+#   * the scenarios still resolve, the adapters still start, the verifier still
+#     agrees, and every attempt still seals a bundle whose checksums close;
+#   * the suite path still aggregates repetitions into a summary and an
+#     analysis packet, and the capacity search still walks its ladder to a
+#     stated end;
+#   * the narration path still produces prose that is *bound to its packet* —
+#     which is a property of the guardrail, not of the model.
+#
+# A red nightly therefore means the harness broke, not that kafkars got slower.
+# That is why the pack step is allowed to fail the job while the model summary
+# is not: narration is commentary on evidence and may never be the reason
+# evidence is rejected. A summary that fails validation is reported in the step
+# summary as a failure and the workflow stays green, because the alternative is
+# a pipeline where a model having a bad night deletes a night of benchmarks.
+#
+# Cost: roughly 60-120 minutes of one ubuntu-24.04 runner per night. Five
+# headline scenarios at three repetitions is fifteen sealed attempts of two
+# subjects each, plus a capacity search that may make up to 24 probes; the
+# timeout is 180 so a slow night is a slow night rather than a truncated one.
+#
+# Every third-party action is pinned to the same 40-hex commit CI pins, with the
+# tag it resolved to in a trailing comment. `persist-credentials: false`
+# everywhere: nothing here pushes, and a checkout that leaves a usable token in
+# .git/config turns every script this workflow invokes into a potential write
+# path.
+name: Nightly
+
+on:
+  schedule:
+    # 08:00 UTC: after the European morning has not yet started and long after
+    # the American evening has ended, so the runner pool is at its quietest.
+    # The time is stated in UTC because a benchmark schedule that shifts twice
+    # a year with a local timezone would make "the nightly got slower" a
+    # question about daylight saving.
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+# Never cancel a nightly in flight. A cancelled pack leaves half its attempts
+# unsealed, and a partial evidence tree that nobody asked for is worse than a
+# second run overlapping the first.
+concurrency:
+  group: nightly-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  nightly-pack:
+    name: nightly-pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    # This checkout lives at kafka-benchmarks/ so the sibling repositories can
+    # be materialized next to it, reproducing the developer layout that the
+    # adapter path deps and environment capture already assume.
+    defaults:
+      run:
+        working-directory: kafka-benchmarks
+    env:
+      BOOTSTRAP: 127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094
+      PACK_INPUTS: target/nightly-inputs
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5.5' }}
+      OPENAI_REASONING_EFFORT: ${{ vars.OPENAI_REASONING_EFFORT || 'high' }}
+    steps:
+      - name: Check out benchmarks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: kafka-benchmarks
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        uses: ./kafka-benchmarks/.github/actions/setup-rust
+      - name: Install pinned Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+      - name: Check out reviewed sibling dependencies
+        uses: ./kafka-benchmarks/.github/actions/checkout-siblings
+        with:
+          read-token: ${{ secrets.KAFKA_SIBLING_REPOS_READ_TOKEN }}
+      # The same key CI uses, for the same reason: the librdkafka version plus
+      # the first bytes of the reviewed source checksum fully determine the
+      # cached bytes, so there are deliberately no restore-keys. A miss is never
+      # fatal — the bootstrap script re-downloads and re-verifies the checksum,
+      # which remains the actual trust boundary.
+      - name: Restore the reviewed librdkafka build
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            kafka-benchmarks/target/benchmarks/downloads
+            kafka-benchmarks/target/benchmarks/librdkafka-*
+          key: librdkafka-2.15.0-259015220c
+      - name: Fetch reviewed dependencies
+        run: |
+          cargo fetch --locked
+          cargo fetch --manifest-path adapters/kafkars/Cargo.toml --locked
+      # Building here rather than inside the pack step keeps a compile failure
+      # legible as a compile failure, and means the cluster is not started for a
+      # run that was never going to happen.
+      - name: Build the adapters and the control plane
+        run: scripts/generate-subject-config "$PACK_INPUTS" "$BOOTSTRAP"
+      # --wait blocks on the compose healthchecks, so a broker that never
+      # becomes reachable fails here with a cluster error instead of surfacing
+      # later as an unexplained producer timeout.
+      - name: Start the dev cluster
+        run: docker compose -f clusters/dev-compose/compose.yml up -d --wait
+      # The pack is allowed to fail the job. An entry that could not seal is a
+      # broken harness, and a nightly that stayed green through one would be a
+      # nightly nobody reads. Every step below carries `if: always()` so the
+      # evidence, the narration, and the cluster teardown all still happen.
+      - name: Run the nightly pack
+        run: |
+          target/release/benchctl pack \
+            --manifest scenarios/packs/nightly.toml \
+            --subjects "$PACK_INPUTS/subjects.toml" \
+            --cluster "$PACK_INPUTS/cluster.toml" \
+            --bootstrap "$BOOTSTRAP" \
+            --results results \
+            --reports reports
+      # Narration, and the one step in this file that may never fail the run.
+      # The design rule is that prose is commentary on evidence: a model that is
+      # unreachable, a key that is unset, or a summary the guardrail rejects are
+      # all reported here and none of them is allowed to discard a night of
+      # measurements. The script itself does not lie about its exit code — it
+      # returns nonzero for a rejected summary, and this step is what decides
+      # that a rejected summary is news rather than a failure.
+      - name: Summarize the packs with a model
+        if: ${{ always() }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [[ ! -d reports ]]; then
+            echo "No reports were produced, so there is nothing to summarize." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            printf '# Nightly pack — %s\n\n' "$GITHUB_SHA"
+            printf 'Shared-runner diagnostics. Never claim-eligible, and never a\n'
+            printf 'comparison between clients.\n\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+          shopt -s nullglob
+          summarized=0
+          for directory in reports/*/*-suite; do
+            [[ -f "$directory/analysis-packet.json" ]] || continue
+            summarized=$((summarized + 1))
+            printf '\n## %s\n\n' "$directory" >> "$GITHUB_STEP_SUMMARY"
+            if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+              printf 'OPENAI_API_KEY is not configured; skipping the model summary.\n' \
+                | tee -a "$GITHUB_STEP_SUMMARY"
+            elif scripts/benchmark-openai-summary \
+              --reports "$directory" \
+              --model "$OPENAI_MODEL" \
+              --reasoning-effort "$OPENAI_REASONING_EFFORT" \
+              >"$directory/llm-summary.log" 2>&1; then
+              cat "$directory/llm-summary.md" >> "$GITHUB_STEP_SUMMARY"
+            else
+              status=$?
+              echo "::warning title=Model summary rejected::$directory exited $status"
+              {
+                printf 'The model summary for this report was not accepted and is\n'
+                printf 'not shown. The measurements are unaffected: the packet holds\n'
+                printf 'every number, and none of them depended on the prose.\n\n'
+                printf '```\n'
+                tail -n 20 "$directory/llm-summary.log"
+                printf '\n```\n'
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            # The scorecard is the deterministic half, and it is appended
+            # whether or not a model said anything about it.
+            if [[ -f "$directory/report.md" ]]; then
+              printf '\n### Scorecard\n\n' >> "$GITHUB_STEP_SUMMARY"
+              awk '/^## Scorecard/{found=1; next} found && /^## /{exit} found' \
+                "$directory/report.md" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+          if [[ "$summarized" -eq 0 ]]; then
+            printf 'No suite reports carried an analysis packet.\n' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+      # The evidence is the point of this workflow, so it is uploaded even when
+      # the pack failed: a partial tree explains the failure. Retention is
+      # bounded at 30 days because these are shared-runner diagnostics and
+      # should not accumulate as though they were evidence of record — see the
+      # storage-policy entry in docs/ROADMAP.md.
+      - name: Upload the evidence and reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: |
+            kafka-benchmarks/results/
+            kafka-benchmarks/reports/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Stop the dev cluster
+        if: ${{ always() }}
+        run: docker compose -f clusters/dev-compose/compose.yml down --volumes --remove-orphans

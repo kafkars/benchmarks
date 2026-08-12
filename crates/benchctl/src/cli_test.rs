@@ -40,6 +40,13 @@ fn suite_of(line: &str) -> crate::suite::SuiteCommand {
     }
 }
 
+fn pack_of(line: &str) -> crate::pack::PackCommand {
+    match parse(&arguments(line)).unwrap() {
+        Command::Pack(command) => command,
+        other => panic!("expected a pack command, got {other:?}"),
+    }
+}
+
 fn capacity_of(line: &str) -> crate::capacity::CapacityCommand {
     match parse(&arguments(line)).unwrap() {
         Command::Capacity(command) => command,
@@ -330,8 +337,64 @@ fn packet_names_both_documents_and_requires_both() {
 }
 
 #[test]
+fn pack_takes_a_manifest_instead_of_an_experiment() {
+    // The scenario flag is absent on purpose: a pack's entries name the
+    // scenarios, and accepting both would leave two answers to "what ran".
+    let command = pack_of(
+        "pack --manifest scenarios/packs/pr.toml --subjects /tmp/s.toml \
+         --cluster /tmp/c.toml --bootstrap 127.0.0.1:9092",
+    );
+    assert_eq!(command.manifest, PathBuf::from("scenarios/packs/pr.toml"));
+    assert_eq!(command.subjects, PathBuf::from("/tmp/s.toml"));
+    assert_eq!(command.cluster, PathBuf::from("/tmp/c.toml"));
+    assert_eq!(command.bootstrap, "127.0.0.1:9092");
+    assert_eq!(command.results_root, PathBuf::from(DEFAULT_RESULTS_ROOT));
+    assert_eq!(command.reports_root, PathBuf::from(DEFAULT_REPORTS_ROOT));
+    assert_eq!(command.seed, None);
+    assert_eq!(command.budget, BudgetSpec::default());
+    assert_eq!(
+        usage_kind(
+            "pack --manifest scenarios/packs/pr.toml --subjects /tmp/s.toml \
+             --cluster /tmp/c.toml --bootstrap 127.0.0.1:9092 \
+             --experiment /tmp/e.toml"
+        ),
+        CtlErrorKind::Usage
+    );
+}
+
+#[test]
+fn pack_takes_the_roots_the_seed_and_every_timeout() {
+    let command = pack_of(
+        "pack --manifest scenarios/packs/nightly.toml --subjects /tmp/s.toml \
+         --cluster /tmp/c.toml --bootstrap 127.0.0.1:9092 --results /tmp/r \
+         --reports /tmp/rep --seed 7 --run-timeout-secs 900 \
+         --tool-timeout-secs 60 --probe-timeout-secs 30",
+    );
+    assert_eq!(command.results_root, PathBuf::from("/tmp/r"));
+    assert_eq!(command.reports_root, PathBuf::from("/tmp/rep"));
+    assert_eq!(command.seed, Some(7));
+    assert_eq!(command.budget.run_timeout_seconds, 900);
+    assert_eq!(command.budget.tool_timeout_seconds, 60);
+    assert_eq!(command.budget.probe_timeout_seconds, 30);
+}
+
+#[test]
+fn pack_requires_the_manifest_the_subjects_the_cluster_and_the_bootstrap() {
+    for line in [
+        "pack --subjects /tmp/s.toml --cluster /tmp/c.toml --bootstrap 127.0.0.1:9092",
+        "pack --manifest /tmp/p.toml --cluster /tmp/c.toml --bootstrap 127.0.0.1:9092",
+        "pack --manifest /tmp/p.toml --subjects /tmp/s.toml --bootstrap 127.0.0.1:9092",
+        "pack --manifest /tmp/p.toml --subjects /tmp/s.toml --cluster /tmp/c.toml",
+    ] {
+        assert_eq!(usage_kind(line), CtlErrorKind::Usage, "{line}");
+    }
+}
+
+#[test]
 fn the_usage_text_names_every_verb() {
-    for verb in ["resolve", "run", "suite", "capacity", "report", "packet"] {
+    for verb in [
+        "resolve", "run", "suite", "capacity", "pack", "report", "packet",
+    ] {
         assert!(
             crate::cli::USAGE.contains(verb),
             "the usage text does not mention {verb}"

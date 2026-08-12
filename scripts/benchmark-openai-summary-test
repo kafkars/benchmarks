@@ -1,0 +1,853 @@
+#!/usr/bin/env bash
+# Offline contract test for scripts/benchmark-openai-summary. No network, no
+# API key, no cargo, no cluster: python3 and bash are the whole dependency set,
+# which is why this runs in CI's control-plane lane on every pull request.
+#
+# What it proves is that the request the script would send is the request the
+# reviewed prompt describes — the committed prompt version, the model and effort
+# defaults, the digest of the exact packet bytes, and a strict structured-output
+# schema that mirrors kafkars.llm-summary.v1 field for field. It also proves the
+# thing a dry run must NOT do: write a summary. A --dry-run that left an
+# llm-summary.json behind would have written prose nothing validated, which is
+# the one outcome this pipeline exists to make impossible.
+#
+# It cannot prove that a model replies well, and does not try. That is what the
+# guardrail is for, and the guardrail is `benchctl packet`, which has its own
+# tests.
+#
+# The fixture below is real. It is the suite summary and analysis packet a
+# two-repetition offline suite produced against the fake-adapter fixture — the
+# same path crates/benchctl/tests/suite_capacity.rs drives — captured once and
+# committed here so that this test needs no build:
+#
+#   benchctl suite --experiment scenarios/producer/legacy-balanced-1k.toml \
+#     --subjects <fake-adapter subjects> --cluster <fake-adapter cluster> \
+#     --bootstrap 127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094 \
+#     --repetitions 2
+#
+# Regenerate it the same way if the packet's shape ever changes; hand-editing it
+# would turn a fixture that mirrors the engine into one that mirrors a guess.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+work="$repo_root/target/benchmark-openai-summary-test"
+reports="$work/reports"
+
+fail() {
+  printf 'error: %s\n' "$1" >&2
+  exit 1
+}
+
+rm -rf "$work"
+mkdir -p "$reports"
+
+cat >"$reports/analysis-packet.json" <<'JSON'
+{
+  "anomalies": [
+    "kafkars over librdkafka-c acknowledged_records_per_second is unresolved: the interval [1.0007, 1.0007] straddles the practical threshold of 0.0500",
+    "kafkars over librdkafka-c p99_admission_wait_ns is unresolved: the interval [1.0000, 1.0000] straddles the practical threshold of 0.0500",
+    "kafkars over librdkafka-c cpu_core_seconds is unresolved: the interval [1.0000, 1.0000] straddles the practical threshold of 0.0500",
+    "kafkars over librdkafka-c max_rss_bytes is unresolved: the interval [1.0000, 1.0000] straddles the practical threshold of 0.0500",
+    "2 valid attempts is below the 5 paired repetitions a comparison needs",
+    "gate paired-repetitions did not pass: 2 of 5 required",
+    "gate kafkars-over-librdkafka-c:acknowledged_records_per_second did not pass: ratio of medians 1.0007, interval [1.0007, 1.0007]",
+    "gate kafkars-over-librdkafka-c:p50_intended_to_terminal_ns did not pass: ratio of medians 1.1488, interval [1.1488, 1.1488]",
+    "gate kafkars-over-librdkafka-c:p99_intended_to_terminal_ns did not pass: ratio of medians 1.1099, interval [1.1099, 1.1099]",
+    "gate kafkars-over-librdkafka-c:p999_intended_to_terminal_ns did not pass: ratio of medians 1.1099, interval [1.1099, 1.1099]",
+    "gate kafkars-over-librdkafka-c:p99_admission_wait_ns did not pass: ratio of medians 1.0000, interval [1.0000, 1.0000]",
+    "gate kafkars-over-librdkafka-c:cpu_core_seconds did not pass: ratio of medians 1.0000, interval [1.0000, 1.0000]",
+    "gate kafkars-over-librdkafka-c:max_rss_bytes did not pass: ratio of medians 1.0000, interval [1.0000, 1.0000]",
+    "subject kafkars reports no native client statistics, so its request economics are absent rather than zero",
+    "subject librdkafka-c reports no native client statistics, so its request economics are absent rather than zero"
+  ],
+  "deterministic_findings": [
+    {
+      "metric_refs": [],
+      "text": "2 of 2 attempts were valid evidence; every median, ratio, and interval in this packet is over those 2."
+    },
+    {
+      "metric_refs": [
+        "M018",
+        "M019",
+        "M020"
+      ],
+      "text": "kafkars over librdkafka-c p50_intended_to_terminal_ns is 1.1488 of the baseline, and the whole interval [1.1488, 1.1488] breaks the practical threshold of 0.0500 (smaller is better)."
+    }
+  ],
+  "evidence_refs": {
+    "A001": "eadacae2796f71e47eee3a2ef1ca00baf2a5040bb6ce1b3ec5cbef2fa952faab",
+    "A002": "2151263a9a0959780f7851a5593e552987450a7fadbe5b0d1a74aa8b33b87462",
+    "R001": "adapters/kafkars/result.json",
+    "R002": "adapters/librdkafka-c/result.json"
+  },
+  "metrics": {
+    "M001": {
+      "name": "kafkars acknowledged goodput (median)",
+      "unit": "records/s",
+      "value": 100227.0
+    },
+    "M002": {
+      "name": "kafkars p50 offer-to-terminal (median)",
+      "unit": "ns",
+      "value": 569343.0
+    },
+    "M003": {
+      "name": "kafkars p99 offer-to-terminal (median)",
+      "unit": "ns",
+      "value": 727000.0
+    },
+    "M004": {
+      "name": "kafkars p99.9 offer-to-terminal (median)",
+      "unit": "ns",
+      "value": 727000.0
+    },
+    "M005": {
+      "name": "kafkars p99 admission wait (median)",
+      "unit": "ns",
+      "value": 25000.0
+    },
+    "M006": {
+      "name": "kafkars cpu (median)",
+      "unit": "core-seconds",
+      "value": 0.015
+    },
+    "M007": {
+      "name": "kafkars peak rss (median)",
+      "unit": "bytes",
+      "value": 67108864.0
+    },
+    "M008": {
+      "name": "librdkafka-c acknowledged goodput (median)",
+      "unit": "records/s",
+      "value": 100155.0
+    },
+    "M009": {
+      "name": "librdkafka-c p50 offer-to-terminal (median)",
+      "unit": "ns",
+      "value": 495615.0
+    },
+    "M010": {
+      "name": "librdkafka-c p99 offer-to-terminal (median)",
+      "unit": "ns",
+      "value": 655000.0
+    },
+    "M011": {
+      "name": "librdkafka-c p99.9 offer-to-terminal (median)",
+      "unit": "ns",
+      "value": 655000.0
+    },
+    "M012": {
+      "name": "librdkafka-c p99 admission wait (median)",
+      "unit": "ns",
+      "value": 25000.0
+    },
+    "M013": {
+      "name": "librdkafka-c cpu (median)",
+      "unit": "core-seconds",
+      "value": 0.015
+    },
+    "M014": {
+      "name": "librdkafka-c peak rss (median)",
+      "unit": "bytes",
+      "value": 67108864.0
+    },
+    "M015": {
+      "name": "kafkars over librdkafka-c acknowledged_records_per_second ratio of medians",
+      "unit": "ratio",
+      "value": 1.000718885727123
+    },
+    "M016": {
+      "name": "kafkars over librdkafka-c acknowledged_records_per_second interval low",
+      "unit": "ratio",
+      "value": 1.000718885727123
+    },
+    "M017": {
+      "name": "kafkars over librdkafka-c acknowledged_records_per_second interval high",
+      "unit": "ratio",
+      "value": 1.000718885727123
+    },
+    "M018": {
+      "name": "kafkars over librdkafka-c p50_intended_to_terminal_ns ratio of medians",
+      "unit": "ratio",
+      "value": 1.1487606307315155
+    },
+    "M019": {
+      "name": "kafkars over librdkafka-c p50_intended_to_terminal_ns interval low",
+      "unit": "ratio",
+      "value": 1.1487606307315155
+    },
+    "M020": {
+      "name": "kafkars over librdkafka-c p50_intended_to_terminal_ns interval high",
+      "unit": "ratio",
+      "value": 1.1487606307315155
+    },
+    "M021": {
+      "name": "kafkars over librdkafka-c p99_intended_to_terminal_ns ratio of medians",
+      "unit": "ratio",
+      "value": 1.1099236641221375
+    },
+    "M022": {
+      "name": "kafkars over librdkafka-c p99_intended_to_terminal_ns interval low",
+      "unit": "ratio",
+      "value": 1.1099236641221375
+    },
+    "M023": {
+      "name": "kafkars over librdkafka-c p99_intended_to_terminal_ns interval high",
+      "unit": "ratio",
+      "value": 1.1099236641221375
+    },
+    "M024": {
+      "name": "kafkars over librdkafka-c p999_intended_to_terminal_ns ratio of medians",
+      "unit": "ratio",
+      "value": 1.1099236641221375
+    },
+    "M025": {
+      "name": "kafkars over librdkafka-c p999_intended_to_terminal_ns interval low",
+      "unit": "ratio",
+      "value": 1.1099236641221375
+    },
+    "M026": {
+      "name": "kafkars over librdkafka-c p999_intended_to_terminal_ns interval high",
+      "unit": "ratio",
+      "value": 1.1099236641221375
+    },
+    "M027": {
+      "name": "kafkars over librdkafka-c p99_admission_wait_ns ratio of medians",
+      "unit": "ratio",
+      "value": 1.0
+    },
+    "M028": {
+      "name": "kafkars over librdkafka-c p99_admission_wait_ns interval low",
+      "unit": "ratio",
+      "value": 1.0
+    },
+    "M029": {
+      "name": "kafkars over librdkafka-c p99_admission_wait_ns interval high",
+      "unit": "ratio",
+      "value": 1.0
+    },
+    "M030": {
+      "name": "kafkars over librdkafka-c cpu_core_seconds ratio of medians",
+      "unit": "ratio",
+      "value": 1.0
+    },
+    "M031": {
+      "name": "kafkars over librdkafka-c cpu_core_seconds interval low",
+      "unit": "ratio",
+      "value": 1.0
+    },
+    "M032": {
+      "name": "kafkars over librdkafka-c cpu_core_seconds interval high",
+      "unit": "ratio",
+      "value": 1.0
+    },
+    "M033": {
+      "name": "kafkars over librdkafka-c max_rss_bytes ratio of medians",
+      "unit": "ratio",
+      "value": 1.0
+    },
+    "M034": {
+      "name": "kafkars over librdkafka-c max_rss_bytes interval low",
+      "unit": "ratio",
+      "value": 1.0
+    },
+    "M035": {
+      "name": "kafkars over librdkafka-c max_rss_bytes interval high",
+      "unit": "ratio",
+      "value": 1.0
+    },
+    "M036": {
+      "name": "kafkars acknowledged_records_per_second coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M037": {
+      "name": "kafkars p50_intended_to_terminal_ns coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M038": {
+      "name": "kafkars p99_intended_to_terminal_ns coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M039": {
+      "name": "kafkars p999_intended_to_terminal_ns coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M040": {
+      "name": "kafkars p99_admission_wait_ns coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M041": {
+      "name": "kafkars cpu_core_seconds coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M042": {
+      "name": "kafkars max_rss_bytes coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M043": {
+      "name": "librdkafka-c acknowledged_records_per_second coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M044": {
+      "name": "librdkafka-c p50_intended_to_terminal_ns coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M045": {
+      "name": "librdkafka-c p99_intended_to_terminal_ns coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M046": {
+      "name": "librdkafka-c p999_intended_to_terminal_ns coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M047": {
+      "name": "librdkafka-c p99_admission_wait_ns coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M048": {
+      "name": "librdkafka-c cpu_core_seconds coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    },
+    "M049": {
+      "name": "librdkafka-c max_rss_bytes coefficient of variation",
+      "unit": "ratio",
+      "value": 0.0
+    }
+  },
+  "scenario_name": "producer-balanced-1k-diagnostic",
+  "schema": "kafkars.analysis-packet.v1",
+  "source": {
+    "bundle_digests": [
+      "eadacae2796f71e47eee3a2ef1ca00baf2a5040bb6ce1b3ec5cbef2fa952faab",
+      "2151263a9a0959780f7851a5593e552987450a7fadbe5b0d1a74aa8b33b87462"
+    ],
+    "suite": "fccc050d18bc518b507475ea668c2f0be606d6c7e642ab4ee3ca409a0a2bcd74"
+  },
+  "subjects": [
+    {
+      "name": "kafkars",
+      "role": "head"
+    },
+    {
+      "name": "librdkafka-c",
+      "role": "base"
+    }
+  ],
+  "validity": {
+    "claim_eligible": false,
+    "runs_total": 2,
+    "runs_valid": 2
+  },
+  "verdict": "regressed"
+}
+JSON
+
+cat >"$reports/suite-summary.json" <<'JSON'
+{
+  "attempts": [
+    {
+      "attempt_id": "20260812T192904Z-0f9e0ad1",
+      "bundle_digest": "eadacae2796f71e47eee3a2ef1ca00baf2a5040bb6ce1b3ec5cbef2fa952faab",
+      "execution_status": "complete",
+      "run_valid": true,
+      "subjects": [
+        {
+          "acknowledged_records_per_second": 100227.0,
+          "cpu_core_seconds": 0.015,
+          "max_rss_bytes": 67108864,
+          "name": "kafkars",
+          "p50_intended_to_terminal_ns": 569343,
+          "p999_intended_to_terminal_ns": 727000,
+          "p99_admission_wait_ns": 25000,
+          "p99_intended_to_terminal_ns": 727000,
+          "role": "head"
+        },
+        {
+          "acknowledged_records_per_second": 100155.0,
+          "cpu_core_seconds": 0.015,
+          "max_rss_bytes": 67108864,
+          "name": "librdkafka-c",
+          "p50_intended_to_terminal_ns": 495615,
+          "p999_intended_to_terminal_ns": 655000,
+          "p99_admission_wait_ns": 25000,
+          "p99_intended_to_terminal_ns": 655000,
+          "role": "base"
+        }
+      ]
+    },
+    {
+      "attempt_id": "20260812T192904Z-23e0ede0",
+      "bundle_digest": "2151263a9a0959780f7851a5593e552987450a7fadbe5b0d1a74aa8b33b87462",
+      "execution_status": "complete",
+      "run_valid": true,
+      "subjects": [
+        {
+          "acknowledged_records_per_second": 100227.0,
+          "cpu_core_seconds": 0.015,
+          "max_rss_bytes": 67108864,
+          "name": "kafkars",
+          "p50_intended_to_terminal_ns": 569343,
+          "p999_intended_to_terminal_ns": 727000,
+          "p99_admission_wait_ns": 25000,
+          "p99_intended_to_terminal_ns": 727000,
+          "role": "head"
+        },
+        {
+          "acknowledged_records_per_second": 100155.0,
+          "cpu_core_seconds": 0.015,
+          "max_rss_bytes": 67108864,
+          "name": "librdkafka-c",
+          "p50_intended_to_terminal_ns": 495615,
+          "p999_intended_to_terminal_ns": 655000,
+          "p99_admission_wait_ns": 25000,
+          "p99_intended_to_terminal_ns": 655000,
+          "role": "base"
+        }
+      ]
+    }
+  ],
+  "claim_eligible": false,
+  "dispersion": [
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "acknowledged_records_per_second",
+      "name": "kafkars"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "p50_intended_to_terminal_ns",
+      "name": "kafkars"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "p99_intended_to_terminal_ns",
+      "name": "kafkars"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "p999_intended_to_terminal_ns",
+      "name": "kafkars"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "p99_admission_wait_ns",
+      "name": "kafkars"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "cpu_core_seconds",
+      "name": "kafkars"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "max_rss_bytes",
+      "name": "kafkars"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "acknowledged_records_per_second",
+      "name": "librdkafka-c"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "p50_intended_to_terminal_ns",
+      "name": "librdkafka-c"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "p99_intended_to_terminal_ns",
+      "name": "librdkafka-c"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "p999_intended_to_terminal_ns",
+      "name": "librdkafka-c"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "p99_admission_wait_ns",
+      "name": "librdkafka-c"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "cpu_core_seconds",
+      "name": "librdkafka-c"
+    },
+    {
+      "coefficient_of_variation": 0.0,
+      "metric": "max_rss_bytes",
+      "name": "librdkafka-c"
+    }
+  ],
+  "experiment_id": "fccc050d18bc518b507475ea668c2f0be606d6c7e642ab4ee3ca409a0a2bcd74",
+  "gates": [
+    {
+      "description": "at least one attempt has to be usable evidence",
+      "detail": "2 valid attempts",
+      "name": "attempts-valid",
+      "passed": true
+    },
+    {
+      "description": "a comparison needs at least 5 valid paired attempts",
+      "detail": "2 of 5 required",
+      "name": "paired-repetitions",
+      "passed": false
+    },
+    {
+      "description": "every subject's goodput and p99 must vary by no more than 0.05 of its mean",
+      "detail": "every gated dispersion is inside the budget",
+      "name": "dispersion-within-budget",
+      "passed": true
+    },
+    {
+      "description": "acknowledged goodput improves only when the whole confidence interval is above 1.050 (larger is better)",
+      "detail": "ratio of medians 1.0007, interval [1.0007, 1.0007]",
+      "name": "kafkars-over-librdkafka-c:acknowledged_records_per_second",
+      "passed": false
+    },
+    {
+      "description": "p50 offer-to-terminal improves only when the whole confidence interval is below 0.950 (smaller is better)",
+      "detail": "ratio of medians 1.1488, interval [1.1488, 1.1488]",
+      "name": "kafkars-over-librdkafka-c:p50_intended_to_terminal_ns",
+      "passed": false
+    },
+    {
+      "description": "p99 offer-to-terminal improves only when the whole confidence interval is below 0.950 (smaller is better)",
+      "detail": "ratio of medians 1.1099, interval [1.1099, 1.1099]",
+      "name": "kafkars-over-librdkafka-c:p99_intended_to_terminal_ns",
+      "passed": false
+    },
+    {
+      "description": "p99.9 offer-to-terminal improves only when the whole confidence interval is below 0.950 (smaller is better)",
+      "detail": "ratio of medians 1.1099, interval [1.1099, 1.1099]",
+      "name": "kafkars-over-librdkafka-c:p999_intended_to_terminal_ns",
+      "passed": false
+    },
+    {
+      "description": "p99 admission wait improves only when the whole confidence interval is below 0.950 (smaller is better)",
+      "detail": "ratio of medians 1.0000, interval [1.0000, 1.0000]",
+      "name": "kafkars-over-librdkafka-c:p99_admission_wait_ns",
+      "passed": false
+    },
+    {
+      "description": "cpu improves only when the whole confidence interval is below 0.950 (smaller is better)",
+      "detail": "ratio of medians 1.0000, interval [1.0000, 1.0000]",
+      "name": "kafkars-over-librdkafka-c:cpu_core_seconds",
+      "passed": false
+    },
+    {
+      "description": "peak rss improves only when the whole confidence interval is below 0.950 (smaller is better)",
+      "detail": "ratio of medians 1.0000, interval [1.0000, 1.0000]",
+      "name": "kafkars-over-librdkafka-c:max_rss_bytes",
+      "passed": false
+    }
+  ],
+  "medians": [
+    {
+      "acknowledged_records_per_second": 100227.0,
+      "cpu_core_seconds": 0.015,
+      "max_rss_bytes": 67108864,
+      "name": "kafkars",
+      "p50_intended_to_terminal_ns": 569343,
+      "p999_intended_to_terminal_ns": 727000,
+      "p99_admission_wait_ns": 25000,
+      "p99_intended_to_terminal_ns": 727000,
+      "role": "head"
+    },
+    {
+      "acknowledged_records_per_second": 100155.0,
+      "cpu_core_seconds": 0.015,
+      "max_rss_bytes": 67108864,
+      "name": "librdkafka-c",
+      "p50_intended_to_terminal_ns": 495615,
+      "p999_intended_to_terminal_ns": 655000,
+      "p99_admission_wait_ns": 25000,
+      "p99_intended_to_terminal_ns": 655000,
+      "role": "base"
+    }
+  ],
+  "notes": [
+    "subject kafkars reports no native client statistics, so its request economics are absent rather than zero",
+    "subject librdkafka-c reports no native client statistics, so its request economics are absent rather than zero"
+  ],
+  "pairs": [
+    {
+      "ci_high": 1.000718885727123,
+      "ci_low": 1.000718885727123,
+      "denominator_subject": "librdkafka-c",
+      "metric": "acknowledged_records_per_second",
+      "numerator_subject": "kafkars",
+      "ratio_of_medians": 1.000718885727123
+    },
+    {
+      "ci_high": 1.1487606307315155,
+      "ci_low": 1.1487606307315155,
+      "denominator_subject": "librdkafka-c",
+      "metric": "p50_intended_to_terminal_ns",
+      "numerator_subject": "kafkars",
+      "ratio_of_medians": 1.1487606307315155
+    },
+    {
+      "ci_high": 1.1099236641221375,
+      "ci_low": 1.1099236641221375,
+      "denominator_subject": "librdkafka-c",
+      "metric": "p99_intended_to_terminal_ns",
+      "numerator_subject": "kafkars",
+      "ratio_of_medians": 1.1099236641221375
+    },
+    {
+      "ci_high": 1.1099236641221375,
+      "ci_low": 1.1099236641221375,
+      "denominator_subject": "librdkafka-c",
+      "metric": "p999_intended_to_terminal_ns",
+      "numerator_subject": "kafkars",
+      "ratio_of_medians": 1.1099236641221375
+    },
+    {
+      "ci_high": 1.0,
+      "ci_low": 1.0,
+      "denominator_subject": "librdkafka-c",
+      "metric": "p99_admission_wait_ns",
+      "numerator_subject": "kafkars",
+      "ratio_of_medians": 1.0
+    },
+    {
+      "ci_high": 1.0,
+      "ci_low": 1.0,
+      "denominator_subject": "librdkafka-c",
+      "metric": "cpu_core_seconds",
+      "numerator_subject": "kafkars",
+      "ratio_of_medians": 1.0
+    },
+    {
+      "ci_high": 1.0,
+      "ci_low": 1.0,
+      "denominator_subject": "librdkafka-c",
+      "metric": "max_rss_bytes",
+      "numerator_subject": "kafkars",
+      "ratio_of_medians": 1.0
+    }
+  ],
+  "practical_threshold": 0.05,
+  "repetitions": 2,
+  "resamples": 50000,
+  "scenario_name": "producer-balanced-1k-diagnostic",
+  "schema": "kafkars.suite-summary.v1",
+  "seed": 44
+}
+JSON
+
+echo "==> a dry run writes the request and nothing else"
+scripts/benchmark-openai-summary --reports "$reports" --dry-run >"$work/stdout.log"
+
+request="$reports/llm-summary-request.json"
+[[ -f "$request" ]] || fail "the dry run did not write $request"
+[[ ! -e "$reports/llm-summary.json" ]] \
+  || fail "the dry run wrote a summary nothing validated"
+[[ ! -e "$reports/llm-summary.md" ]] \
+  || fail "the dry run rendered markdown for a summary that does not exist"
+[[ ! -e "$reports/llm-provenance.json" ]] \
+  || fail "the dry run wrote provenance for a call it never made"
+
+echo "==> the request states the reviewed prompt, model, effort, and digest"
+python3 - "$request" "$reports/analysis-packet.json" \
+  "$repo_root/analysis/prompts/producer-comparison.v1.md" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+request_path, packet_path, prompt_path = (pathlib.Path(part) for part in sys.argv[1:4])
+document = json.loads(request_path.read_text(encoding="utf-8"))
+packet_bytes = packet_path.read_bytes()
+problems = []
+
+
+def require(condition, message):
+    if not condition:
+        problems.append(message)
+
+
+require(
+    document["promptVersion"] == "producer-comparison.v1",
+    f"promptVersion is {document['promptVersion']!r}, not the committed prompt version",
+)
+require(
+    prompt_path.name == f"{document['promptVersion']}.md",
+    "promptVersion does not name the prompt file the script reads",
+)
+require(
+    document["model"] == "gpt-5.5",
+    f"the default model is {document['model']!r}, not gpt-5.5",
+)
+require(
+    document["reasoningEffort"] == "high",
+    f"the default reasoning effort is {document['reasoningEffort']!r}, not high",
+)
+require(
+    document["inputSha256"] == hashlib.sha256(packet_bytes).hexdigest(),
+    "inputSha256 is not the digest of the packet bytes the script read",
+)
+
+request = document["request"]
+require(request["model"] == document["model"], "the payload model disagrees with the record")
+require(
+    request["reasoning"]["effort"] == document["reasoningEffort"],
+    "the payload reasoning effort disagrees with the record",
+)
+
+fmt = request["text"]["format"]
+require(fmt["type"] == "json_schema", "the reply is not constrained by a json schema")
+require(
+    fmt["name"] == "kafkars_llm_summary",
+    f"the structured output is named {fmt['name']!r}, not kafkars_llm_summary",
+)
+require(fmt["strict"] is True, "the structured output is not strict")
+
+# The schema must mirror kafkars.llm-summary.v1 exactly. A schema that allowed
+# one extra property would produce replies that LlmSummary's deny_unknown_fields
+# rejects, which is a guardrail failure the model could not have avoided.
+schema = fmt["schema"]
+seven = [
+    "schema",
+    "verdict",
+    "executive_summary",
+    "findings",
+    "hypotheses",
+    "next_experiments",
+    "caveats",
+]
+require(schema["additionalProperties"] is False, "the schema admits unknown properties")
+require(sorted(schema["required"]) == sorted(seven), "the schema does not require all seven fields")
+require(sorted(schema["properties"]) == sorted(seven), "the schema does not define exactly the seven fields")
+require(
+    schema["properties"]["schema"]["enum"] == ["kafkars.llm-summary.v1"],
+    "the schema id is not pinned as a single-value enum, so the model may omit or invent one",
+)
+require(
+    schema["properties"]["verdict"]["enum"]
+    == ["improved", "regressed", "mixed", "inconclusive", "invalid"],
+    "the verdict enumeration does not match the packet vocabulary",
+)
+for field, required_keys in (
+    ("findings", ["text", "metric_refs", "evidence_refs"]),
+    ("hypotheses", ["text", "confidence", "evidence_refs"]),
+):
+    items = schema["properties"][field]["items"]
+    require(items["additionalProperties"] is False, f"{field} items admit unknown properties")
+    require(sorted(items["required"]) == sorted(required_keys), f"{field} items require the wrong keys")
+    require(sorted(items["properties"]) == sorted(required_keys), f"{field} items define the wrong keys")
+require(
+    schema["properties"]["hypotheses"]["items"]["properties"]["confidence"]["enum"]
+    == ["low", "medium", "high"],
+    "the confidence enumeration does not match kafkars.llm-summary.v1",
+)
+
+# The two messages are the reviewed prompt, split at its own headings, with the
+# packet injected verbatim. A request whose text is not this file's text would
+# make the prompt version a label rather than a fact.
+system_text = request["input"][0]["content"][0]["text"]
+user_text = request["input"][1]["content"][0]["text"]
+prompt_text = prompt_path.read_text(encoding="utf-8")
+require(request["input"][0]["role"] == "system", "the first message is not the system message")
+require(request["input"][1]["role"] == "user", "the second message is not the user message")
+require(system_text.startswith("## Prompt"), "the system message is not the prompt section")
+require(system_text in prompt_text, "the system message is not verbatim from the prompt file")
+require(user_text.startswith("### The packet"), "the user message is not the packet section")
+require("{{ANALYSIS_PACKET_JSON}}" not in user_text, "the packet slot was never filled")
+require(
+    packet_bytes.decode("utf-8").rstrip("\n") in user_text,
+    "the packet the digest covers is not the packet the model is sent",
+)
+
+# The guardrail instructions are the reason this prompt is versioned. Losing any
+# of them would leave a summary that validates against its packet and still
+# misrepresents it.
+for phrase, why in (
+    ("**Copy the verdict.**", "the verdict must be copied, never concluded"),
+    ("**Do not restate numbers; cite them.**", "quantities must be cited by packet key"),
+    ("must exist in the packet's `metrics`", "metric_refs must resolve in the packet"),
+    ("**Causality is a hypothesis, never a finding.**", "mechanism claims must be hypotheses"),
+    ("**Report the anomalies.**", "anomalies must reach the reader"),
+    ("**No marketing.**", "this is diagnostic evidence, not advocacy"),
+    ("**Do not touch validity.**", "validity is the packet's to state"),
+    ("not claim-eligible", "no summary may imply a publishable claim"),
+    ("**Name both sides of every comparison.**", "a ratio with an unnamed denominator is decoration"),
+):
+    require(phrase in system_text, f"the prompt no longer says {phrase!r}: {why}")
+
+if problems:
+    for problem in problems:
+        print(f"error: {problem}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+
+echo "==> the rendered banner is the one bench-report renders"
+python3 - "$repo_root/crates/bench-report/src/render.rs" \
+  "$repo_root/scripts/benchmark-openai-summary" <<'PY'
+import ast
+import pathlib
+import re
+import sys
+
+render_rs, script = (pathlib.Path(part).read_text(encoding="utf-8") for part in sys.argv[1:3])
+rust = re.search(
+    r'pub const DIAGNOSTIC_BANNER: &str = ("(?:[^"\\]|\\.)*");', render_rs, re.S
+)
+if rust is None:
+    raise SystemExit("error: bench_report::DIAGNOSTIC_BANNER could not be read")
+# Undo Rust's line-continuation escape, which strips the newline and the
+# indentation that follows it.
+expected = re.sub(r"\\\s*\n\s*", "", rust.group(1)[1:-1])
+
+# The script's copy is read as a Python literal rather than searched for as a
+# substring, so it may be wrapped across lines the way the rest of the file is.
+python = re.search(r"DIAGNOSTIC_BANNER = (\([^)]*\))", script, re.S)
+if python is None:
+    raise SystemExit("error: the summary script no longer defines DIAGNOSTIC_BANNER")
+actual = ast.literal_eval(python.group(1))
+if actual != expected:
+    raise SystemExit(
+        "error: the summary script's diagnostic banner has drifted from "
+        f"bench_report::DIAGNOSTIC_BANNER.\n  render.rs: {expected}\n  script:    {actual}"
+    )
+PY
+
+echo "==> a missing packet is refused rather than narrated"
+mkdir -p "$work/empty"
+if scripts/benchmark-openai-summary --reports "$work/empty" --dry-run >/dev/null 2>&1; then
+  fail "a reports directory with no analysis packet was accepted"
+fi
+
+echo "==> a non-default model and effort reach the request"
+scripts/benchmark-openai-summary \
+  --reports "$reports" \
+  --model gpt-5.5-mini \
+  --reasoning-effort medium \
+  --dry-run >/dev/null
+python3 - "$request" <<'PY'
+import json
+import pathlib
+import sys
+
+document = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if document["model"] != "gpt-5.5-mini" or document["reasoningEffort"] != "medium":
+    raise SystemExit(f"error: --model and --reasoning-effort did not reach the request: {document['model']} {document['reasoningEffort']}")
+PY
+
+printf 'benchmark-openai-summary contract test passed\n'

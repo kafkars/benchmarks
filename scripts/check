@@ -12,7 +12,12 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
-for lane in check-workspace check-schemas check-control-plane check-dependency-provenance; do
+# benchmark-openai-summary-test is in the list despite not being named check-*:
+# it is an offline script contract that needs only python3, CI runs it in the
+# control-plane lane, and a gate that skipped it would let a change to the
+# prompt artifact or the summary script pass locally and fail there.
+for lane in check-workspace check-schemas check-control-plane \
+  benchmark-openai-summary-test check-dependency-provenance; do
   echo "==> $lane"
   "$repo_root/scripts/$lane"
 done

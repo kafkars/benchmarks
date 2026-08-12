@@ -1,30 +1,47 @@
 # Narrator prompt `producer-comparison.v1`
 
-**Nothing in this repository invokes a language model.** There is no API key, no
-client, no network call, and no dependency that could make one. This file is a
-template an operator may paste into a model of their choosing, outside the
-harness, together with an analysis packet. The result comes back the same way it
-went out — by hand — and is only evidence once
-`bench_report::validate_llm_summary` has accepted it against the packet it
-claims to be about.
+**Nothing on a measurement's path invokes a language model.** No adapter, no
+control-plane verb, and no sealing path has an API key, a client, a network
+call, or a dependency that could make one. Exactly one thing in this repository
+calls a model — `scripts/benchmark-openai-summary`, which runs *after* a suite
+has sealed its evidence, reads the analysis packet that suite derived, and can
+be deleted without changing a single number. The model never sees an evidence
+bundle, a result document, or anything else the packet does not carry.
+
+The reply is not evidence when it arrives. It becomes evidence only once
+`benchctl packet --suite <suite-summary.json> --llm-summary <file>` has accepted
+it against the packet it claims to be about, and the script renders no markdown
+for a summary that did not pass. An operator who prefers to work by hand pastes
+this file into a model of their choosing and validates the reply with the same
+command; the script exists to make the machine path identical to that one, not
+easier than it.
 
 The prompt is versioned because the wording is part of the method. Changing what
 the narrator is told changes what the prose says; a summary produced under
 different instructions is a different artifact and belongs under a new version
-of this file, not an edit to this one.
+of this file, not an edit to this one. `promptVersion` in every request the
+script writes is this file's version, `producer-comparison.v1`.
 
 ## How to use it
 
-1. Build the packet: `benchctl report --packet` (or
-   `bench_report::build_packet`) writes a `kafkars.analysis-packet.v1` document.
+1. Build the packet: `benchctl suite` writes an `analysis-packet.json` beside
+   its `suite-summary.json` (or call `bench_report::build_packet`).
 2. Replace the `{{ANALYSIS_PACKET_JSON}}` slot below with that document verbatim.
    Nothing else in the prompt changes, and nothing is added to it — no extra
    context, no hints about which subject is "ours".
 3. Send the whole prompt to the model.
-4. Save the reply and validate it. A reply that does not parse as
-   `kafkars.llm-summary.v1`, cites a key the packet does not define, or states a
-   verdict other than the packet's is rejected. Rejection costs nothing: the
-   packet still holds every number, and none of them depended on the prose.
+4. Save the reply and validate it with `benchctl packet`. A reply that does not
+   parse as `kafkars.llm-summary.v1`, cites a key the packet does not define, or
+   states a verdict other than the packet's is rejected. Rejection costs
+   nothing: the packet still holds every number, and none of them depended on
+   the prose.
+
+`scripts/benchmark-openai-summary` does those four steps in that order. It
+splits this file at the two headings below — everything from `## Prompt` to
+`### The packet` becomes the system message, and `### The packet` onward becomes
+the user message — so the text the model is sent is this text, and a reader can
+diff a request against this file. Renaming either heading changes what is sent
+and belongs in a new version of this file.
 
 ---
 

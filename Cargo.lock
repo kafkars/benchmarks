@@ -42,9 +42,11 @@ version = "0.1.0"
 dependencies = [
  "bench-report",
  "bench-schema",
+ "serde",
  "serde_json",
  "sha2",
  "signal-hook",
+ "toml",
 ]
 
 [[package]]
