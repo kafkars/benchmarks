@@ -18,6 +18,8 @@
     reason = "a fixture that cannot be built must fail the test immediately"
 )]
 
+pub(crate) mod harness;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
