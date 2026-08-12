@@ -1,0 +1,24 @@
+# Install one explicitly named Rust toolchain through immutable action code.
+#
+# The default is the workspace MSRV and MUST stay in sync with `rust-version`
+# in the root Cargo.toml and the channel in rust-toolchain.toml. Benchmark
+# evidence is only comparable across runs when the compiler is a constant, so
+# the toolchain is a reviewed input here, never "whatever rustup resolved".
+# A caller that wants a different compiler passes `toolchain:` explicitly and
+# says why in its job comment.
+name: Set up Rust
+description: Install the reviewed Rust toolchain for the benchmark lab.
+
+inputs:
+  toolchain:
+    description: Exact Rust toolchain version to install.
+    required: false
+    default: "1.88.0"
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master @ 2026-07-16
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: rustfmt, clippy

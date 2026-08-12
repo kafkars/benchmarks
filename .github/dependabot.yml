@@ -1,0 +1,31 @@
+# Only the github-actions ecosystem is tracked here, on purpose.
+#
+# Cargo and npm updates are deliberately NOT automated: the Rust dependency set
+# is tiny and reviewed by hand, and the adapters must stay comparable across
+# time — an unattended bump to an adapter's dependency tree silently changes
+# what a benchmark measures. Action pins are the opposite case: they are pure
+# supply chain, they carry no measurement semantics, and leaving them stale is
+# the only real risk.
+#
+# Both the workflows and the two local composite actions are listed, because
+# `directory: /` alone would leave the pins inside .github/actions/*/action.yml
+# frozen forever — which is exactly where the toolchain and checkout pins live.
+# Grouped so each directory yields one supply-chain diff per week rather than
+# several near-identical ones.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/setup-rust
+      - /.github/actions/checkout-siblings
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: chore
