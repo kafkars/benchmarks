@@ -15,7 +15,7 @@ use super::{measurement::Measurement, outstanding::OutstandingGauge};
 const NANOS_PER_SECOND: f64 = 1_000_000_000.0;
 
 /// How payload bytes came to exist: templates built before the run.
-pub(crate) const PAYLOAD_CONSTRUCTION: &str = "prebuilt-pool";
+pub(crate) const PAYLOAD_CONSTRUCTION: &str = "prebuilt-pool-per-offer-sequence";
 
 /// Who owned the bytes across the client boundary.
 ///

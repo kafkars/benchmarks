@@ -69,7 +69,7 @@ fn measurement(goodput: f64, p99: u64) -> ProducerBenchmarkV2 {
         run_id: "0123456789abcdef".to_owned(),
         load_mode: LoadMode::ClosedLoop,
         declared: DeclaredExecution {
-            payload_construction: "prebuilt-pool".to_owned(),
+            payload_construction: "prebuilt-pool-per-offer-sequence".to_owned(),
             ownership: "copy-in".to_owned(),
             completion_mode: "aggregate-batch-terminal".to_owned(),
             serialization: "excluded".to_owned(),

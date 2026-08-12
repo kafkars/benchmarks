@@ -140,7 +140,10 @@ fn the_declared_execution_says_what_the_measured_path_actually_did() {
     .unwrap();
 
     assert_eq!(document.declared.payload_construction, PAYLOAD_CONSTRUCTION);
-    assert_eq!(document.declared.payload_construction, "prebuilt-pool");
+    assert_eq!(
+        document.declared.payload_construction,
+        "prebuilt-pool-per-offer-sequence"
+    );
     assert_eq!(document.declared.ownership, OWNERSHIP);
     assert_eq!(
         document.declared.ownership, "owned-per-offer-from-pool",

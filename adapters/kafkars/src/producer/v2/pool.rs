@@ -28,7 +28,7 @@ const KEY_BYTES: usize = 8;
 /// filled by one `copy_from_slice` from a template plus a sixteen-byte
 /// rewrite of the sequence field. One allocation backs a whole batch and is
 /// sliced per record, so the measured path allocates per batch rather than per
-/// record. The document declares this as `payload_construction: "prebuilt-pool"`
+/// record. The document declares this as `payload_construction: "prebuilt-pool-per-offer-sequence"`
 /// with `ownership: "owned-per-offer-from-pool"` rather than claiming a
 /// zero-copy handoff it does not perform.
 ///
