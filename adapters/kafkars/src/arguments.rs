@@ -9,7 +9,7 @@
 
 use std::{error::Error, ffi::OsString, path::PathBuf};
 
-use crate::{payload, producer, protocol, schedule, topics};
+use crate::{histogram_vector, payload, producer, protocol, schedule, topics};
 
 pub(crate) const RUN_ID_BYTES: usize = 16;
 pub(crate) const MIN_PAYLOAD_BYTES: usize = 64;
@@ -29,6 +29,7 @@ where
     match command.as_str() {
         "payload" => emit_payload(tail),
         "schedule" => emit_schedule(tail),
+        "histogram-vector" => emit_histogram_vector(tail),
         "produce" => emit_report(&producer::run(&parse_produce(tail)?)?),
         "produce-fixed" => emit_report(&producer::run_fixed(&parse_fixed_produce(tail)?)?),
         "topics-create" => topics::create(&parse_topics(tail)?),
@@ -85,6 +86,21 @@ fn parse_run(values: &[String]) -> Result<(PathBuf, PathBuf), Box<dyn Error>> {
         }
         _ => Err(usage().into()),
     }
+}
+
+/// `histogram-vector`: whitespace-separated `u64` values on stdin, one
+/// encoded histogram on stdout.
+///
+/// The values are read rather than named on the command line because the
+/// committed conformance input is a file of them, and a vector whose input
+/// lives in the argument parser would be a vector of the argument parser.
+fn emit_histogram_vector(values: &[String]) -> Result<(), Box<dyn Error>> {
+    if !values.is_empty() {
+        return Err(usage().into());
+    }
+    let mut input = std::io::stdin().lock();
+    let mut output = std::io::stdout().lock();
+    histogram_vector::emit(&mut input, &mut output)
 }
 
 fn emit_schedule(values: &[String]) -> Result<(), Box<dyn Error>> {
@@ -305,5 +321,6 @@ fn parse_i32(name: &str, value: &str) -> Result<i32, Box<dyn Error>> {
 
 fn usage() -> &'static str {
     "usage: kafkars-benchmark-adapter \
-     <payload|schedule|produce|produce-fixed|topics-create|topics-delete|describe|validate|run> ..."
+     <payload|schedule|histogram-vector|produce|produce-fixed|topics-create|topics-delete\
+     |describe|validate|run> ..."
 }

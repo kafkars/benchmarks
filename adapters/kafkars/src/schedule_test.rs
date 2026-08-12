@@ -2,7 +2,7 @@
 
 use std::error::Error;
 
-use super::schedule::{ScheduledBatch, batches, intended_offset_ns};
+use super::schedule::{Schedule, ScheduledBatch, batches, intended_offset_ns};
 
 #[test]
 fn record_schedule_uses_exact_integer_nanoseconds() -> Result<(), Box<dyn Error>> {
@@ -42,5 +42,40 @@ fn batch_is_due_with_its_last_record_and_round_robins_callers() -> Result<(), Bo
             },
         ]
     );
+    Ok(())
+}
+
+#[test]
+fn asking_for_one_batch_at_a_time_yields_the_materialized_schedule() -> Result<(), Box<dyn Error>> {
+    // The v2 fixed-rate path never materializes the schedule, because a vector
+    // of batches grows with the run. That is only safe while the lazy answer
+    // is the same answer, so the two are compared over the cases the committed
+    // conformance vectors pin — a clean multiple, a ragged tail, and a rate
+    // whose offsets land in the sub-microsecond range.
+    for (rate, records, batch_records, callers) in [
+        (100_000u64, 1_000u64, 256u64, 4u64),
+        (3, 17, 4, 2),
+        (1_000_000_000, 513, 256, 4),
+    ] {
+        let materialized = batches(rate, records, batch_records, callers)?;
+        let schedule = Schedule::new(rate, records, batch_records, callers)?;
+
+        assert_eq!(
+            schedule.batch_count(),
+            u64::try_from(materialized.len())?,
+            "batch count for {rate}/{records}/{batch_records}/{callers}"
+        );
+        for (index, expected) in materialized.iter().enumerate() {
+            assert_eq!(
+                &schedule.batch(u64::try_from(index)?)?,
+                expected,
+                "batch {index} of {rate}/{records}/{batch_records}/{callers}"
+            );
+        }
+        assert!(
+            schedule.batch(schedule.batch_count()).is_err(),
+            "a batch past the end of the run is not a batch"
+        );
+    }
     Ok(())
 }

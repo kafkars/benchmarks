@@ -1,8 +1,5 @@
 //! Four-caller execution of one immutable open-loop schedule.
 
-mod admission_turn;
-#[cfg(test)]
-mod admission_turn_test;
 mod caller;
 mod result;
 
@@ -12,7 +9,7 @@ use kafkars::Producer;
 
 use crate::schedule;
 
-use super::phase::PhaseSpec;
+use super::{phase::PhaseSpec, turn::AdmissionTurn};
 
 pub(super) use self::result::{FixedPhaseResult, write_latencies};
 
@@ -45,7 +42,7 @@ pub(super) fn run_fixed_phase(
     if base_budget < super::BATCH_RECORDS {
         return Err("fixed-load budget must hold one full batch per caller".into());
     }
-    let admission_turn = Arc::new(admission_turn::AdmissionTurn::new());
+    let admission_turn = Arc::new(AdmissionTurn::new());
 
     let results = thread::scope(|scope| {
         let mut handles = Vec::with_capacity(spec.callers);

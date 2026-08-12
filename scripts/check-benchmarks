@@ -63,16 +63,17 @@ assert_golden() {
   local golden="$1"
   local observed="$2"
   local producer="$3"
+  local doc="${4:-conformance/README.md}"
   if [[ ! -f "$golden" ]]; then
     echo "missing conformance golden ${golden#"$repo_root/"}" >&2
-    echo "regenerate the goldens with the commands in conformance/README.md" >&2
+    echo "regenerate the goldens with the commands in $doc" >&2
     exit 1
   fi
   if ! cmp -s "$golden" "$observed"; then
     echo "conformance golden mismatch: $producer disagrees with" >&2
     echo "  ${golden#"$repo_root/"}" >&2
     echo "the observable vector bytes changed; if that is intended, regenerate" >&2
-    echo "the goldens with the commands in conformance/README.md and review the" >&2
+    echo "the goldens with the commands in $doc and review the" >&2
     echo "resulting diff as a behavior change, not a refresh" >&2
     exit 1
   fi
@@ -104,3 +105,37 @@ for vector in "100000 1000 256 4" "3 17 4 2" "1000000000 513 256 4"; do
   assert_golden \
     "$golden" "$vector_scratch/schedule-c.vector" "librdkafka schedule $vector"
 done
+
+# The third cross-language contract: the log-linear histogram encoding every
+# reader derives percentiles from. Unlike the two above there is no direct
+# Rust-versus-C comparison here, because holding both to the same committed
+# golden is strictly stronger than holding them to each other.
+histogram_doc="conformance/histogram/README.md"
+histogram_input="$golden_root/histogram/mixed.input"
+histogram_golden="$golden_root/histogram/mixed.vector"
+histogram_c="$binary_root/librdkafka-histogram-vector"
+if [[ ! -f "$histogram_input" ]]; then
+  echo "missing conformance input ${histogram_input#"$repo_root/"}" >&2
+  exit 1
+fi
+if [[ ! -x "$histogram_c" ]]; then
+  echo "missing built binary librdkafka-histogram-vector" >&2
+  echo "the histogram encoding is a byte contract between two languages, and a" >&2
+  echo "check that only ran the Rust side would assert that a value equals" >&2
+  echo "itself. Build the C vector binary from the librdkafka adapter — it" >&2
+  echo "reads the same whitespace-separated u64 values on standard input and" >&2
+  echo "prints the same compact JSON — and add it to" >&2
+  echo "scripts/build-benchmark-adapters next to librdkafka-schedule-vector." >&2
+  echo "See $histogram_doc for what the vector covers." >&2
+  exit 1
+fi
+"$binary_root/kafkars-benchmark-adapter" histogram-vector \
+  <"$histogram_input" \
+  >"$vector_scratch/histogram-rust.vector"
+"$histogram_c" <"$histogram_input" >"$vector_scratch/histogram-c.vector"
+assert_golden \
+  "$histogram_golden" "$vector_scratch/histogram-rust.vector" \
+  "kafkars histogram-vector" "$histogram_doc"
+assert_golden \
+  "$histogram_golden" "$vector_scratch/histogram-c.vector" \
+  "librdkafka histogram-vector" "$histogram_doc"

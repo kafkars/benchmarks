@@ -1,4 +1,14 @@
 //! Deterministic public-call linearization shared by fixed-load callers.
+//!
+//! Four callers admitting into one client would otherwise interleave their
+//! public calls differently on every run, so the batch the broker sees first
+//! would be a property of the scheduler rather than of the schedule. Taking
+//! turns by batch index makes the public call sequence the schedule's own, and
+//! a caller that is refused keeps its turn rather than losing its place.
+//!
+//! Both fixed-rate phases share this one primitive: the legacy `fixed_phase`
+//! and the v2 measured path linearize admission identically, because a
+//! difference here would be a difference in what the two paths measure.
 
 use std::{
     error::Error,
@@ -6,7 +16,7 @@ use std::{
 };
 
 #[derive(Debug)]
-pub(super) struct AdmissionTurn {
+pub(in crate::producer) struct AdmissionTurn {
     state: Mutex<TurnState>,
     changed: Condvar,
 }
@@ -18,14 +28,17 @@ struct TurnState {
 }
 
 impl AdmissionTurn {
-    pub(super) fn new() -> Self {
+    pub(in crate::producer) fn new() -> Self {
         Self {
             state: Mutex::new(TurnState::default()),
             changed: Condvar::new(),
         }
     }
 
-    pub(super) fn wait(&self, index: u64) -> Result<AdmissionPermit<'_>, Box<dyn Error>> {
+    pub(in crate::producer) fn wait(
+        &self,
+        index: u64,
+    ) -> Result<AdmissionPermit<'_>, Box<dyn Error>> {
         let mut state = self
             .state
             .lock()
@@ -52,14 +65,14 @@ impl AdmissionTurn {
     }
 }
 
-pub(super) struct AdmissionPermit<'a> {
+pub(in crate::producer) struct AdmissionPermit<'a> {
     turn: &'a AdmissionTurn,
     state: Option<MutexGuard<'a, TurnState>>,
     resolved: bool,
 }
 
 impl AdmissionPermit<'_> {
-    pub(super) fn complete(mut self) -> Result<(), Box<dyn Error>> {
+    pub(in crate::producer) fn complete(mut self) -> Result<(), Box<dyn Error>> {
         let state = self
             .state
             .as_mut()
@@ -73,7 +86,7 @@ impl AdmissionPermit<'_> {
         Ok(())
     }
 
-    pub(super) fn retry(mut self) {
+    pub(in crate::producer) fn retry(mut self) {
         self.resolved = true;
     }
 }

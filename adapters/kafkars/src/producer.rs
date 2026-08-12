@@ -1,15 +1,34 @@
 //! Bounded completion-driven execution through the public `kafkars` producer.
 //!
-//! A phase returns its rendered report rather than printing it. The legacy
-//! command arms print exactly the bytes this module renders, and the adapter
-//! protocol writes exactly those bytes to `result.json`, so the two surfaces
-//! cannot drift: there is one serialization, and both callers use it.
+//! # Two measured paths, one client
+//!
+//! The phases here are the legacy ones. They return their rendered report
+//! rather than printing it, and the legacy command arms print exactly those
+//! bytes — `kafkars.producer-benchmark.v1` and `kafkars.producer-fixed-load.v1`
+//! — because a control plane's sealed evidence cannot be redefined after the
+//! fact.
+//!
+//! [`v2`] is the second path, used only by the adapter protocol's `run` verb.
+//! It measures the same workload with an admission clock that survives
+//! queue-full retries and evidence that does not grow with the run, which is a
+//! change in what is measured rather than in how it is printed, and so is a new
+//! schema id rather than an edit to these.
+//!
+//! What the two must never differ in is the client they measure. Every
+//! constant below is shared, and [`session`] applies them in one place, so a
+//! change to the batching, the retry policy, or the queue budget reaches both
+//! paths together or not at all.
 
 mod batch_phase;
 mod fixed_phase;
 mod fixed_report;
 mod fixed_run;
 mod phase;
+mod session;
+mod turn;
+#[cfg(test)]
+mod turn_test;
+mod v2;
 
 use std::{
     error::Error,
@@ -17,19 +36,29 @@ use std::{
     time::{Duration, Instant},
 };
 
-use kafkars::{Client, ErrorKind, MetricsSnapshot, Producer, ProducerLimits};
+use kafkars::{Client, ErrorKind, MetricsSnapshot, Producer};
 use serde::Serialize;
 
 use crate::{
     arguments::{FixedProduceArgs, ProduceArgs},
     report::{NativeMetrics, ProducerReport, ProducerSettings, latencies},
-    topics,
 };
 
 use self::{
     batch_phase::run_batch_phase,
     phase::{PhaseResult, PhaseSpec, run_phase, write_latencies},
+    session::{CLOSED_LOOP_WAITING_BYTES, Session, SessionSpec},
 };
+
+pub(crate) use self::v2::{
+    V2_COMPLETION_MODE, V2_OWNERSHIP, run_closed_loop_v2, run_fixed_rate_v2,
+};
+
+/// Client id the closed-loop phases identify themselves to the broker with.
+const CLOSED_LOOP_CLIENT_ID: &str = "kafkars-raw-comparison";
+
+/// Client id the fixed-rate phases identify themselves to the broker with.
+const FIXED_RATE_CLIENT_ID: &str = "kafkars-fixed-load-comparison";
 
 const QUEUE_BYTES: usize = 64 * 1024 * 1024;
 const BATCH_RECORDS: usize = 256;
@@ -42,13 +71,14 @@ const COMPLETION_TIMEOUT: Duration = Duration::from_secs(65);
 const MAX_RETRIES: u32 = 600;
 const RETRY_BACKOFF: Duration = Duration::from_millis(100);
 
-/// One completed phase: the exact report bytes, and whether the phase held its
-/// terminal contract.
+/// One completed legacy phase: the exact report bytes, and whether the phase
+/// held its terminal contract.
 ///
 /// The bytes are carried rather than the report struct because the two report
-/// shapes differ between load modes while their callers do not care: the legacy
-/// arm prints them, the protocol writes them to a file, and neither may
-/// re-serialize what the other produced.
+/// shapes differ between load modes while the caller does not care. The v2
+/// path does not use this type: it carries a typed
+/// [`bench_schema::ProducerBenchmarkV2`] and serializes it once, at the write
+/// site.
 #[derive(Debug)]
 pub(crate) struct RunOutcome {
     /// The report as a single JSON line, with no trailing newline.
@@ -62,9 +92,9 @@ pub(crate) struct RunOutcome {
 impl RunOutcome {
     /// Renders a report exactly as the legacy stdout arm always has.
     ///
-    /// This is the single serialization site for adapter results. A change here
-    /// changes both the legacy stdout bytes and the sealed `result.json` bytes
-    /// together, which is the only way they can be guaranteed to agree.
+    /// This is the single serialization site for the legacy result documents,
+    /// and the bytes it produces are frozen: a control plane's sealed evidence
+    /// was recorded from them.
     pub(crate) fn render<T: Serialize>(
         report: &T,
         valid: bool,
@@ -87,35 +117,18 @@ pub(crate) const FIXED_RATE_INVALID: &str =
     "fixed-load phase did not settle every scheduled record";
 
 pub(crate) fn run(arguments: &ProduceArgs) -> Result<RunOutcome, Box<dyn Error>> {
-    let limits = ProducerLimits::default()
-        .with_retained_bytes(QUEUE_BYTES)
-        .with_in_flight_records(arguments.max_outstanding)
-        .with_waiting_records(arguments.max_outstanding)
-        .with_waiting_bytes(QUEUE_BYTES)
-        .with_batch_records(BATCH_RECORDS)
-        .with_batch_bytes(BATCH_BYTES)
-        .with_request_bytes(REQUEST_BYTES)
-        .with_max_in_flight_requests_per_broker(MAX_IN_FLIGHT_REQUESTS_PER_BROKER)
-        .with_linger(LINGER);
-    let client = Client::builder()
-        .bootstrap_servers(arguments.bootstrap.split(',').map(str::to_owned))
-        .client_id("kafkars-raw-comparison")
-        .producer_limits(limits)
-        .producer_retry(MAX_RETRIES, RETRY_BACKOFF)
-        .producer_delivery_timeout(DELIVERY_TIMEOUT)
-        .build()?;
-    client.ready().wait()?;
-    topics::await_ready(
-        &client,
-        &[&arguments.warmup_topic, &arguments.topic],
-        arguments.partitions,
-        3,
-    )?;
-    let producer = client.producer().build()?;
+    let session = Session::open(SessionSpec {
+        bootstrap: &arguments.bootstrap,
+        client_id: CLOSED_LOOP_CLIENT_ID,
+        topics: [&arguments.warmup_topic, &arguments.topic],
+        partitions: arguments.partitions,
+        max_outstanding: arguments.max_outstanding,
+        waiting_bytes: CLOSED_LOOP_WAITING_BYTES,
+    })?;
 
     if arguments.warmup_records > 0 {
         let warmup = run_phase(
-            &producer,
+            &session.producer,
             PhaseSpec {
                 topic: &arguments.warmup_topic,
                 run_id: &arguments.run_id,
@@ -126,19 +139,18 @@ pub(crate) fn run(arguments: &ProduceArgs) -> Result<RunOutcome, Box<dyn Error>>
                 prime_partitions: true,
             },
         )?;
-        flush(&producer)?;
+        flush(&session.producer)?;
         if !phase_is_valid(&warmup, arguments.warmup_records) {
-            close(&producer)?;
-            client.shutdown().wait()?;
-            return Err(format!(
+            let reason = format!(
                 "warmup admitted {}, acknowledged {}, and failed {} of {} records: {}",
                 warmup.accepted,
                 warmup.acknowledged,
                 warmup.failed,
                 arguments.warmup_records,
                 warmup.failure_details.join("; "),
-            )
-            .into());
+            );
+            session.close()?;
+            return Err(reason.into());
         }
     }
 
@@ -151,17 +163,16 @@ pub(crate) fn run(arguments: &ProduceArgs) -> Result<RunOutcome, Box<dyn Error>>
         max_outstanding: arguments.max_outstanding,
         prime_partitions: false,
     };
-    let before = metrics(&client)?;
-    let mut phase = run_batch_phase(&producer, measured)?;
-    flush(&producer)?;
-    let after = metrics(&client)?;
+    let before = metrics(&session.client)?;
+    let mut phase = run_batch_phase(&session.producer, measured)?;
+    flush(&session.producer)?;
+    let after = metrics(&session.client)?;
     write_latencies(&arguments.latency_path, &phase.samples)?;
     let native_metrics = NativeMetrics::between(&before, &after, phase.batch_admission);
     let report = build_report(arguments, &mut phase, native_metrics)?;
     let outcome = RunOutcome::render(&report, report.valid, CLOSED_LOOP_INVALID)?;
 
-    close(&producer)?;
-    client.shutdown().wait()?;
+    session.close()?;
     Ok(outcome)
 }
 
@@ -182,7 +193,7 @@ fn build_report(
         .checked_mul(u64::try_from(arguments.payload_bytes)?)
         .ok_or("acknowledged payload bytes overflowed")?;
     Ok(ProducerReport {
-        schema: "kafkars.producer-benchmark.v1",
+        schema: crate::protocol::LEGACY_CLOSED_LOOP_RESULT_SCHEMA,
         adapter: "kafkars",
         adapter_version: env!("CARGO_PKG_VERSION"),
         run_id: arguments.run_id.clone(),

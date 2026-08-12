@@ -14,10 +14,10 @@ use bench_schema::{
 };
 use serde::Serialize;
 
-use crate::producer::RunOutcome;
+use crate::producer::{RunOutcome, V2_COMPLETION_MODE, V2_OWNERSHIP};
 use crate::protocol::{
-    ADAPTER_NAME, CLOSED_LOOP_RESULT_SCHEMA, FIXED_RATE_RESULT_SCHEMA, description,
-    fixed_arguments, produce_arguments, report, subject_of, utc_rfc3339_millis,
+    ADAPTER_NAME, LEGACY_CLOSED_LOOP_RESULT_SCHEMA, LEGACY_FIXED_RATE_RESULT_SCHEMA, RESULT_SCHEMA,
+    description, fixed_arguments, produce_arguments, report, subject_of, utc_rfc3339_millis,
 };
 
 const RUN_ID: &str = "0123456789abcdef";
@@ -101,6 +101,7 @@ fn subject(name: &str, adapter_name: &str) -> SubjectSpec {
         adapter_name: adapter_name.to_owned(),
         adapter_version: "0.1.0".to_owned(),
         command: vec![format!("target/release/{name}")],
+        role: None,
     }
 }
 
@@ -156,17 +157,66 @@ fn the_capability_document_describes_what_this_adapter_configures() {
     assert_eq!(document.capabilities.compression, vec!["none".to_owned()]);
     assert_eq!(
         document.result_schema(LoadMode::ClosedLoop),
-        Some(CLOSED_LOOP_RESULT_SCHEMA)
+        Some(RESULT_SCHEMA)
     );
     assert_eq!(
         document.result_schema(LoadMode::ScheduledOpenLoopFixedRate),
-        Some(FIXED_RATE_RESULT_SCHEMA)
+        Some(RESULT_SCHEMA)
     );
     assert_eq!(
         document.result_schema(LoadMode::ClosedLoop),
-        Some("kafkars.producer-benchmark.v1"),
-        "this is the schema id report.rs writes"
+        Some("kafkars.producer-benchmark.v2"),
+        "the protocol path writes v2 in both load modes; the load mode itself \
+         distinguishes them inside the document"
     );
+}
+
+#[test]
+fn the_capability_document_names_the_modes_a_v2_measurement_declares() {
+    // A reader holding a `result.json` next to this adapter's `describe`
+    // output should be able to look the measurement's declared execution up in
+    // the capability list. If these drift, the two documents describe two
+    // different adapters and neither says which one ran.
+    let document = description();
+
+    assert!(
+        document
+            .capabilities
+            .completion_modes
+            .contains(&V2_COMPLETION_MODE.to_owned()),
+        "{:?}",
+        document.capabilities.completion_modes
+    );
+    assert!(
+        document
+            .capabilities
+            .ownership_modes
+            .contains(&V2_OWNERSHIP.to_owned()),
+        "{:?}",
+        document.capabilities.ownership_modes
+    );
+}
+
+#[test]
+fn the_legacy_stdout_verbs_still_name_the_schema_ids_they_always_did() {
+    // The protocol path moved to v2; `produce` and `produce-fixed` did not,
+    // and the reports they print carry these ids by construction because
+    // `producer.rs` and `fixed_report.rs` serialize these very constants.
+    // Sealed bundles recorded under the legacy control plane stay readable
+    // exactly because this pair never moves.
+    assert_eq!(
+        LEGACY_CLOSED_LOOP_RESULT_SCHEMA,
+        "kafkars.producer-benchmark.v1"
+    );
+    assert_eq!(
+        LEGACY_FIXED_RATE_RESULT_SCHEMA,
+        "kafkars.producer-fixed-load.v1"
+    );
+    assert_ne!(
+        RESULT_SCHEMA, LEGACY_CLOSED_LOOP_RESULT_SCHEMA,
+        "a different measurement must not answer to the same schema id"
+    );
+    assert_ne!(RESULT_SCHEMA, LEGACY_FIXED_RATE_RESULT_SCHEMA);
 }
 
 #[test]

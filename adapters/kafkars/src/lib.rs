@@ -1,6 +1,9 @@
 //! Benchmark-only orchestration over the unmodified public `kafkars` surface.
 
 mod arguments;
+mod histogram_vector;
+#[cfg(test)]
+mod histogram_vector_test;
 mod payload;
 #[cfg(test)]
 mod payload_test;
