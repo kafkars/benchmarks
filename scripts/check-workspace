@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Rust workspace gate: format, lint, test, document.
+#
+# Every cargo invocation passes --locked. A benchmark repository that lets its
+# dependency graph move underneath a measurement cannot claim the measurement is
+# reproducible, so a stale Cargo.lock is a failure here rather than something
+# cargo quietly fixes. Regenerating the lock is a deliberate, separately
+# reviewed act.
+#
+# Warnings are denied in both clippy and rustdoc. Combined with the workspace's
+# missing_docs lint, that makes an undocumented public item a build failure:
+# the documentation is part of the contract, not a follow-up.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps

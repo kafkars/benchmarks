@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# The single gate. Everything a reviewer is entitled to assume about a change in
+# this repository is checked here, in the order that fails fastest and cheapest.
+#
+# The repository is being assembled in waves, so lanes whose files do not exist
+# yet are reported as skipped rather than treated as passing silently. A skip is
+# a visible statement that something was not checked; a green run with a skip
+# line is not the same claim as a green run without one. Once every lane exists,
+# the guards below become dead weight and should be deleted rather than left to
+# hide a lane that got removed by accident.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$repo_root"
+
+run_lane() {
+  local lane="$1"
+  if [ -x "$repo_root/scripts/$lane" ]; then
+    echo "==> $lane"
+    "$repo_root/scripts/$lane"
+  else
+    echo "skip: $lane (not yet present)"
+  fi
+}
+
+run_lane check-workspace
+run_lane check-schemas
+run_lane check-control-plane
+run_lane check-dependency-provenance
+
+echo "check: ok"
