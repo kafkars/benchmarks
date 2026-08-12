@@ -1,48 +1,56 @@
-//! Resolved experiment → the exact positional argument vector the unmodified C
-//! program already parses.
+//! Resolved experiment → the exact positional argument vector the C program
+//! parses.
 //!
-//! `adapters/librdkafka-c/config.c` accepts two shapes and nothing else:
+//! `adapters/librdkafka-c/config.c` accepts three shapes and nothing else. The
+//! protocol path drives the two that lead with `--v2-output`:
 //!
 //! ```text
-//! <binary> bootstrap warmup-topic topic run-id warmup-records records
-//!          payload-bytes partitions max-outstanding latency.csv
-//!          client-metrics.jsonl
+//! <binary> --v2-output <dir> bootstrap warmup-topic topic run-id
+//!          warmup-records records payload-bytes partitions max-outstanding
 //!
-//! <binary> --fixed-rate bootstrap warmup-topic topic run-id warmup-records
-//!          records payload-bytes partitions max-outstanding offered-rate
-//!          callers latency.csv client-metrics.jsonl
+//! <binary> --v2-output <dir> --fixed-rate bootstrap warmup-topic topic run-id
+//!          warmup-records records payload-bytes partitions max-outstanding
+//!          offered-rate callers
 //! ```
 //!
-//! Both are strictly positional and length-checked (`argc != 12` and
+//! The third is the legacy pair that ends in `latency.csv` and
+//! `client-metrics.jsonl`; the scripts still run it, and the C program refuses
+//! any vector that mixes the two, because a run cannot write both evidence
+//! contracts and be one measurement.
+//!
+//! Every shape is strictly positional and length-checked (`argc != 12` and
 //! `argc != 15` are hard refusals), so this module is where a resolved
 //! experiment stops being a document and becomes eleven or fourteen strings in
 //! a fixed order. It is pure and golden-tested: the argv is the entire
 //! interface to the reference client, and a silent reordering would compare two
 //! different workloads while reporting that it compared one.
 //!
-//! The two trailing paths are the C program's side outputs, and they are placed
-//! inside the control plane's output directory so that everything the run
-//! produced is sealed together: `latency.csv` is the per-record evidence, and
-//! `client-metrics.jsonl` is the librdkafka statistics stream.
+//! Under `--v2-output` the C program derives both of its own output paths from
+//! the one directory it is given, so the vector carries no file names at all —
+//! which is why they cannot disagree with where the control plane is looking.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bench_schema::{LoadMode, ResolvedExperiment, RuntimeBinding, SubjectSpec, TopicPair};
 
 use crate::describe::ADAPTER_NAME;
 
-/// Per-record latency evidence, written by the C program into the output
-/// directory.
-pub(crate) const LATENCY_FILE: &str = "latency.csv";
+/// The flag that selects the v2 evidence contract, and leads its vector.
+pub(crate) const V2_OUTPUT_FLAG: &str = "--v2-output";
 
-/// librdkafka's own statistics stream, one JSON object per interval.
+/// librdkafka's own statistics stream, one JSON object per interval, derived
+/// by the C program from the output directory.
 pub(crate) const STATISTICS_FILE: &str = "client-metrics.jsonl";
 
-/// The result document the C program prints on stdout.
+/// The v2 measurement document, written by the C program itself.
 pub(crate) const RESULT_FILE: &str = "result.json";
 
 /// The adapter's own terminal status document.
 pub(crate) const STATUS_FILE: &str = "status.json";
+
+/// Longest path the C program can hold for a derived side file
+/// (`BENCH_PATH_BYTES` in `benchmark.h`), counting its terminating NUL.
+const MAX_DERIVED_PATH_BYTES: usize = 4096;
 
 /// Builds the child argument vector for one subject of one experiment.
 ///
@@ -62,6 +70,8 @@ pub(crate) fn arguments(
         .get(subject)
         .ok_or_else(|| format!("the resolved experiment has no topics for subject {subject:?}"))?;
     let mut argv = Vec::with_capacity(14);
+    argv.push(V2_OUTPUT_FLAG.to_owned());
+    argv.push(output_argument(output)?);
     if experiment.load_mode == LoadMode::ScheduledOpenLoopFixedRate {
         argv.push("--fixed-rate".to_owned());
     }
@@ -73,9 +83,29 @@ pub(crate) fn arguments(
         argv.push(rate.to_string());
         argv.push(experiment.application.callers_per_producer.to_string());
     }
-    argv.push(path_argument(&output.join(LATENCY_FILE))?);
-    argv.push(path_argument(&output.join(STATISTICS_FILE))?);
     Ok(argv)
+}
+
+/// Renders the output directory, checking the paths the C program will derive.
+///
+/// The C program builds `<dir>/result.json` and `<dir>/client-metrics.jsonl`
+/// into fixed buffers and refuses either if it does not fit, so a directory
+/// that would fail there fails here instead — where the message can say which
+/// derived path was too long rather than reporting it as a run that produced
+/// nothing.
+fn output_argument(output: &Path) -> Result<String, String> {
+    let directory = path_argument(output)?;
+    for leaf in [RESULT_FILE, STATISTICS_FILE] {
+        let derived: PathBuf = output.join(leaf);
+        let rendered = path_argument(&derived)?;
+        if rendered.len() + 1 > MAX_DERIVED_PATH_BYTES {
+            return Err(format!(
+                "{rendered:?} is longer than the {MAX_DERIVED_PATH_BYTES} bytes the C adapter \
+                 reserves for a derived output path"
+            ));
+        }
+    }
+    Ok(directory)
 }
 
 /// The nine arguments both shapes share, in the order `config.c` reads them.

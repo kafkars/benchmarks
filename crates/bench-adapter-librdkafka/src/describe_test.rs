@@ -8,10 +8,7 @@
 
 use bench_schema::{AdapterDescription, LoadMode, parse_json_slice, pretty_bytes};
 
-use crate::describe::{
-    ADAPTER_NAME, CLOSED_LOOP_RESULT_SCHEMA, FIXED_RATE_RESULT_SCHEMA, LIBRDKAFKA_VERSION,
-    description,
-};
+use crate::describe::{ADAPTER_NAME, LIBRDKAFKA_VERSION, RESULT_SCHEMA, description};
 
 #[test]
 fn the_document_names_the_pinned_reference_client() {
@@ -51,21 +48,33 @@ fn it_names_a_result_schema_for_each_load_mode_it_runs() {
 
     assert_eq!(
         document.result_schema(LoadMode::ClosedLoop),
-        Some(CLOSED_LOOP_RESULT_SCHEMA)
+        Some(RESULT_SCHEMA)
     );
     assert_eq!(
         document.result_schema(LoadMode::ScheduledOpenLoopFixedRate),
-        Some(FIXED_RATE_RESULT_SCHEMA)
+        Some(RESULT_SCHEMA)
     );
     assert_eq!(
         document.result_schema(LoadMode::ClosedLoop),
-        Some("kafkars.producer-benchmark.v1"),
-        "report.c prints this schema id"
+        Some("kafkars.producer-benchmark.v2"),
+        "v2_report.c writes this schema id"
     );
+}
+
+#[test]
+fn both_load_modes_now_answer_with_the_same_document() {
+    let document = description();
+
+    // The v2 document names its own load mode, so the schema no longer has to:
+    // a reader that knows one shape can read both.
     assert_eq!(
-        document.result_schema(LoadMode::ScheduledOpenLoopFixedRate),
-        Some("kafkars.producer-fixed-load.v1"),
-        "fixed_report.c prints this schema id"
+        document.result_schema(LoadMode::ClosedLoop),
+        document.result_schema(LoadMode::ScheduledOpenLoopFixedRate)
+    );
+    assert_ne!(
+        document.result_schema(LoadMode::ClosedLoop),
+        Some("kafkars.producer-benchmark.v1"),
+        "the protocol path stopped emitting v1 when it stopped redirecting stdout"
     );
 }
 
