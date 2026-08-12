@@ -35,7 +35,7 @@ Ratios are numerator over denominator of the medians. The interval is the paired
 | --- | --- | --- | --- |
 | `attempts-valid` | pass | at least one attempt has to be usable evidence | 5 valid attempts |
 | `paired-repetitions` | pass | a comparison needs at least 5 valid paired attempts | 5 of 5 required |
-| `dispersion-within-budget` | pass | every subject's goodput and p99 must vary by no more than 0.05 of its mean | every gated dispersion is inside the budget |
+| `dispersion-within-budget` | pass | every compared pair's goodput and p99 ratio must vary by no more than 0.05 of its mean, over the same per-attempt ratios the interval is drawn from | every gated ratio dispersion is inside the budget |
 | `kafkars-over-librdkafka:acknowledged_records_per_second` | pass | acknowledged goodput improves only when the whole confidence interval is above 1.050 (larger is better) | ratio of medians 1.1826, interval [1.1780, 1.1850] |
 | `kafkars-over-librdkafka:p50_intended_to_terminal_ns` | pass | p50 offer-to-terminal improves only when the whole confidence interval is below 0.950 (smaller is better) | ratio of medians 0.7479, interval [0.7408, 0.7517] |
 | `kafkars-over-librdkafka:p99_intended_to_terminal_ns` | pass | p99 offer-to-terminal improves only when the whole confidence interval is below 0.950 (smaller is better) | ratio of medians 0.7479, interval [0.7408, 0.7517] |
@@ -44,20 +44,27 @@ Ratios are numerator over denominator of the medians. The interval is the paired
 
 ## Dispersion
 
-| Subject | Metric | Coefficient of variation |
-| --- | --- | ---: |
-| librdkafka | acknowledged_records_per_second | 0.0056 |
-| librdkafka | p50_intended_to_terminal_ns | 0.0214 |
-| librdkafka | p99_intended_to_terminal_ns | 0.0214 |
-| librdkafka | p999_intended_to_terminal_ns | 0.0214 |
-| librdkafka | p99_admission_wait_ns | 0.0000 |
-| librdkafka | cpu_core_seconds | 0.0000 |
-| librdkafka | max_rss_bytes | 0.0000 |
-| kafkars | acknowledged_records_per_second | 0.0081 |
-| kafkars | p50_intended_to_terminal_ns | 0.0124 |
-| kafkars | p99_intended_to_terminal_ns | 0.0124 |
-| kafkars | p999_intended_to_terminal_ns | 0.0124 |
-| kafkars | p99_admission_wait_ns | 0.0000 |
+| Series | Metric | Coefficient of variation | Gated |
+| --- | --- | ---: | :---: |
+| librdkafka | acknowledged_records_per_second | 0.0056 | no |
+| librdkafka | p50_intended_to_terminal_ns | 0.0214 | no |
+| librdkafka | p99_intended_to_terminal_ns | 0.0214 | no |
+| librdkafka | p999_intended_to_terminal_ns | 0.0214 | no |
+| librdkafka | p99_admission_wait_ns | 0.0000 | no |
+| librdkafka | cpu_core_seconds | 0.0000 | no |
+| librdkafka | max_rss_bytes | 0.0000 | no |
+| kafkars | acknowledged_records_per_second | 0.0081 | no |
+| kafkars | p50_intended_to_terminal_ns | 0.0124 | no |
+| kafkars | p99_intended_to_terminal_ns | 0.0124 | no |
+| kafkars | p999_intended_to_terminal_ns | 0.0124 | no |
+| kafkars | p99_admission_wait_ns | 0.0000 | no |
+| kafkars/librdkafka | acknowledged_records_per_second | 0.0038 | yes |
+| kafkars/librdkafka | p50_intended_to_terminal_ns | 0.0091 | no |
+| kafkars/librdkafka | p99_intended_to_terminal_ns | 0.0091 | yes |
+| kafkars/librdkafka | p999_intended_to_terminal_ns | 0.0091 | no |
+| kafkars/librdkafka | p99_admission_wait_ns | 0.0000 | no |
+
+Ratio series are gated against the noise budget. Per-subject rows are informational: they say whether the machine was steady, which is a different question from whether the comparison was.
 
 ## Request economics
 

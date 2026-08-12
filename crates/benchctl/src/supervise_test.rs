@@ -107,6 +107,57 @@ fn a_latched_interrupt_kills_the_child_without_calling_it_a_crash() {
 }
 
 #[test]
+fn a_child_that_dies_of_the_interrupt_first_is_not_called_a_crash() {
+    // The Ctrl-C ordering the poll loop cannot see. The terminal signals the
+    // whole process group, so the child dies of SIGINT on its own; by the time
+    // the supervisor looks again, `try_wait` has a corpse to report and the
+    // in-loop latch check never runs. The latch is raised here from a second
+    // thread inside that window: after the child has died (immediately) and
+    // before the next poll one `POLL_INTERVAL` later.
+    let interrupt = InterruptFlag::unarmed();
+    let raiser = interrupt.clone();
+    let handle = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(5));
+        raiser.raise();
+    });
+
+    let outcome = run(&shell("kill -INT $$", Duration::from_secs(30)), &interrupt).unwrap();
+    handle.join().unwrap();
+
+    assert_eq!(
+        outcome.exit.signal,
+        Some(2),
+        "the child died of the interrupt itself, not of the supervisor's kill"
+    );
+    assert!(
+        outcome.interrupted,
+        "an ending that coincides with a latched interrupt is an interruption"
+    );
+    assert!(!outcome.exit.timed_out, "nobody's deadline expired");
+    assert_eq!(
+        outcome.describe(),
+        "died on signal 2 while the run was interrupted",
+        "the record must not claim a kill the supervisor did not make"
+    );
+}
+
+#[test]
+fn a_signal_death_with_no_interrupt_latched_is_still_a_crash() {
+    // The other side of the same rule: the latch is what separates "the
+    // operator stopped the run" from "something killed the subject", so an
+    // unlatched signal death keeps its old meaning exactly.
+    let outcome = run(
+        &shell("kill -INT $$", Duration::from_secs(30)),
+        &InterruptFlag::unarmed(),
+    )
+    .unwrap();
+
+    assert_eq!(outcome.exit.signal, Some(2));
+    assert!(!outcome.interrupted);
+    assert_eq!(outcome.describe(), "died on signal 2");
+}
+
+#[test]
 fn output_streams_land_in_their_files() {
     let stdout = scratch_file("stdout");
     let stderr = scratch_file("stderr");

@@ -80,6 +80,14 @@ pub fn checksum_bundle(root: &Path) -> CtlResult<BundleChecksums> {
 
 /// Collects every regular file under `directory`, skipping the excluded root
 /// files.
+///
+/// Anything that is neither a directory nor a regular file fails the seal.
+/// A symbolic link, a fifo, a socket, or a device node inside a bundle is not
+/// evidence this module can hash: a link's target may live outside the bundle,
+/// may change after the manifest is written, or may not exist at all, and
+/// `shasum -c` would then disagree with a manifest that looked complete.
+/// Skipping such an entry silently is the worst of the three options, because
+/// the bundle would verify while carrying a file the manifest never mentioned.
 fn collect_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> CtlResult<()> {
     let entries = std::fs::read_dir(directory)
         .map_err(|error| CtlError::seal(format!("read {}: {error}", directory.display())))?;
@@ -87,16 +95,37 @@ fn collect_files(root: &Path, directory: &Path, files: &mut Vec<PathBuf>) -> Ctl
         let entry = entry
             .map_err(|error| CtlError::seal(format!("read {}: {error}", directory.display())))?;
         let path = entry.path();
+        // `DirEntry::file_type` does not follow links, so a symlink reports as a
+        // symlink here even when it points at a directory this walk would
+        // otherwise have descended into.
         let file_type = entry
             .file_type()
             .map_err(|error| CtlError::seal(format!("stat {}: {error}", path.display())))?;
         if file_type.is_dir() {
             collect_files(root, &path, files)?;
-        } else if file_type.is_file() && !is_excluded(root, &path) {
-            files.push(path);
+        } else if file_type.is_file() {
+            if !is_excluded(root, &path) {
+                files.push(path);
+            }
+        } else {
+            return Err(CtlError::seal(format!(
+                "{} is {}, which a bundle cannot seal: every entry must be a regular file or a \
+                 directory",
+                path.display(),
+                describe_file_type(file_type)
+            )));
         }
     }
     Ok(())
+}
+
+/// Names an entry kind for the refusal above.
+fn describe_file_type(file_type: std::fs::FileType) -> &'static str {
+    if file_type.is_symlink() {
+        "a symbolic link"
+    } else {
+        "neither a regular file nor a directory"
+    }
 }
 
 /// Reports whether `path` is one of the two files the manifest never lists.

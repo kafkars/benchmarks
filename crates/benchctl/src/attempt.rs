@@ -237,6 +237,18 @@ impl AttemptPaths {
         self.root.join("bundle.json")
     }
 
+    /// `seal-failure.txt` — why sealing could not finish.
+    ///
+    /// Written only when a seal failed after the bundle already held evidence,
+    /// which is the one case where the terminal documents may be absent from an
+    /// otherwise populated bundle. A reader who finds a bundle without a
+    /// `checksums.txt` needs to be told that in the bundle, not only on the
+    /// stderr of a process that has since exited.
+    #[must_use]
+    pub fn seal_failure_txt(&self) -> PathBuf {
+        self.root.join("seal-failure.txt")
+    }
+
     /// `adapters/` — one subdirectory per subject.
     #[must_use]
     pub fn adapters_dir(&self) -> PathBuf {

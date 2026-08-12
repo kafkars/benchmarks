@@ -28,6 +28,7 @@
 //! is written by the sealing pass alone.
 
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -39,7 +40,7 @@ use bench_schema::{
 };
 
 use crate::attempt::{AttemptId, AttemptPaths};
-use crate::error::{CtlError, CtlResult, EXIT_INTERNAL, exit_code_for_status};
+use crate::error::{CtlError, CtlErrorKind, CtlResult, EXIT_INTERNAL, exit_code_for_status};
 use crate::resolve::{ResolveInputs, RuntimeInputs, SubjectProbe};
 use crate::seal::AttemptRequest;
 use crate::{environment, probe, resolve, seal};
@@ -158,10 +159,25 @@ impl AttemptEnd {
 }
 
 /// Reads a bundle's sealed classification, when it has a readable one.
+///
+/// Validated, not merely deserialized. The callers of this function ask it one
+/// question — may this attempt's evidence be believed — and a document that
+/// contradicts its own schema is not an answer to it. Returning `None` for such
+/// a document makes every caller treat it as "not believable", which is the
+/// direction a reader of damaged evidence should fail in.
 #[must_use]
 pub fn read_classification(paths: &AttemptPaths) -> Option<Classification> {
     let bytes = std::fs::read(paths.classification_json()).ok()?;
-    bench_schema::parse_json_slice::<Classification>(&bytes).ok()
+    match Classification::from_slice(&bytes) {
+        Ok(document) => Some(document),
+        Err(error) => {
+            eprintln!(
+                "benchctl: {} is not a usable classification: {error}",
+                paths.classification_json().display()
+            );
+            None
+        }
+    }
 }
 
 /// Reads a bundle's sealed run status, when it has a readable one.
@@ -225,13 +241,27 @@ pub fn attempt(
         Ok(Ok(status)) => finish(status, exit_code_for_status(status)),
         Ok(Err(error)) => {
             eprintln!("benchctl: {error}");
+            // A failure to *write* evidence is a different axis from how the
+            // attempt went, and it keeps its own exit code. The bundle may still
+            // say `complete` — the run did complete — while the seal over it did
+            // not finish, and exiting zero on that would report a bundle nobody
+            // can verify as a clean run.
+            let write_failed = error.kind() == CtlErrorKind::Seal;
+            let seal_exit = error.exit_code();
             match seal::seal_failure(
                 &sealed_paths,
                 Some(&inputs.source_toml),
                 ExecutionStatus::Partial,
                 &error.to_string(),
             ) {
-                Ok(status) => finish(status, exit_code_for_status(status)),
+                Ok(status) => finish(
+                    status,
+                    if write_failed {
+                        seal_exit
+                    } else {
+                        exit_code_for_status(status)
+                    },
+                ),
                 Err(seal_error) => {
                     eprintln!("benchctl: {seal_error}");
                     AttemptEnd::Unsealable(seal_error)
@@ -338,6 +368,7 @@ pub fn probe_and_resolve(
             describe,
             validate: None,
             binary_sha256: binary_digest(&entry.command),
+            argument_binary_sha256s: argument_binary_digests(&entry.command),
         });
     }
 
@@ -373,6 +404,36 @@ fn binary_digest(command: &[String]) -> Option<String> {
     let program = command.first()?;
     let bytes = std::fs::read(program).ok()?;
     Some(sha256_hex(&bytes))
+}
+
+/// Hashes every argument that names a readable regular file.
+///
+/// The program is only the thing being measured when the subject is invoked
+/// directly. A command like `["shim", "--binary", "<a C producer>"]` measures
+/// the C producer, and [`binary_digest`] above identifies the shim — a digest
+/// that moves when the wrapper is rebuilt and holds still when the client under
+/// test is swapped.
+///
+/// The rule is deliberately mechanical: every element after the first that
+/// `stat`s as a regular file gets hashed, in `command` order, and nothing tries
+/// to infer which flag meant "the real binary". An adapter's argument grammar is
+/// the adapter's business, and a control plane that guessed at it would be
+/// wrong quietly. A path that names a directory, a device, or nothing at all is
+/// skipped, because there is no content to hash and an entry saying so would be
+/// noise in every ordinary lock.
+///
+/// Each digest is keyed by the argument as written, so a reader never has to
+/// re-derive which argument a digest covered.
+fn argument_binary_digests(command: &[String]) -> BTreeMap<String, String> {
+    command
+        .iter()
+        .skip(1)
+        .filter(|argument| std::fs::metadata(argument).is_ok_and(|metadata| metadata.is_file()))
+        .filter_map(|argument| {
+            let bytes = std::fs::read(argument).ok()?;
+            Some((argument.clone(), sha256_hex(&bytes)))
+        })
+        .collect()
 }
 
 /// Writes a resolved experiment, creating its parent directory.

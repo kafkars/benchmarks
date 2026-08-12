@@ -97,8 +97,8 @@ fn write_fixtures(dir: &Path, mode: &str, subjects: &[&str]) -> (PathBuf, PathBu
 /// The bootstrap every offline fixture binds to.
 const BOOTSTRAP: &str = "127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094";
 
-/// Runs `benchctl` with `arguments` and returns its exit code and stdout.
-fn benchctl(arguments: &[String]) -> (i32, String) {
+/// Runs `benchctl` with `arguments` and returns its exit code, stdout, stderr.
+fn benchctl_output(arguments: &[String]) -> (i32, String, String) {
     let output = Command::new(BENCHCTL).args(arguments).output().unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let code = output.status.code().unwrap_or(-1);
@@ -106,7 +106,17 @@ fn benchctl(arguments: &[String]) -> (i32, String) {
         code >= 0,
         "benchctl died on a signal; stderr:\n{stderr}\narguments: {arguments:?}"
     );
-    (code, String::from_utf8_lossy(&output.stdout).into_owned())
+    (
+        code,
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr,
+    )
+}
+
+/// Runs `benchctl` with `arguments` and returns its exit code and stdout.
+fn benchctl(arguments: &[String]) -> (i32, String) {
+    let (code, stdout, _stderr) = benchctl_output(arguments);
+    (code, stdout)
 }
 
 /// The argv shared by `suite` and `capacity`.
@@ -271,6 +281,114 @@ fn two_independent_suites_summarize_to_the_same_bytes() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Writes the fixtures for a suite whose third repetition cannot be sealed.
+///
+/// The topic-cleanup tool is the sabotage: it runs once at the end of every
+/// attempt, so on its second run it replaces `results/pending` — the directory
+/// every attempt workspace is born in — with a regular file. The next
+/// repetition therefore has nowhere to seal into, which is the one failure
+/// [`AttemptEnd::Unsealable`] exists for, and the only one a suite cannot
+/// record in a bundle.
+fn write_fixtures_that_break_after_two_attempts(
+    dir: &Path,
+    results: &Path,
+    subjects: &[&str],
+) -> (PathBuf, PathBuf) {
+    let adapter = common::adapter("ok");
+    let tool = |verb: &str| {
+        let mut argv = adapter.clone();
+        argv.push(verb.to_owned());
+        command_toml(&argv)
+    };
+    let marker = dir.join("cleanup-ran-once");
+    let sabotage = command_toml(&[
+        "/bin/sh".to_owned(),
+        "-c".to_owned(),
+        format!(
+            "if [ -e {marker} ]; then rm -rf {pending}; : > {pending}; fi; : > {marker}; exit 0",
+            marker = marker.display(),
+            pending = results.join("pending").display(),
+        ),
+    ]);
+    let mut subjects_toml = String::new();
+    for name in subjects {
+        let _ = writeln!(
+            subjects_toml,
+            "[[subjects]]\nname = \"{name}\"\ncommand = {}\n",
+            command_toml(&adapter)
+        );
+    }
+    let subjects_path = dir.join("subjects.toml");
+    std::fs::write(&subjects_path, subjects_toml).unwrap();
+    let cluster_path = dir.join("cluster.toml");
+    std::fs::write(
+        &cluster_path,
+        format!(
+            "name = \"offline\"\n\
+             bootstrap = \"127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094\"\n\
+             broker_version = \"4.3.1\"\nbrokers = 3\nsecurity = \"plaintext\"\n\
+             lifecycle = \"externally managed by the caller\"\n\n\
+             [tools]\ntopic_create = {create}\ntopic_delete = {sabotage}\nverify = {verify}\n",
+            create = tool("topics-create"),
+            verify = tool("verify"),
+        ),
+    )
+    .unwrap();
+    (subjects_path, cluster_path)
+}
+
+#[test]
+fn a_repetition_that_cannot_be_sealed_stops_the_suite_and_is_the_exit_code() {
+    let dir = scratch("unsealable");
+    let results = dir.join("results");
+    let reports = dir.join("reports");
+    let (subjects, cluster) =
+        write_fixtures_that_break_after_two_attempts(&dir, &results, &["kafkars", "librdkafka-c"]);
+    let mut arguments = common_arguments(
+        "suite",
+        &repo_root().join("scenarios/producer/legacy-balanced-1k.toml"),
+        &subjects,
+        &cluster,
+        &results,
+        &reports,
+    );
+    arguments.push("--repetitions".to_owned());
+    arguments.push("3".to_owned());
+
+    let (code, stdout, stderr) = benchctl_output(&arguments);
+
+    assert_eq!(
+        code, 70,
+        "the exit code is the unsealable repetition's, not the verdict over the two that \
+         sealed; stderr:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("the suite stopped after 2 of 3 repetitions"),
+        "the stop has to be said, not only exited: {stderr}"
+    );
+    assert!(
+        stderr.contains("cover only the 2 attempts that sealed"),
+        "the reports must not be presented as the whole suite: {stderr}"
+    );
+
+    // The two attempts that did seal are still summarized: they happened, and a
+    // suite that threw them away would be destroying evidence over a workspace
+    // it could not claim.
+    let directory = only_report_directory(&reports);
+    let summary =
+        SuiteSummary::from_slice(&std::fs::read(directory.join("suite-summary.json")).unwrap())
+            .unwrap();
+    assert_eq!(summary.repetitions, 2, "two bundles were summarized");
+    assert_eq!(summary.attempts.len(), 2);
+    assert!(summary.attempts.iter().all(|attempt| attempt.run_valid));
+    assert!(
+        stdout.contains("suite-summary.json"),
+        "the report paths are still printed: {stdout}"
+    );
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// A fixed-rate scenario that carries both a `[search]` section and objectives.
 fn capacity_scenario(dir: &Path) -> PathBuf {
     let path = dir.join("capacity.toml");
@@ -389,6 +507,65 @@ fn a_capacity_search_converges_on_the_rate_the_fixture_saturates_at() {
 }
 
 #[test]
+fn a_probe_the_bundle_calls_invalid_is_never_a_satisfied_rate() {
+    // `verifier-invalid` leaves the adapter's `run` alone: every probe writes a
+    // healthy result document that meets both declared objectives. Only the
+    // read-back verifier disagrees, which is exactly the shape that used to slip
+    // through — `evaluate_slo` sees nothing wrong with numbers whose attempt the
+    // seal has already refused to vouch for.
+    let dir = scratch("capacity-invalid");
+    let scenario = capacity_scenario(&dir);
+    let (subjects, cluster) = write_fixtures(&dir, "verifier-invalid", &["kafkars"]);
+    let results = dir.join("results");
+    let reports = dir.join("reports");
+    let arguments = common_arguments(
+        "capacity", &scenario, &subjects, &cluster, &results, &reports,
+    );
+
+    let (code, _stdout) = benchctl(&arguments);
+
+    assert_eq!(
+        code, 20,
+        "a search that never found a believable rate is not a success"
+    );
+    let directory = only_report_directory(&reports);
+    let document =
+        CapacitySearch::from_slice(&std::fs::read(directory.join("capacity-search.json")).unwrap())
+            .unwrap();
+    assert_eq!(document.status, CapacityStatus::Unconverged);
+    assert_eq!(document.confirmed_rate, None, "nothing was confirmed");
+    assert!(!document.probes.is_empty(), "the ladder still probed");
+    assert!(
+        document.probes.iter().all(|probe| !probe.satisfied),
+        "no probe may be satisfied while its own bundle says the run is not believable"
+    );
+    for probe in &document.probes {
+        assert!(
+            probe
+                .reasons
+                .iter()
+                .any(|reason| reason.starts_with("run validity:")),
+            "the failing gate has to be named: {:?}",
+            probe.reasons
+        );
+        assert!(
+            probe
+                .reasons
+                .iter()
+                .any(|reason| { reason.contains("did not satisfy the verification contract") }),
+            "and the bundle's own reason carried through: {:?}",
+            probe.reasons
+        );
+    }
+    // Unsatisfied at the initial rate sends the ladder downwards, so the search
+    // ends at the floor rather than at the ceiling.
+    assert_eq!(document.bracket_low, None);
+    assert!(document.bracket_high.is_some());
+
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn a_capacity_search_refuses_a_scenario_that_declares_no_objectives() {
     let dir = scratch("capacity-no-slo");
     let text = std::fs::read_to_string(capacity_scenario(&dir)).unwrap();
@@ -491,6 +668,33 @@ fn report_renders_a_sealed_bundle_as_markdown() {
     ]);
     assert_eq!(code, 0);
     assert!(stdout.contains("kafkars"), "{stdout}");
+
+    // `--out` into a directory that does not exist yet. `reports/` is generated
+    // output and is not checked in, so on a fresh clone this is the *first*
+    // shape a reader tries, and it must not need a `mkdir -p` first.
+    let out = dir.join("fresh").join("nested").join("report.md");
+    assert!(!out.parent().unwrap().exists());
+    let (code, _stdout) = benchctl(&[
+        "report".to_owned(),
+        "--bundle".to_owned(),
+        bundle.to_str().unwrap().to_owned(),
+        "--out".to_owned(),
+        out.to_str().unwrap().to_owned(),
+    ]);
+    assert_eq!(code, 0, "a nested --out path creates its own directory");
+    let written = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(written, stdout, "the file and stdout render identically");
+
+    // A bare filename has no parent to create, and must still work.
+    let (code, _stdout) = benchctl(&[
+        "report".to_owned(),
+        "--bundle".to_owned(),
+        bundle.to_str().unwrap().to_owned(),
+        "--out".to_owned(),
+        dir.join("beside.md").to_str().unwrap().to_owned(),
+    ]);
+    assert_eq!(code, 0);
+    assert!(dir.join("beside.md").is_file());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

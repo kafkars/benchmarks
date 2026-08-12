@@ -11,9 +11,20 @@
 //!   choice with a test: with that feature on, the map becomes insertion
 //!   ordered and every identity in this repository would silently change.
 //! - **Pretty** bytes are the canonical value with two-space indentation and a
-//!   trailing newline, which is byte-for-byte what the legacy Node control
-//!   plane's `JSON.stringify(value, null, 2) + "\n"` produced. Sealed bundles
-//!   from both harnesses therefore read the same way in a diff.
+//!   trailing newline, matching the shape the legacy Node control plane's
+//!   `JSON.stringify(value, null, 2) + "\n"` produced: same key order, same
+//!   indentation, same terminator, and byte-identical strings, so sealed bundles
+//!   from both harnesses read the same way in a diff.
+//!
+//!   The agreement is not total, and the exception is floating point. Rust
+//!   writes an `f64` that happens to be integral as `2.0`; `JSON.stringify`
+//!   writes `2`. Both are the same number and both round-trip, but they are not
+//!   the same bytes, so a document carrying a float cannot be compared to its
+//!   Node-written counterpart with `diff` or with a digest. That is not a defect
+//!   to be repaired here: it is the same fact [`canonical_bytes`] refuses floats
+//!   over, and it is precisely why no identity-bearing document carries one.
+//!   Floats appear only in evidence — comparison ratios, suite summaries — which
+//!   is read, not hashed.
 //!
 //! Because the pretty form is the canonical value with whitespace, a document
 //! read back from disk and re-written is stable, and the pretty file and the

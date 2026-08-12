@@ -116,3 +116,53 @@ fn an_empty_bundle_renders_an_empty_manifest() {
 fn the_exclusion_list_is_exactly_the_two_documented_files() {
     assert_eq!(EXCLUDED_ROOT_FILES, ["checksums.txt", "bundle.json"]);
 }
+
+/// Creates a symbolic link, reporting whether the platform allowed it.
+#[cfg(unix)]
+fn symlink(target: &Path, link: &Path) -> bool {
+    std::os::unix::fs::symlink(target, link).is_ok()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_file_fails_the_seal_rather_than_being_skipped() {
+    let root = scratch_bundle("symlink-file");
+    write(&root, "status.json", "status\n");
+    let outside = root.join("..").join("outside.txt");
+    std::fs::write(&outside, "not part of the bundle\n").unwrap();
+    std::fs::create_dir_all(root.join("adapters")).unwrap();
+    assert!(symlink(&outside, &root.join("adapters").join("link.json")));
+
+    let error = checksum_bundle(&root).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::CtlErrorKind::Seal);
+    assert!(
+        error.message().contains("symbolic link"),
+        "the refusal names what it found: {error}"
+    );
+    assert!(error.message().contains("link.json"), "{error}");
+    std::fs::remove_file(&outside).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_directory_fails_the_seal_rather_than_being_walked() {
+    // A link to a directory is the more dangerous shape: descending into it
+    // would list files under paths that do not exist inside the bundle, and
+    // skipping it would leave a whole subtree out of a manifest that looked
+    // complete.
+    let root = scratch_bundle("symlink-dir");
+    write(&root, "status.json", "status\n");
+    let elsewhere = root.join("..").join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::fs::write(elsewhere.join("secret.log"), "elsewhere\n").unwrap();
+    assert!(symlink(&elsewhere, &root.join("adapters")));
+
+    let error = checksum_bundle(&root).unwrap_err();
+
+    assert_eq!(error.kind(), crate::error::CtlErrorKind::Seal);
+    assert!(error.message().contains("symbolic link"), "{error}");
+    std::fs::remove_dir_all(&elsewhere).unwrap();
+    std::fs::remove_dir_all(&root).unwrap();
+}

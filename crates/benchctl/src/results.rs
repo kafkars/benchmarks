@@ -33,8 +33,11 @@
 //! 2. **The documents.** A readable status saying `succeeded`, and a readable v2
 //!    result the adapter itself declared valid.
 //! 3. **The accounting.** Complete drain — no unknown offers, nothing left
-//!    outstanding — and, when the experiment declares objectives, a failure count
-//!    within [`max_failed_records`].
+//!    outstanding — and a failure count within [`max_failed_records`], whatever
+//!    the experiment declared. A scenario that states no objectives is not
+//!    thereby allowed to lose records: it has stated no *latency* ceiling, and
+//!    the legacy harness's rule that every record must be acknowledged was never
+//!    conditional on one.
 //!
 //! [`DEFERRED_CHECKS`] is the honest half of the verdict. Every check the legacy
 //! Node harness performs that a single attempt's classification does not is named
@@ -70,12 +73,17 @@ pub const DEFERRED_CHECKS: [&str; 7] = [
     "process-resource-capture",
 ];
 
-/// The most failed-or-timed-out records an experiment with objectives tolerates.
+/// The most failed-or-timed-out records any measurement may lose and still be
+/// believed.
 ///
 /// The schema's [`SloSpec`] states ceilings on latency, schedule delay, drain,
-/// and native client counters, and says nothing about delivery failures, because
-/// an experiment that declares objectives at all is one where a lost record is
-/// not a measurement — it is a different run.
+/// and native client counters, and says nothing about delivery failures. That
+/// silence is not permission: a run that lost records measured a different thing
+/// from the one it was asked to measure, and the legacy harness required every
+/// record to be acknowledged regardless of what else a scenario declared. The
+/// argument is kept so that a future `SloSpec` field can relax this per
+/// experiment — where it would be hashed into the experiment id and a reader
+/// could see that the run was allowed to lose records.
 ///
 /// The number is [`bench_report::MAX_FAILED_RECORDS`] rather than a second
 /// constant with the same value. Classification and the capacity search's
@@ -215,6 +223,13 @@ pub struct SubjectOutcome {
     pub warmup: VerificationVerdict,
     /// The objectives the experiment declared, empty when it declared none.
     pub slo: SloSpec,
+    /// The adapter version this subject claimed at probe time, as the resolved
+    /// experiment records it. Empty when the subject never got that far.
+    ///
+    /// Kept beside the measurement so the two can be compared: this string is
+    /// hashed into the experiment id, and the result document's is written at
+    /// run time by the client itself.
+    pub declared_adapter_version: String,
 }
 
 impl SubjectOutcome {
@@ -230,6 +245,7 @@ impl SubjectOutcome {
             measured: VerificationVerdict::NotRun,
             warmup: VerificationVerdict::NotRun,
             slo: SloSpec::default(),
+            declared_adapter_version: String::new(),
         }
     }
 
@@ -251,6 +267,7 @@ impl SubjectOutcome {
     pub fn validity(&self) -> SubjectValidity {
         let mut reasons = self.process_reasons();
         reasons.extend(self.document_reasons());
+        reasons.extend(self.provenance_reasons());
         reasons.extend(self.accounting_reasons());
         reasons.extend(self.verification_reasons());
         SubjectValidity {
@@ -340,8 +357,41 @@ impl SubjectOutcome {
         reasons
     }
 
+    /// Reasons drawn from comparing what the adapter *said* it was with what it
+    /// turned out to be.
+    ///
+    /// `describe` is answered before the run, and its version is hashed into the
+    /// experiment id: it is the string that decides which attempts are
+    /// repetitions of one another. The result document's `adapter_version` is
+    /// written during the run, by the client, and can therefore report a version
+    /// the describe answer only guessed at — a wrapper around a shared library
+    /// that names its own release rather than the library's, for instance, where
+    /// upgrading the library changes the measurement and nothing else.
+    ///
+    /// When those two disagree, the experiment id is naming a client that did
+    /// not run. Two upgrades' worth of attempts would pool under one id and the
+    /// suite would compute a median across them. Saying so is a validity reason
+    /// rather than a warning, because a median over two different clients is not
+    /// a slightly noisier number — it is a number about nothing.
+    fn provenance_reasons(&self) -> Vec<String> {
+        let Some(result) = &self.evidence.result else {
+            return Vec::new();
+        };
+        if self.declared_adapter_version.is_empty()
+            || result.adapter_version == self.declared_adapter_version
+        {
+            return Vec::new();
+        }
+        vec![format!(
+            "the adapter described itself as version {:?} but its result document reports {:?}; \
+             the described version is what the experiment id is built from, so this attempt is \
+             filed under a client that did not run it",
+            self.declared_adapter_version, result.adapter_version
+        )]
+    }
+
     /// Reasons drawn from the v2 offer accounting: drain, and the failure
-    /// ceiling an experiment with objectives implies.
+    /// ceiling every measurement is held to.
     fn accounting_reasons(&self) -> Vec<String> {
         let Some(result) = &self.evidence.result else {
             return Vec::new();
@@ -359,18 +409,23 @@ impl SubjectOutcome {
                 result.queue.final_outstanding
             ));
         }
-        if !self.slo.is_empty() {
-            let lost = result
-                .outcomes
-                .failed
-                .saturating_add(result.outcomes.timed_out);
-            let ceiling = max_failed_records(&self.slo);
-            if lost > ceiling {
-                reasons.push(format!(
-                    "{lost} records failed or timed out, above the {ceiling} this \
-                     experiment's objectives allow"
-                ));
-            }
+        // Unconditional, whatever the experiment declared. An empty `SloSpec`
+        // means "no objective stated", not "any number of records may be lost":
+        // the ceiling is zero either way, and asking only when objectives exist
+        // made a scenario without them the most permissive one in the
+        // repository. It also disagreed with `evaluate_slo`, which never had
+        // that guard — so the same measurement could be classified valid here
+        // and rejected by the capacity search's gate.
+        let lost = result
+            .outcomes
+            .failed
+            .saturating_add(result.outcomes.timed_out);
+        let ceiling = max_failed_records(&self.slo);
+        if lost > ceiling {
+            reasons.push(format!(
+                "{lost} records failed or timed out, above the {ceiling} a measurement may \
+                 lose and still be believed"
+            ));
         }
         reasons
     }

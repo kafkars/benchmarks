@@ -21,7 +21,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::schema_id::{CLASSIFICATION_V1, COMPARISON_V1};
+use crate::error::{SchemaError, SchemaResult};
+use crate::schema_id::{CLASSIFICATION_V1, COMPARISON_V1, require_schema};
 
 /// Whether one subject's evidence may be believed, and why not.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +63,68 @@ impl Classification {
     /// Reports whether the document declares the expected schema id.
     pub fn has_expected_schema(&self) -> bool {
         self.schema == Self::SCHEMA
+    }
+
+    /// Parses and validates a classification from its bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the bytes are not JSON, the schema id is wrong, or
+    /// an invariant documented on this type fails.
+    pub fn from_slice(bytes: &[u8]) -> SchemaResult<Self> {
+        let document: Self = serde_json::from_slice(bytes)
+            .map_err(|error| SchemaError::parse(format!("classification.v1: {error}")))?;
+        document.validate()?;
+        Ok(document)
+    }
+
+    /// Checks the invariants documented on this type.
+    ///
+    /// The `claim_eligible` refusal is the one that matters, and it is the same
+    /// refusal `kafkars.experiment.v1`, `kafkars.suite-summary.v1`, and
+    /// `kafkars.analysis-packet.v1` already enforce. This document is the one
+    /// that decides whether a run may be believed, so it is the last one that
+    /// should be able to claim more than the milestone allows on nothing but a
+    /// hand edit — and the module contract above has always said it could not.
+    ///
+    /// A run declared invalid must say why, exactly as an invalid
+    /// `kafkars.producer-benchmark.v2` must. The converse is deliberately *not*
+    /// checked: `reasons` also carries why a run cannot support a claim, so a
+    /// run that is valid and names a reason it could never be published is the
+    /// ordinary case, not a contradiction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error naming the first violated invariant.
+    pub fn validate(&self) -> SchemaResult<()> {
+        require_schema(&self.schema, Self::SCHEMA)?;
+        if self.claim_eligible {
+            return Err(SchemaError::invalid_field(
+                "claim_eligible",
+                "no attempt in this milestone may support a published claim",
+            ));
+        }
+        if !self.run_valid && self.reasons.is_empty() {
+            return Err(SchemaError::invalid_field(
+                "reasons",
+                "a run declared invalid must say why",
+            ));
+        }
+        for (index, subject) in self.subjects.iter().enumerate() {
+            if subject.name.is_empty() {
+                return Err(SchemaError::invalid_field(
+                    &format!("subjects[{index}].name"),
+                    "a subject verdict must name its subject",
+                ));
+            }
+            if subject.valid != subject.reasons.is_empty() {
+                return Err(SchemaError::invalid_field(
+                    &format!("subjects[{index}].reasons"),
+                    "a subject is valid exactly when it has no reasons",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

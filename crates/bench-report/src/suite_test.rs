@@ -13,6 +13,7 @@ use crate::suite::{
     SuiteMetric, SuiteOptions, UNSEALED_DIGEST, metric_of_field, summarize_suite,
     summarize_suite_report,
 };
+use crate::summary::COEFFICIENT_OF_VARIATION_BUDGET;
 
 /// A resample count that keeps the suite fast without changing any semantics.
 fn options() -> SuiteOptions {
@@ -328,18 +329,188 @@ fn dispersion_is_absent_rather_than_zero_for_a_single_attempt() {
 }
 
 #[test]
-fn dispersion_is_reported_for_every_metric_and_subject() {
+fn dispersion_is_reported_for_every_metric_of_every_subject_and_every_pair() {
     let roots = roles_suite("suite-dispersion-many", 5, 1.20);
 
     let summary = summarize_suite(&roots, &options()).unwrap();
 
-    assert_eq!(summary.dispersion.len(), 2 * SuiteMetric::ALL.len());
-    let goodput = summary
+    // Two subjects and one comparison, each over all seven metrics. The
+    // per-subject rows are informational; the `head/base` rows are the ones the
+    // budget gate reads.
+    assert_eq!(summary.dispersion.len(), 3 * SuiteMetric::ALL.len());
+    let row = |name: &str| {
+        summary
+            .dispersion
+            .iter()
+            .find(|entry| entry.name == name && entry.metric == "acknowledged_records_per_second")
+            .unwrap_or_else(|| panic!("no goodput dispersion for {name}"))
+            .coefficient_of_variation
+            .unwrap()
+    };
+    assert!(row("head") < 0.05);
+    assert!(row("base") < 0.05);
+    assert!(row("head/base") < 0.05);
+    assert!(
+        summary
+            .dispersion
+            .iter()
+            .position(|entry| entry.name == "head/base")
+            .unwrap()
+            > summary
+                .dispersion
+                .iter()
+                .rposition(|entry| entry.name == "base")
+                .unwrap(),
+        "the gated rows come after the informational ones"
+    );
+}
+
+/// Writes a five-attempt suite from explicit per-attempt goodputs.
+///
+/// Latency is held constant so that only goodput can move a dispersion figure,
+/// which keeps the two boundary cases below about one number each.
+fn suite_from_goodputs(name: &str, series: &[(f64, f64)]) -> Vec<PathBuf> {
+    let root = scratch_directory(name);
+    series
+        .iter()
+        .enumerate()
+        .map(|(index, (base, head))| {
+            BundleFixture::new(&format!("attempt-{index}"))
+                .subject(
+                    "base",
+                    Some("base"),
+                    ResultFixture {
+                        goodput: *base,
+                        terminal_ns: 10_000_000,
+                        ..ResultFixture::default()
+                    },
+                )
+                .subject(
+                    "head",
+                    Some("head"),
+                    ResultFixture {
+                        goodput: *head,
+                        terminal_ns: 10_000_000,
+                        ..ResultFixture::default()
+                    },
+                )
+                .write(&root)
+        })
+        .collect()
+}
+
+/// The `dispersion-within-budget` gate of a summary.
+fn budget_gate(summary: &bench_schema::SuiteSummary) -> &bench_schema::GateOutcome {
+    summary
+        .gates
+        .iter()
+        .find(|gate| gate.name == "dispersion-within-budget")
+        .unwrap()
+}
+
+/// One dispersion row's coefficient of variation.
+fn dispersion_of(summary: &bench_schema::SuiteSummary, name: &str) -> Option<f64> {
+    summary
         .dispersion
         .iter()
-        .find(|entry| entry.name == "head" && entry.metric == "acknowledged_records_per_second")
-        .unwrap();
-    assert!(goodput.coefficient_of_variation.unwrap() < 0.05);
+        .find(|entry| entry.name == name && entry.metric == "acknowledged_records_per_second")
+        .unwrap_or_else(|| panic!("no goodput dispersion for {name}"))
+        .coefficient_of_variation
+}
+
+#[test]
+fn anti_correlated_subjects_fail_the_budget_their_raw_values_would_have_passed() {
+    // Each subject moves by ±3.75% of its own mean and they move in opposite
+    // directions. Each subject's raw dispersion is therefore about 0.030 —
+    // comfortably inside the 0.05 budget — while the ratio swings roughly twice
+    // as far, to about 0.059. The comparison is the noisiest thing in the run
+    // and gating on raw values called it quiet.
+    let drift = [-0.0375, -0.018_75, 0.0, 0.018_75, 0.0375];
+    let series: Vec<(f64, f64)> = drift
+        .iter()
+        .map(|d| (100_000.0 * (1.0 + d), 100_000.0 * (1.0 - d)))
+        .collect();
+
+    let summary = summarize_suite(&suite_from_goodputs("suite-anti", &series), &options()).unwrap();
+
+    let base = dispersion_of(&summary, "base").unwrap();
+    let head = dispersion_of(&summary, "head").unwrap();
+    let ratio = dispersion_of(&summary, "head/base").unwrap();
+    assert!(
+        base < COEFFICIENT_OF_VARIATION_BUDGET && head < COEFFICIENT_OF_VARIATION_BUDGET,
+        "the raw values look quiet: base {base}, head {head}"
+    );
+    assert!(
+        (0.055..0.065).contains(&ratio),
+        "the ratio series is the noisy one: {ratio}"
+    );
+
+    let gate = budget_gate(&summary);
+    assert!(!gate.passed, "{}", gate.detail);
+    assert!(
+        gate.detail
+            .contains("head/base acknowledged_records_per_second"),
+        "the gate names the series that failed: {}",
+        gate.detail
+    );
+}
+
+#[test]
+fn subjects_that_drift_together_pass_the_budget_their_raw_values_would_have_failed() {
+    // A thermal ramp, or a noisy neighbour: both subjects scale by the same
+    // factor in each attempt. Every raw dispersion is far outside the budget and
+    // every ratio is exactly constant, which is the entire reason the design
+    // pairs subjects within an attempt in the first place.
+    let scale = [0.85, 0.925, 1.0, 1.075, 1.15];
+    let series: Vec<(f64, f64)> = scale
+        .iter()
+        .map(|f| (100_000.0 * f, 120_000.0 * f))
+        .collect();
+
+    let summary =
+        summarize_suite(&suite_from_goodputs("suite-drift", &series), &options()).unwrap();
+
+    let base = dispersion_of(&summary, "base").unwrap();
+    let ratio = dispersion_of(&summary, "head/base").unwrap();
+    assert!(
+        base > COEFFICIENT_OF_VARIATION_BUDGET,
+        "the machine really did move: {base}"
+    );
+    assert!(ratio < 1e-12, "every ratio is the same 1.2: {ratio}");
+
+    let gate = budget_gate(&summary);
+    assert!(
+        gate.passed,
+        "pairing is what makes a drifting machine usable: {}",
+        gate.detail
+    );
+}
+
+#[test]
+fn a_suite_with_nothing_to_compare_does_not_pass_the_budget_by_default() {
+    // One subject means no ratio series, and a gate that passed because it had
+    // nothing to judge would be reporting a dispersion nobody measured.
+    let root = scratch_directory("suite-single-subject");
+    let roots: Vec<PathBuf> = (0..5)
+        .map(|index| {
+            BundleFixture::new(&format!("attempt-{index}"))
+                .subject("only", None, ResultFixture::default())
+                .write(&root)
+        })
+        .collect();
+
+    let summary = summarize_suite(&roots, &options()).unwrap();
+
+    let gate = budget_gate(&summary);
+    assert!(!gate.passed, "{}", gate.detail);
+    assert!(gate.detail.contains("no compared pair"), "{}", gate.detail);
+    assert!(
+        summary
+            .dispersion
+            .iter()
+            .all(|entry| !entry.name.contains('/')),
+        "there is no ratio series to report"
+    );
 }
 
 #[test]
@@ -385,6 +556,29 @@ fn bundles_of_different_experiments_are_refused() {
 
     assert_eq!(error.kind(), crate::ReportErrorKind::Document);
     assert!(error.context().contains("different experiment"));
+}
+
+#[test]
+fn a_histogram_naming_an_impossible_bucket_is_refused_rather_than_fatal() {
+    // `8_320` is the first bucket index whose scale is 64: reading a percentile
+    // out of it used to shift a `u64` by its own width, so a hand-edited bundle
+    // could take down the summarizer. Only the index is hostile — the counts
+    // still total the terminal count, so nothing else in the document objects.
+    let root = scratch_directory("suite-impossible-bucket");
+    let bundle = BundleFixture::new("attempt-0")
+        .subject("base", Some("base"), ResultFixture::default())
+        .subject("head", Some("head"), ResultFixture::default())
+        .write(&root);
+    let path = bundle.join("adapters").join("head").join("result.json");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    document["timing"]["intended_to_terminal"]["counts"] = serde_json::json!([[8_320, 1_000]]);
+    std::fs::write(&path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+
+    let error = summarize_suite(&[bundle], &options()).unwrap_err();
+
+    assert_eq!(error.kind(), crate::ReportErrorKind::Document);
+    assert!(error.context().contains("8320"), "{error}");
 }
 
 #[test]

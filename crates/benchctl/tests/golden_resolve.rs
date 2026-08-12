@@ -150,6 +150,9 @@ fn inputs() -> ResolveInputs {
             describe,
             validate: Some(ValidateReport::supported()),
             binary_sha256: Some(format!("{index}").repeat(64)),
+            // The golden subjects are invoked directly, so there is no argument
+            // that names a file and the sealed lock keeps its original bytes.
+            argument_binary_sha256s: std::collections::BTreeMap::new(),
         })
         .collect();
     ResolveInputs {

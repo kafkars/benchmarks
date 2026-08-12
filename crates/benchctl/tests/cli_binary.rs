@@ -1,6 +1,8 @@
-//! The two binary-level checks the module tests cannot express: a whole
-//! `benchctl run` through `main` sealing a complete bundle, and SIGINT
-//! delivered to the real process sealing a partial, interrupted one.
+//! The binary-level checks the module tests cannot express: a whole
+//! `benchctl run` through `main` sealing a complete bundle, and SIGINT sealing
+//! a partial, interrupted one — both when it reaches only the control plane and
+//! when it reaches the whole process group, which is what a terminal's Ctrl-C
+//! actually does.
 //!
 //! Everything offline: the subjects and all three cluster tools are the
 //! `fake-adapter` fixture, and the scenario is the migrated balanced-1k
@@ -166,6 +168,61 @@ fn a_full_cli_run_seals_a_complete_valid_bundle() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Blocks until an attempt workspace under `results` has sealed its inputs.
+///
+/// The resolved experiment is written immediately before subjects spawn, so its
+/// presence is the signal that interrupting now interrupts the run phase rather
+/// than the resolution.
+fn wait_for_sealed_inputs(results: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let mut stack = vec![results.to_path_buf()];
+        while let Some(entry) = stack.pop() {
+            if entry.join("experiment.resolved.json").is_file() {
+                return;
+            }
+            if let Ok(entries) = std::fs::read_dir(&entry) {
+                stack.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "resolved experiment never sealed"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Waits for `child` to exit and returns its code.
+fn wait_for_exit(child: &mut std::process::Child) -> Option<i32> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status.code();
+        }
+        assert!(Instant::now() < deadline, "benchctl ignored SIGINT");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Asserts the bundle under `results` is a partial, interrupted, self-consistent
+/// one.
+fn assert_interrupted_bundle(results: &Path) {
+    let paths = find_bundle(results);
+    let status = common::read_status(&paths);
+    assert_eq!(
+        status.execution_status,
+        ExecutionStatus::Partial,
+        "an interrupted attempt is partial, never crashed: {:?}",
+        status.failure_reason
+    );
+    assert!(
+        status.interrupted,
+        "the sealed status must record the interrupt"
+    );
+    common::assert_bundle_is_self_consistent(&paths);
+}
+
 #[test]
 fn sigint_mid_run_seals_a_partial_interrupted_bundle() {
     let dir = scratch("sigint");
@@ -178,30 +235,7 @@ fn sigint_mid_run_seals_a_partial_interrupted_bundle() {
         .spawn()
         .unwrap();
 
-    // Interrupt only once the attempt workspace proves the run phase started:
-    // the resolved experiment is sealed immediately before subjects spawn.
-    let sealed_inputs = Instant::now() + Duration::from_secs(30);
-    loop {
-        let mut stack = vec![results.clone()];
-        let mut seen = false;
-        while let Some(entry) = stack.pop() {
-            if entry.join("experiment.resolved.json").is_file() {
-                seen = true;
-                break;
-            }
-            if let Ok(entries) = std::fs::read_dir(&entry) {
-                stack.extend(entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
-            }
-        }
-        if seen {
-            break;
-        }
-        assert!(
-            Instant::now() < sealed_inputs,
-            "resolved experiment never sealed"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    wait_for_sealed_inputs(&results);
     std::thread::sleep(Duration::from_millis(300));
     let interrupted = Command::new("kill")
         .args(["-INT", &child.id().to_string()])
@@ -209,22 +243,53 @@ fn sigint_mid_run_seals_a_partial_interrupted_bundle() {
         .unwrap();
     assert!(interrupted.success());
 
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let code = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break status.code();
-        }
-        assert!(Instant::now() < deadline, "benchctl ignored SIGINT");
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    assert_eq!(code, Some(20), "an interrupted attempt seals partial");
-    let paths = find_bundle(&results);
-    let status = common::read_status(&paths);
-    assert_eq!(status.execution_status, ExecutionStatus::Partial);
-    assert!(
-        status.interrupted,
-        "the sealed status must record the interrupt"
+    assert_eq!(
+        wait_for_exit(&mut child),
+        Some(20),
+        "an interrupted attempt seals partial"
     );
-    common::assert_bundle_is_self_consistent(&paths);
+    assert_interrupted_bundle(&results);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_group_wide_sigint_is_an_interrupt_and_not_a_crash() {
+    // What Ctrl-C at a terminal actually does: the signal reaches the control
+    // plane *and* the subject it is supervising. The subject dies of SIGINT on
+    // its own, so `try_wait` reports a signal death before the poll loop ever
+    // reads the interrupt latch — and reading the latch only there used to make
+    // a plain Ctrl-C seal `crashed`.
+    //
+    // `process_group(0)` puts benchctl in a group of its own so that signalling
+    // the group cannot reach the test runner. The fake adapter inherits it,
+    // which is the point.
+    use std::os::unix::process::CommandExt as _;
+
+    let dir = scratch("sigint-group");
+    let (subjects, cluster) = write_fixtures(&dir, "run-hang");
+    let results = dir.join("results");
+    let mut child = Command::new(BENCHCTL)
+        .args(run_arguments(&subjects, &cluster, &results))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+
+    wait_for_sealed_inputs(&results);
+    std::thread::sleep(Duration::from_millis(300));
+    // A negative pid is the whole process group, as `kill(2)` defines it.
+    let interrupted = Command::new("kill")
+        .args(["-INT", &format!("-{}", child.id())])
+        .status()
+        .unwrap();
+    assert!(interrupted.success());
+
+    assert_eq!(
+        wait_for_exit(&mut child),
+        Some(20),
+        "a group-wide interrupt seals partial, not crashed (21)"
+    );
+    assert_interrupted_bundle(&results);
     std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -3,8 +3,8 @@
 #![expect(clippy::unwrap_used, reason = "test assertions may unwrap")]
 
 use crate::histogram::{
-    EncodedHistogram, HISTOGRAM_LAYOUT_V1, Histogram, SUB_BUCKET_BITS, SUB_BUCKET_COUNT,
-    bucket_high, bucket_index, bucket_low,
+    EncodedHistogram, HISTOGRAM_LAYOUT_V1, Histogram, MAX_BUCKET_INDEX, SUB_BUCKET_BITS,
+    SUB_BUCKET_COUNT, bucket_high, bucket_index, bucket_low,
 };
 
 #[test]
@@ -174,4 +174,137 @@ fn decode_rejects_broken_invariants() {
     assert!(Histogram::decode(&empty_with_min).is_err());
     assert_eq!(HISTOGRAM_LAYOUT_V1, "kafkars.log-linear.v1");
     assert_eq!(SUB_BUCKET_BITS, 7);
+}
+
+/// The stated ceiling has to be the one the bucket function actually produces,
+/// or the validation below is guarding a number nobody derived.
+#[test]
+fn the_index_ceiling_is_the_index_of_the_largest_value() {
+    assert_eq!(MAX_BUCKET_INDEX, bucket_index(u64::MAX));
+    assert_eq!(MAX_BUCKET_INDEX, 7_423, "the layout has not moved");
+    assert_eq!(
+        bucket_high(MAX_BUCKET_INDEX),
+        u64::MAX,
+        "the top bucket must reach the top of the domain"
+    );
+}
+
+/// The two bound functions are total: no `u32` may make either of them panic,
+/// because a hostile document reaches them before anything has been believed.
+#[test]
+fn bucket_bounds_are_total_over_every_index() {
+    for index in [
+        MAX_BUCKET_INDEX,
+        MAX_BUCKET_INDEX + 1,
+        8_319,
+        8_320,
+        u32::MAX / 2,
+        u32::MAX - 1,
+        u32::MAX,
+    ] {
+        let low = bucket_low(index);
+        let high = bucket_high(index);
+        assert!(low <= high, "bucket {index} has bounds [{low}, {high}]");
+        assert_eq!(
+            (low, high),
+            (bucket_low(MAX_BUCKET_INDEX), bucket_high(MAX_BUCKET_INDEX)),
+            "an impossible index saturates to the top bucket"
+        );
+    }
+}
+
+/// Builds a valid single-recording histogram to mutate one field of.
+fn one_recording() -> EncodedHistogram {
+    let mut histogram = Histogram::new();
+    histogram.record(42);
+    histogram.encode()
+}
+
+#[test]
+fn decode_rejects_an_index_no_value_can_reach() {
+    for index in [MAX_BUCKET_INDEX + 1, 8_319, 8_320, u32::MAX] {
+        let mut hostile = one_recording();
+        hostile.counts = vec![(index, 1)];
+        let error = Histogram::decode(&hostile).unwrap_err();
+        assert!(
+            error.to_string().contains(&MAX_BUCKET_INDEX.to_string()),
+            "the rejection must name the ceiling: {error}"
+        );
+    }
+    let mut at_the_ceiling = one_recording();
+    at_the_ceiling.counts = vec![(MAX_BUCKET_INDEX, 1)];
+    at_the_ceiling.min = Some(u64::MAX);
+    at_the_ceiling.max = Some(u64::MAX);
+    at_the_ceiling.sum = u64::MAX;
+    assert!(
+        Histogram::decode(&at_the_ceiling).is_ok(),
+        "the ceiling itself is a real bucket"
+    );
+}
+
+#[test]
+fn decode_rejects_an_extreme_that_disagrees_with_emptiness() {
+    // The hole the old `or`-folded check left open: empty, but with a minimum.
+    let mut empty_with_only_min = one_recording();
+    empty_with_only_min.counts = Vec::new();
+    empty_with_only_min.total = 0;
+    empty_with_only_min.sum = 0;
+    empty_with_only_min.max = None;
+    assert!(Histogram::decode(&empty_with_only_min).is_err());
+
+    let mut empty_with_only_max = one_recording();
+    empty_with_only_max.counts = Vec::new();
+    empty_with_only_max.total = 0;
+    empty_with_only_max.sum = 0;
+    empty_with_only_max.min = None;
+    assert!(Histogram::decode(&empty_with_only_max).is_err());
+
+    let mut recorded_without_min = one_recording();
+    recorded_without_min.min = None;
+    assert!(Histogram::decode(&recorded_without_min).is_err());
+
+    let mut recorded_without_max = one_recording();
+    recorded_without_max.max = None;
+    assert!(Histogram::decode(&recorded_without_max).is_err());
+
+    let mut wholly_empty = one_recording();
+    wholly_empty.counts = Vec::new();
+    wholly_empty.total = 0;
+    wholly_empty.sum = 0;
+    wholly_empty.min = None;
+    wholly_empty.max = None;
+    assert!(
+        Histogram::decode(&wholly_empty).is_ok(),
+        "a histogram that recorded nothing is legal"
+    );
+}
+
+#[test]
+fn a_percentile_of_counts_that_overflow_a_u64_is_a_number_not_a_panic() {
+    // `validate` sums bucket counts saturatingly, so this document is legal:
+    // two buckets whose counts add past `u64::MAX` against a saturated total.
+    // Reading a percentile out of it must use the same arithmetic.
+    let half = u64::MAX / 2 + 1;
+    let hostile = EncodedHistogram {
+        layout: HISTOGRAM_LAYOUT_V1.to_owned(),
+        unit: "ns".to_owned(),
+        sub_bucket_bits: SUB_BUCKET_BITS,
+        total: u64::MAX,
+        min: Some(1),
+        max: Some(2),
+        sum: u64::MAX,
+        counts: vec![(1, half), (2, half)],
+    };
+    let histogram = Histogram::decode(&hostile).unwrap();
+    assert!(histogram.value_at_quantile(0.99).is_some());
+    assert!(histogram.value_at_quantile(1.0).is_some());
+}
+
+#[test]
+fn decode_rejects_a_minimum_above_its_maximum() {
+    let mut inverted = one_recording();
+    inverted.min = Some(99);
+    inverted.max = Some(7);
+    let error = Histogram::decode(&inverted).unwrap_err();
+    assert!(error.to_string().contains("above maximum"), "{error}");
 }
