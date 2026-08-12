@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Schema registry gate.
+#
+# The list below is the complete evidence vocabulary: 11 identifiers minted by
+# the Rust engine and 15 inherited from the legacy Node harness. It is written
+# out by hand on purpose. Deriving it from the directory listing would make the
+# check tautological — the point is that adding, renaming, or deleting a schema
+# file is a decision somebody has to state here, in a diff a reviewer sees,
+# rather than a side effect of touching a directory.
+#
+# Both directions are checked. A listed identifier without a file is a missing
+# schema; a *.schema.json file that nothing lists is a stray, which usually
+# means a rename left the old document behind for readers to trip over.
+#
+# TODO(integration wave): once schemas/ exists, delete the missing-directory
+# escape below so that an absent schemas/ is a hard failure.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+schemas_dir="$repo_root/schemas"
+
+schema_ids=(
+  kafkars.adapter-status.v1
+  kafkars.adapter-validate.v1
+  kafkars.adapter.v1
+  kafkars.benchmark-adapter-config.v1
+  kafkars.benchmark-environment.v1
+  kafkars.benchmark-environment.v2
+  kafkars.bundle.v1
+  kafkars.classification.v1
+  kafkars.comparison.v1
+  kafkars.execution-order.v1
+  kafkars.experiment.v1
+  kafkars.librdkafka-capacity-curve.v2
+  kafkars.librdkafka-capacity-probe.v2
+  kafkars.librdkafka-native-metrics.v1
+  kafkars.librdkafka-statistics.v1
+  kafkars.process-resources.v2
+  kafkars.producer-benchmark.v1
+  kafkars.producer-comparison-suite.v1
+  kafkars.producer-comparison.v1
+  kafkars.producer-fixed-comparison-suite.v2
+  kafkars.producer-fixed-comparison.v2
+  kafkars.producer-fixed-load.v1
+  kafkars.producer-fixed-matrix.v2
+  kafkars.producer-verification.v1
+  kafkars.run-status.v1
+  kafkars.subjects-lock.v1
+)
+
+if [ ! -d "$schemas_dir" ]; then
+  echo "schemas/ not present yet (wave 2)"
+  exit 0
+fi
+
+# Node is the pinned runtime for this repository, so it is also the JSON parser
+# of record: a document this rejects is a document the control plane cannot read.
+node -e '
+const { readFileSync, readdirSync } = require("node:fs");
+const [directory, ...ids] = process.argv.slice(1);
+const problems = [];
+const expected = new Set(ids);
+
+for (const id of ids) {
+  const file = `${directory}/${id}.schema.json`;
+  let text;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    problems.push(`missing: schemas/${id}.schema.json`);
+    continue;
+  }
+  try {
+    JSON.parse(text);
+  } catch (error) {
+    problems.push(`unparseable: schemas/${id}.schema.json (${error.message})`);
+  }
+}
+
+for (const entry of readdirSync(directory)) {
+  if (!entry.endsWith(".schema.json")) continue;
+  const id = entry.slice(0, -".schema.json".length);
+  if (!expected.has(id)) problems.push(`stray: schemas/${entry}`);
+}
+
+if (problems.length > 0) {
+  for (const problem of problems) console.error(problem);
+  process.exit(1);
+}
+console.log(`check-schemas: ${ids.length} schema documents present and parseable`);
+' "$schemas_dir" "${schema_ids[@]}"

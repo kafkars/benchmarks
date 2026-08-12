@@ -1,0 +1,74 @@
+# Repository contract
+
+This repository produces evidence about Kafka clients. It is not a Kafka client,
+and it is not a place to make a client look good.
+
+## Before coding
+
+- Read [`ARCHITECTURE.md`](ARCHITECTURE.md) and, for anything touching results,
+  `docs/PERFORMANCE_CONTRACT.md`.
+- Identify which side of the boundary the change is on: control plane, adapter,
+  verifier, or evidence document. Code that crosses that boundary is almost
+  always a design mistake in disguise.
+- State what a reader of a sealed bundle will be able to conclude that they
+  could not conclude before, and what they must still not conclude.
+- Prefer recording a check as deliberately deferred over silently not doing it.
+  A named gap in `classification.deferred_checks` is honest; an absent check
+  that nobody wrote down is not.
+
+## Non-negotiable rules
+
+- **No async runtime anywhere**, including dev-dependencies. A harness that
+  borrows a scheduler cannot describe the scheduling behavior of what it
+  measures. `signal-hook` is the one concession, because `unsafe_code` is
+  forbidden and an interrupt must still seal.
+- **No `criterion`, no `divan`, no benchmarking framework.** Timing, warmup, and
+  statistics are the subject matter here, not an imported convenience.
+- **The harness model is a process-spawning control plane plus adapter
+  binaries.** Subjects are never linked into the control plane, and the control
+  plane never links a Kafka client.
+- **Adapters depend only on shipped public client surfaces.** If a measurement
+  needs a private hook, either the client should ship that surface or the
+  measurement belongs in the client's own repository.
+- **Evidence schemas are versioned and append-only.** Add a field, or mint a new
+  schema id. Never change what an existing field means under an existing id:
+  sealed bundles are immutable, and a redefinition retroactively falsifies runs
+  that already happened.
+- **Every sealed bundle is immutable.** Nothing rewrites a bundle after sealing,
+  including to fix it. A wrong bundle is superseded by a new attempt, never
+  edited.
+- **An adapter never decides its own validity.** Verification and topic
+  management are configured tools invoked by the control plane, outside the
+  adapter protocol.
+- **Identity documents carry integers only.** Anything hashed into an experiment
+  id is free of floating-point numbers. Ratios and rates are evidence, and live
+  in documents that are never hashed into an identity.
+
+## Rust source shape
+
+- Every Rust source file begins with a `//!` module contract.
+- `lib.rs` and `mod.rs` are declarative facades: module declarations and
+  re-exports only.
+- Unit tests live in sibling `*_test.rs` files, declared with
+  `#[cfg(test)] mod ...;` from the nearest facade.
+- Warnings are denied in clippy and rustdoc, and `missing_docs` is on, so an
+  undocumented public item fails the build.
+- `unwrap`, `expect`, `todo!`, `unimplemented!`, and `dbg!` are denied. Tests
+  that genuinely want a panic on a bad fixture opt in with an explicit
+  `#![expect(clippy::unwrap_used, reason = "...")]`.
+- Run `scripts/check` before requesting review.
+
+## Deferred decisions
+
+Recorded here so that they stay decisions rather than becoming accidents.
+
+- **Guardrails-crate enforcement is deferred.** The sibling client repository
+  enforces dependency edges, file counts, and capability ownership with a
+  dedicated `guardrails` crate and a `guardrails.toml` policy. This repository
+  has no such crate yet; the async-runtime and benchmarking-framework bans live
+  in the workspace lints and in this file, which means they are enforced by
+  review and by the dependency tree rather than by a test. Adding the crate is
+  worthwhile once the workspace stops changing shape every wave.
+- **Evidence storage and publication policy is deferred.** Bundles are written
+  to a gitignored `results/` tree. Nothing decides yet what is retained,
+  archived, or published.

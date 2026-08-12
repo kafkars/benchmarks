@@ -1,0 +1,10 @@
+/target/
+/results/
+/adapters/kafkars/target/
+/node_modules/
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+**/*.rs.bk

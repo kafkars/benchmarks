@@ -1,0 +1,62 @@
+[workspace]
+members = [
+  "crates/bench-schema",
+  "crates/bench-verifier",
+  "crates/bench-report",
+  "crates/benchctl",
+  "crates/bench-adapter-librdkafka",
+]
+default-members = [
+  "crates/bench-schema",
+  "crates/bench-verifier",
+  "crates/bench-report",
+  "crates/benchctl",
+  "crates/bench-adapter-librdkafka",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/zsumz/kafka-benchmarks"
+
+# The dependency set is deliberately small and deliberately synchronous. No
+# async runtime may enter this workspace, including through dev-dependencies,
+# because a benchmark harness that owns its own scheduler cannot borrow one
+# from a runtime it is also measuring. `signal-hook` is present because
+# `unsafe_code = "forbid"` leaves no other way to seal an evidence bundle on
+# Ctrl-C. Statistical work stays hand-written rather than delegated to a
+# benchmarking framework: `criterion` and `divan` are banned outright.
+[workspace.dependencies]
+bench-schema = { version = "0.1.0", path = "crates/bench-schema" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+signal-hook = "0.3"
+toml = "0.8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unreachable_pub = "warn"
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+expect_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+future_not_send = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+similar_names = "allow"
+unnecessary_wraps = "allow"
