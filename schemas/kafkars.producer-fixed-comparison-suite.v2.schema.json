@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.producer-fixed-comparison-suite.v2",
+  "title": "Balanced fixed-load comparison suite aggregate (legacy)",
+  "description": "Sealed suite-summary.json aggregating balanced kafkars.producer-fixed-comparison.v2 pairs at one offered rate, emitted by legacy/benchctl/fixed-suite.mjs. Ratio summaries come from summarizeRatios and the two credibility verdicts from assessFixedLoadCredibility and assessResourceCredibility in legacy/benchctl/statistics.mjs. Consumed by legacy/benchctl/fixed-matrix-runner.mjs. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "valid",
+    "claim_eligible",
+    "repetitions",
+    "balance",
+    "workload",
+    "environment_identity_sha256",
+    "exclusion_reasons",
+    "statistical_credibility",
+    "resource_credibility",
+    "paired_ratios",
+    "pairs"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.producer-fixed-comparison-suite.v2"
+    },
+    "valid": { "type": "boolean" },
+    "claim_eligible": { "const": false },
+    "repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+    "balance": {
+      "type": "object",
+      "required": ["kafkars_first", "librdkafka_first"],
+      "additionalProperties": true,
+      "properties": {
+        "kafkars_first": { "type": "integer", "minimum": 0 },
+        "librdkafka_first": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "description": "The workload object shared by every pair, carried forward verbatim.",
+      "required": ["mode", "records", "offered_records_per_second"],
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "const": "scheduled-open-loop-fixed-rate" },
+        "records": { "type": "integer", "exclusiveMinimum": 0 },
+        "warmup_records": { "type": "integer", "minimum": 0 },
+        "payload_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "partitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "max_outstanding_records": { "type": "integer", "exclusiveMinimum": 0 },
+        "offered_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "callers_per_producer": { "type": "integer", "exclusiveMinimum": 0 }
+      }
+    },
+    "environment_identity_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "exclusion_reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "statistical_credibility": {
+      "type": "object",
+      "required": [
+        "minimum_paired_repetitions",
+        "coefficient_of_variation_budget",
+        "enough_repetitions",
+        "corrected_p99_inside_noise_budget",
+        "uncorrected_p99_inside_noise_budget",
+        "valid"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "minimum_paired_repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "coefficient_of_variation_budget": { "type": "number", "exclusiveMinimum": 0 },
+        "enough_repetitions": { "type": "boolean" },
+        "corrected_p99_inside_noise_budget": { "type": "boolean" },
+        "uncorrected_p99_inside_noise_budget": { "type": "boolean" },
+        "valid": { "type": "boolean" }
+      }
+    },
+    "resource_credibility": {
+      "type": "object",
+      "description": "Reported separately from latency credibility; process CPU and peak memory stay diagnostic until host classification is calibrated.",
+      "required": [
+        "minimum_paired_repetitions",
+        "coefficient_of_variation_budget",
+        "enough_repetitions",
+        "cpu_inside_noise_budget",
+        "peak_memory_inside_noise_budget",
+        "valid"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "minimum_paired_repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "coefficient_of_variation_budget": { "type": "number", "exclusiveMinimum": 0 },
+        "enough_repetitions": { "type": "boolean" },
+        "cpu_inside_noise_budget": { "type": "boolean" },
+        "peak_memory_inside_noise_budget": { "type": "boolean" },
+        "valid": { "type": "boolean" }
+      }
+    },
+    "paired_ratios": {
+      "type": "object",
+      "required": [
+        "uncorrected_p99_kafkars_over_librdkafka",
+        "corrected_p99_kafkars_over_librdkafka",
+        "schedule_delay_p99_kafkars_over_librdkafka",
+        "acknowledged_rate_kafkars_over_librdkafka",
+        "produce_requests_librdkafka_over_kafkars",
+        "cpu_core_seconds_kafkars_over_librdkafka",
+        "peak_rss_kafkars_over_librdkafka",
+        "peak_memory_kafkars_over_librdkafka"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "uncorrected_p99_kafkars_over_librdkafka": { "$ref": "#/$defs/ratioSummary" },
+        "corrected_p99_kafkars_over_librdkafka": { "$ref": "#/$defs/ratioSummary" },
+        "schedule_delay_p99_kafkars_over_librdkafka": { "$ref": "#/$defs/ratioSummary" },
+        "acknowledged_rate_kafkars_over_librdkafka": { "$ref": "#/$defs/ratioSummary" },
+        "produce_requests_librdkafka_over_kafkars": { "$ref": "#/$defs/ratioSummary" },
+        "cpu_core_seconds_kafkars_over_librdkafka": { "$ref": "#/$defs/ratioSummary" },
+        "peak_rss_kafkars_over_librdkafka": { "$ref": "#/$defs/ratioSummary" },
+        "peak_memory_kafkars_over_librdkafka": { "$ref": "#/$defs/ratioSummary" }
+      }
+    },
+    "pairs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "index",
+          "directory",
+          "run_id",
+          "execution_order",
+          "uncorrected_p99_kafkars_over_librdkafka",
+          "corrected_p99_kafkars_over_librdkafka",
+          "schedule_delay_p99_kafkars_over_librdkafka",
+          "acknowledged_rate_kafkars_over_librdkafka",
+          "produce_requests_librdkafka_over_kafkars",
+          "cpu_core_seconds_kafkars_over_librdkafka",
+          "peak_rss_kafkars_over_librdkafka",
+          "peak_memory_kafkars_over_librdkafka"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "index": { "type": "integer", "exclusiveMinimum": 0 },
+          "directory": { "type": "string" },
+          "run_id": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+          "execution_order": {
+            "type": "array",
+            "items": { "enum": ["kafkars", "librdkafka-c"] },
+            "minItems": 2,
+            "maxItems": 2,
+            "uniqueItems": true
+          },
+          "uncorrected_p99_kafkars_over_librdkafka": { "type": "number", "exclusiveMinimum": 0 },
+          "corrected_p99_kafkars_over_librdkafka": { "type": "number", "exclusiveMinimum": 0 },
+          "schedule_delay_p99_kafkars_over_librdkafka": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "acknowledged_rate_kafkars_over_librdkafka": { "type": "number", "exclusiveMinimum": 0 },
+          "produce_requests_librdkafka_over_kafkars": { "type": "number", "exclusiveMinimum": 0 },
+          "cpu_core_seconds_kafkars_over_librdkafka": { "type": "number", "exclusiveMinimum": 0 },
+          "peak_rss_kafkars_over_librdkafka": { "type": "number", "exclusiveMinimum": 0 },
+          "peak_memory_kafkars_over_librdkafka": { "type": "number", "exclusiveMinimum": 0 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ratioSummary": {
+      "type": "object",
+      "required": [
+        "repetitions",
+        "geometric_mean",
+        "arithmetic_mean",
+        "median",
+        "minimum",
+        "maximum",
+        "coefficient_of_variation",
+        "confidence_interval_95"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "geometric_mean": { "type": "number", "exclusiveMinimum": 0 },
+        "arithmetic_mean": { "type": "number", "exclusiveMinimum": 0 },
+        "median": { "type": "number", "exclusiveMinimum": 0 },
+        "minimum": { "type": "number", "exclusiveMinimum": 0 },
+        "maximum": { "type": "number", "exclusiveMinimum": 0 },
+        "coefficient_of_variation": { "type": ["number", "null"] },
+        "confidence_interval_95": {
+          "type": "object",
+          "required": ["method", "resamples", "seed", "lower", "upper"],
+          "additionalProperties": true,
+          "properties": {
+            "method": {
+              "enum": [
+                "paired-block-percentile-bootstrap",
+                "repetition-percentile-bootstrap"
+              ]
+            },
+            "resamples": { "type": "integer", "exclusiveMinimum": 0 },
+            "seed": { "type": "integer" },
+            "lower": { "type": "number", "exclusiveMinimum": 0 },
+            "upper": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

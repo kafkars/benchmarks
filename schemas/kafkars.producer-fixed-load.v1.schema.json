@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.producer-fixed-load.v1",
+  "title": "Scheduled fixed-rate producer adapter result (legacy)",
+  "description": "Normalized result.json written by each adapter for one scheduled open-loop fixed-rate producer phase: adapters/kafkars/src/producer/fixed_report.rs and adapters/librdkafka-c/fixed_report.c. Consumed by validateFixedProducerResult in legacy/benchctl/fixed-validation.mjs and by evaluateCapacitySlo in legacy/benchctl/capacity-slo.mjs. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "adapter",
+    "adapter_version",
+    "run_id",
+    "topic",
+    "offered_records",
+    "accepted_records",
+    "acknowledged_records",
+    "failed_records",
+    "payload_bytes",
+    "acknowledged_payload_bytes",
+    "load",
+    "acknowledged_records_per_second_including_drain",
+    "latency_ns",
+    "settings",
+    "native_metrics",
+    "valid"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.producer-fixed-load.v1"
+    },
+    "adapter": { "enum": ["kafkars", "librdkafka-c"] },
+    "adapter_version": { "type": "string" },
+    "run_id": {
+      "type": "string",
+      "description": "16-character lowercase hex run identity shared by every adapter in the pair.",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "topic": { "type": "string" },
+    "offered_records": { "type": "integer", "minimum": 0 },
+    "accepted_records": { "type": "integer", "minimum": 0 },
+    "acknowledged_records": { "type": "integer", "minimum": 0 },
+    "failed_records": { "type": "integer", "minimum": 0 },
+    "payload_bytes": { "type": "integer", "minimum": 1 },
+    "acknowledged_payload_bytes": { "type": "integer", "minimum": 0 },
+    "load": {
+      "type": "object",
+      "description": "Offered schedule and its outcome. schedule_span_ns must equal the exact integer intended offset of the last record, and admission_pressure_records must be zero for a valid result.",
+      "required": [
+        "mode",
+        "callers_per_producer",
+        "offered_records_per_second",
+        "schedule_span_ns",
+        "drain_duration_ns",
+        "admission_pressure_records"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "const": "scheduled-open-loop-fixed-rate" },
+        "callers_per_producer": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Legacy fixed-load headline and reference probes require exactly four."
+        },
+        "offered_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "schedule_span_ns": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "floor((records - 1) * 1e9 / offered_records_per_second), computed with exact integer arithmetic."
+        },
+        "drain_duration_ns": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Wall duration through complete drain; drain tail is this value minus schedule_span_ns."
+        },
+        "admission_pressure_records": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Offered records the adapter could not accept; must be zero for a valid result."
+        }
+      }
+    },
+    "acknowledged_records_per_second_including_drain": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "latency_ns": {
+      "type": "object",
+      "description": "Three latency surfaces over acknowledged records: submission to terminal, intended time to terminal, and schedule delay.",
+      "required": ["uncorrected", "corrected", "schedule_delay"],
+      "additionalProperties": true,
+      "properties": {
+        "uncorrected": { "$ref": "#/$defs/latencySummary" },
+        "corrected": { "$ref": "#/$defs/latencySummary" },
+        "schedule_delay": { "$ref": "#/$defs/latencySummary" }
+      }
+    },
+    "settings": {
+      "$ref": "#/$defs/producerSettings",
+      "description": "Must be byte-identical across both adapters in the pair."
+    },
+    "native_metrics": {
+      "type": "object",
+      "description": "Client-native evidence; kafkars reports availability \"captured\" with producer_requests counters, librdkafka-c reports availability \"raw-jsonl\" and the client-metrics.jsonl path.",
+      "required": ["availability"],
+      "additionalProperties": true,
+      "properties": {
+        "availability": { "enum": ["captured", "raw-jsonl"] },
+        "path": { "type": "string" },
+        "producer_requests": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "requests": { "type": "integer" },
+            "partition_batches": { "type": "integer" },
+            "records": { "type": "integer" },
+            "encoded_record_bytes": { "type": "integer" },
+            "peak_in_flight_requests": { "type": "integer" },
+            "peak_in_flight_requests_per_broker": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "valid": { "type": "boolean" }
+  },
+  "$defs": {
+    "latencySummary": {
+      "type": "object",
+      "required": ["p50", "p95", "p99", "p999", "max"],
+      "additionalProperties": true,
+      "properties": {
+        "p50": { "type": "integer", "minimum": 0 },
+        "p95": { "type": "integer", "minimum": 0 },
+        "p99": { "type": "integer", "minimum": 0 },
+        "p999": { "type": "integer", "minimum": 0 },
+        "max": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "producerSettings": {
+      "type": "object",
+      "required": [
+        "acks",
+        "idempotence",
+        "compression",
+        "linger_ms",
+        "batch_records",
+        "batch_bytes",
+        "request_bytes",
+        "max_in_flight_requests_per_broker",
+        "queue_bytes",
+        "max_outstanding_records",
+        "retry_max_replacements",
+        "retry_backoff_ms",
+        "explicit_balanced_partitioning",
+        "admission_shape",
+        "completion_shape"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "acks": { "enum": ["all"] },
+        "idempotence": { "type": "boolean" },
+        "compression": { "enum": ["none"] },
+        "linger_ms": { "type": "integer" },
+        "batch_records": { "type": "integer" },
+        "batch_bytes": { "type": "integer" },
+        "request_bytes": { "type": "integer" },
+        "max_in_flight_requests_per_broker": { "type": "integer" },
+        "queue_bytes": { "type": "integer" },
+        "max_outstanding_records": { "type": "integer" },
+        "retry_max_replacements": { "type": "integer" },
+        "retry_backoff_ms": { "type": "integer" },
+        "explicit_balanced_partitioning": { "type": "boolean" },
+        "admission_shape": { "enum": ["public-batch"] },
+        "completion_shape": { "enum": ["aggregate-batch-terminal"] }
+      }
+    }
+  }
+}

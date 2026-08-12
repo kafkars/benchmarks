@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.producer-verification.v1",
+  "title": "Independent producer verification report (legacy)",
+  "description": "Result of the raw librdkafka C verifier's independent Fetch pass over one measured or warmup topic, printed by adapters/librdkafka-c/verifier.c. Consumed by validateVerification in legacy/benchctl/validation.mjs, which requires exact record counts, zero anomalies, EOF on every partition, and valid true. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "topic",
+    "expected_records",
+    "verified_records",
+    "duplicates",
+    "missing_records",
+    "corrupt",
+    "unexpected",
+    "eof_partitions",
+    "valid"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.producer-verification.v1"
+    },
+    "topic": {
+      "type": "string",
+      "description": "Verified topic; must equal the measured or warmup topic derived from the run identity."
+    },
+    "expected_records": { "type": "integer", "minimum": 0 },
+    "verified_records": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Records whose identity, sequence, partition, and payload bytes were all exact."
+    },
+    "duplicates": { "type": "integer", "minimum": 0 },
+    "missing_records": { "type": "integer", "minimum": 0 },
+    "corrupt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Records whose payload bytes did not match the expected envelope."
+    },
+    "unexpected": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Records outside the expected sequence range, or out of per-partition order."
+    },
+    "eof_partitions": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Partitions that reached end of log; the sealer requires this to equal the configured partition count."
+    },
+    "valid": {
+      "type": "boolean",
+      "description": "True only when every record verified, with no duplicates, corruption, unexpected records, and EOF on every partition."
+    }
+  }
+}

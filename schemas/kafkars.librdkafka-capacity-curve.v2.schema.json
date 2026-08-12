@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.librdkafka-capacity-curve.v2",
+  "title": "Raw librdkafka sustainable-capacity curve (legacy)",
+  "description": "Sealed capacity-summary.json aggregating a repeated geometric-bracket capacity search over kafkars.librdkafka-capacity-probe.v2 probes, emitted by legacy/benchctl/reference-capacity-runner.mjs using searchSustainableCapacity from capacity-search.mjs and assessCapacityEvidenceContract from capacity-slo.mjs. Consumed by legacy/benchctl/fixed-matrix-runner.mjs, which derives its four load points from capacity.derived_fixed_rates. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "valid",
+    "claim_eligible",
+    "reference_client",
+    "workload",
+    "search",
+    "capacity",
+    "canonical_slo",
+    "evidence_credibility",
+    "statistical_credibility",
+    "exclusion_reasons",
+    "curve",
+    "environment_identity_sha256",
+    "environment"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.librdkafka-capacity-curve.v2"
+    },
+    "valid": { "type": "boolean" },
+    "claim_eligible": { "const": false },
+    "reference_client": { "const": "raw-librdkafka-c" },
+    "workload": {
+      "type": "object",
+      "description": "The workload of the selected candidate rate's first probe, carried forward verbatim.",
+      "required": ["mode", "window_seconds", "warmup_seconds"],
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "const": "scheduled-open-loop-fixed-rate" },
+        "offered_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "window_seconds": { "type": "integer", "exclusiveMinimum": 0 },
+        "warmup_seconds": { "type": "integer", "exclusiveMinimum": 0 },
+        "records": { "type": "integer", "exclusiveMinimum": 0 },
+        "warmup_records": { "type": "integer", "exclusiveMinimum": 0 },
+        "payload_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "partitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "callers_per_producer": { "type": "integer", "exclusiveMinimum": 0 },
+        "max_outstanding_records": { "type": "integer", "exclusiveMinimum": 0 }
+      }
+    },
+    "search": {
+      "type": "object",
+      "required": [
+        "method",
+        "repetitions_per_rate",
+        "initial_records_per_second",
+        "minimum_records_per_second",
+        "maximum_records_per_second",
+        "growth_factor",
+        "resolution_fraction",
+        "execution_order"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "method": { "const": "geometric-bracket-with-binary-refinement" },
+        "repetitions_per_rate": { "type": "integer", "exclusiveMinimum": 0 },
+        "initial_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "minimum_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "maximum_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "growth_factor": { "type": "integer", "minimum": 2 },
+        "resolution_fraction": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1
+        },
+        "execution_order": {
+          "type": "array",
+          "description": "Rates in the order they were first evaluated.",
+          "items": { "type": "integer", "exclusiveMinimum": 0 }
+        }
+      }
+    },
+    "capacity": {
+      "type": "object",
+      "required": [
+        "sustainable_records_per_second",
+        "first_failing_records_per_second",
+        "bracket_width_fraction",
+        "derived_fixed_rates"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "sustainable_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "first_failing_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "bracket_width_fraction": {
+          "type": "number",
+          "minimum": 0,
+          "description": "(first_failing - sustainable) / sustainable; must be inside the search resolution for credible evidence."
+        },
+        "derived_fixed_rates": {
+          "type": "object",
+          "description": "Floor of capacity times each predeclared percentage, keyed by the percentage as a string.",
+          "required": ["25", "50", "75", "90"],
+          "additionalProperties": false,
+          "properties": {
+            "25": { "type": "integer", "exclusiveMinimum": 0 },
+            "50": { "type": "integer", "exclusiveMinimum": 0 },
+            "75": { "type": "integer", "exclusiveMinimum": 0 },
+            "90": { "type": "integer", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    },
+    "canonical_slo": {
+      "type": "boolean",
+      "description": "True only when every probe of every evaluated rate used the canonical SLO profile."
+    },
+    "evidence_credibility": {
+      "type": "object",
+      "required": [
+        "canonical_slo",
+        "canonical_search",
+        "canonical_window",
+        "bracket_inside_resolution",
+        "statistical_credibility",
+        "valid"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "canonical_slo": { "type": "boolean" },
+        "canonical_search": { "type": "boolean" },
+        "canonical_window": { "type": "boolean" },
+        "bracket_inside_resolution": { "type": "boolean" },
+        "statistical_credibility": { "type": "boolean" },
+        "valid": { "type": "boolean" }
+      }
+    },
+    "statistical_credibility": {
+      "type": "object",
+      "description": "Noise-budget verdicts for the selected candidate rate, plus the candidate's summarized distributions.",
+      "required": [
+        "minimum_repetitions",
+        "coefficient_of_variation_budget",
+        "enough_repetitions",
+        "corrected_p99_inside_noise_budget",
+        "schedule_delay_p99_inside_noise_budget",
+        "process_cpu_inside_noise_budget",
+        "process_peak_memory_inside_noise_budget",
+        "process_rss_inside_noise_budget",
+        "valid",
+        "candidate_corrected_p99_ns",
+        "candidate_schedule_delay_p99_ns",
+        "candidate_cpu_core_seconds_per_million_acknowledged_records",
+        "candidate_peak_memory_bytes",
+        "candidate_max_rss_bytes"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "minimum_repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "coefficient_of_variation_budget": { "type": "number", "exclusiveMinimum": 0 },
+        "enough_repetitions": { "type": "boolean" },
+        "corrected_p99_inside_noise_budget": { "type": "boolean" },
+        "schedule_delay_p99_inside_noise_budget": { "type": "boolean" },
+        "process_cpu_inside_noise_budget": { "type": "boolean" },
+        "process_peak_memory_inside_noise_budget": { "type": "boolean" },
+        "process_rss_inside_noise_budget": { "type": "boolean" },
+        "valid": { "type": "boolean" },
+        "candidate_corrected_p99_ns": { "$ref": "#/$defs/valueSummary" },
+        "candidate_schedule_delay_p99_ns": { "$ref": "#/$defs/valueSummary" },
+        "candidate_cpu_core_seconds_per_million_acknowledged_records": {
+          "$ref": "#/$defs/valueSummary"
+        },
+        "candidate_peak_memory_bytes": { "$ref": "#/$defs/valueSummary" },
+        "candidate_max_rss_bytes": { "$ref": "#/$defs/valueSummary" }
+      }
+    },
+    "exclusion_reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "curve": {
+      "type": "array",
+      "description": "Every evaluated rate in ascending order, with its per-repetition verdicts.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "rate",
+          "sustainable",
+          "sustainable_repetitions",
+          "repetitions",
+          "directories"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "rate": { "type": "integer", "exclusiveMinimum": 0 },
+          "sustainable": {
+            "type": "boolean",
+            "description": "True only when every repetition at this rate was sustainable."
+          },
+          "sustainable_repetitions": { "type": "integer", "minimum": 0 },
+          "repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+          "directories": {
+            "type": "array",
+            "description": "Probe directories relative to the suite root.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "environment_identity_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "environment": {
+      "type": "object",
+      "description": "Broker identity lifted from the sealed environment document copied alongside this summary.",
+      "required": ["broker_version", "bootstrap"],
+      "additionalProperties": true,
+      "properties": {
+        "broker_version": { "type": "string" },
+        "bootstrap": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "valueSummary": {
+      "type": "object",
+      "description": "summarizePositiveValues output over the candidate rate's repetitions.",
+      "required": [
+        "repetitions",
+        "geometric_mean",
+        "arithmetic_mean",
+        "median",
+        "minimum",
+        "maximum",
+        "coefficient_of_variation",
+        "confidence_interval_95"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "geometric_mean": { "type": "number", "exclusiveMinimum": 0 },
+        "arithmetic_mean": { "type": "number", "exclusiveMinimum": 0 },
+        "median": { "type": "number", "exclusiveMinimum": 0 },
+        "minimum": { "type": "number", "exclusiveMinimum": 0 },
+        "maximum": { "type": "number", "exclusiveMinimum": 0 },
+        "coefficient_of_variation": { "type": ["number", "null"] },
+        "confidence_interval_95": {
+          "type": "object",
+          "required": ["method", "resamples", "seed", "lower", "upper"],
+          "additionalProperties": true,
+          "properties": {
+            "method": {
+              "enum": [
+                "repetition-percentile-bootstrap",
+                "paired-block-percentile-bootstrap"
+              ]
+            },
+            "resamples": { "type": "integer", "exclusiveMinimum": 0 },
+            "seed": { "type": "integer" },
+            "lower": { "type": "number", "exclusiveMinimum": 0 },
+            "upper": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

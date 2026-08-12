@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.run-status.v1",
+  "title": "Attempt run status",
+  "description": "The status.json at the root of every sealed evidence bundle: what benchctl attempted, how far it got, and how each subject exited. Written on every path including crash, timeout, and interrupt by the always-seal supervisor in crates/benchctl/src/seal.rs. Documentation mirror of the RunStatus serde type in crates/bench-schema/src/status.rs, which is the source of truth and pins the snake_case wire strings below.",
+  "type": "object",
+  "required": [
+    "schema",
+    "experiment_id",
+    "attempt_id",
+    "execution_status",
+    "interrupted",
+    "subjects",
+    "phases"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.run-status.v1"
+    },
+    "experiment_id": {
+      "type": ["string", "null"],
+      "description": "64-character lowercase hex identity of the resolved intent. Null when the attempt failed before resolution, which still seals a bundle.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "attempt_id": {
+      "type": "string",
+      "description": "<yyyymmddThhmmssZ>-<8 hex>, unique per attempt.",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$"
+    },
+    "execution_status": {
+      "enum": ["complete", "partial", "crashed", "timed_out"],
+      "description": "Worst-wins precedence: timed_out beats crashed beats partial beats complete. A complete run can still be invalid; validity is the separate kafkars.classification.v1 axis."
+    },
+    "failure_reason": {
+      "type": ["string", "null"],
+      "description": "Why the status is not complete. Null for a complete run."
+    },
+    "interrupted": {
+      "type": "boolean",
+      "description": "True when SIGINT or SIGTERM reached benchctl; an interrupted run seals as partial."
+    },
+    "subjects": {
+      "type": "array",
+      "description": "One entry per subject, in execution order. A failing subject records evidence and the run continues; there is no fail-fast.",
+      "items": {
+        "type": "object",
+        "required": ["name", "execution", "adapter_outcome", "result_present", "verification"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "execution": {
+            "type": ["object", "null"],
+            "description": "Process exit facts. Null when the subject was never spawned, for example after an earlier phase failed.",
+            "required": ["exit_code", "signal", "timed_out", "duration_ms"],
+            "additionalProperties": false,
+            "properties": {
+              "exit_code": { "type": ["integer", "null"] },
+              "signal": {
+                "type": ["integer", "null"],
+                "description": "Terminating signal number when the child died from a signal."
+              },
+              "timed_out": { "type": "boolean" },
+              "duration_ms": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "adapter_outcome": {
+            "type": ["string", "null"],
+            "description": "outcome field of this subject's kafkars.adapter-status.v1 document. Null when the adapter wrote no status.",
+            "enum": ["succeeded", "failed", null]
+          },
+          "result_present": {
+            "type": "boolean",
+            "description": "Whether a parseable result.json was found for this subject."
+          },
+          "verification": {
+            "type": ["object", "null"],
+            "description": "Outcome of the configured verifier tool for this subject's measured and warmup topics. Null when verification was skipped.",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "phases": {
+      "type": "array",
+      "description": "Phase records of the attempt state machine, in order. A skipped phase makes the run partial.",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "status": { "type": "string" },
+          "reason": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

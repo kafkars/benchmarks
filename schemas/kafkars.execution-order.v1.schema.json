@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.execution-order.v1",
+  "title": "Subject execution order",
+  "description": "The execution-order.json sealed into every evidence bundle, recording the order subjects ran in and how that order was chosen, so order effects can be balanced across repetitions and audited afterwards. Written by crates/benchctl and mirrored into the resolved experiment's runtime binding. Documentation mirror of the ExecutionOrder serde type in crates/bench-schema/src/status.rs, which is the source of truth.",
+  "type": "object",
+  "required": ["schema", "order"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.execution-order.v1"
+    },
+    "order": {
+      "type": "array",
+      "description": "Subject names in execution order; each subject appears exactly once.",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "method": {
+      "type": "string",
+      "description": "How the order was chosen, for example a seeded permutation or an explicit --order flag."
+    },
+    "seed": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Seed the order was derived from, when the method is seeded."
+    }
+  }
+}

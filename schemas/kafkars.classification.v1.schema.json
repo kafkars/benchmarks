@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.classification.v1",
+  "title": "Run validity classification",
+  "description": "The classification.json sealed into every evidence bundle: whether the run's evidence is valid, which checks were deliberately not performed, and why the bundle cannot support a claim. This is the validity axis, deliberately separate from kafkars.run-status.v1 execution_status - a complete run can be invalid, and a partial run can still carry valid per-subject evidence. Written by crates/benchctl and modeled in crates/bench-verifier; documentation mirror of the Classification serde type in crates/bench-schema/src/classify.rs, which is the source of truth.",
+  "type": "object",
+  "required": ["schema", "run_valid", "claim_eligible", "subjects", "deferred_checks", "reasons"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.classification.v1"
+    },
+    "run_valid": {
+      "type": "boolean",
+      "description": "True only when every subject's evidence passed every performed check."
+    },
+    "claim_eligible": {
+      "const": false,
+      "description": "Always false in milestone 0: no calibrated stable-runner thresholds, no broker or host limiting-resource classification, one balanced producer workload."
+    },
+    "subjects": {
+      "type": "array",
+      "description": "Per-subject validity, in execution order.",
+      "items": {
+        "type": "object",
+        "required": ["name", "valid"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "valid": { "type": "boolean" },
+          "reasons": {
+            "type": "array",
+            "description": "Why this subject's evidence is invalid; empty when valid.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "deferred_checks": {
+      "type": "array",
+      "description": "Checks the milestone-0 engine does not perform, recorded explicitly rather than silently skipped: bootstrap confidence intervals and suites, latency-CSV row validation, native-metric gates, librdkafka statistics summaries, gzip evidence compression, and /usr/bin/time process resources. The legacy Node control plane remains the behavioral reference for each.",
+      "items": { "type": "string" }
+    },
+    "reasons": {
+      "type": "array",
+      "description": "Run-level reasons the evidence is invalid or claim-ineligible.",
+      "items": { "type": "string" }
+    }
+  }
+}

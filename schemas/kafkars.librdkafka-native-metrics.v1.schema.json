@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.librdkafka-native-metrics.v1",
+  "title": "Normalized librdkafka native metrics summary (legacy)",
+  "description": "Sealed native-summary.json derived from the raw client-metrics.jsonl stream by summarizeLibrdkafkaStatistics in legacy/benchctl/librdkafka-statistics.mjs, using the window aggregation in legacy/benchctl/librdkafka-statistics/windows.mjs. Consumed by seal.mjs, fixed-seal.mjs, fixed-suite.mjs, and by evaluateCapacitySlo in legacy/benchctl/capacity-slo.mjs. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "availability",
+    "snapshots",
+    "producer",
+    "requests",
+    "sampled_request_queues",
+    "sampled_producer_queue",
+    "batches",
+    "latency_us",
+    "partitions"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.librdkafka-native-metrics.v1"
+    },
+    "availability": { "const": "captured" },
+    "snapshots": {
+      "type": "object",
+      "required": [
+        "total",
+        "measured_windows",
+        "interval_ms",
+        "buffer_capacity_bytes",
+        "captured_bytes"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "total": { "type": "integer", "exclusiveMinimum": 0 },
+        "measured_windows": { "type": "integer", "exclusiveMinimum": 0 },
+        "interval_ms": { "type": "integer", "exclusiveMinimum": 0 },
+        "buffer_capacity_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "captured_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "description": "Cumulative deltas between the baseline and final snapshots. Both final queue gauges must be zero, proving a complete drain.",
+      "required": [
+        "transmitted_records",
+        "transmitted_message_bytes",
+        "final_queue_records",
+        "final_queue_bytes"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "transmitted_records": { "type": "integer", "minimum": 0 },
+        "transmitted_message_bytes": { "type": "integer", "minimum": 0 },
+        "final_queue_records": { "type": "integer", "minimum": 0 },
+        "final_queue_bytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "requests": {
+      "type": "object",
+      "required": [
+        "produce",
+        "all",
+        "transmitted_bytes",
+        "retries",
+        "timeouts",
+        "by_type",
+        "records_per_produce_request",
+        "batches_per_produce_request"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "produce": { "type": "integer", "exclusiveMinimum": 0 },
+        "all": { "type": "integer", "minimum": 0 },
+        "transmitted_bytes": { "type": "integer", "minimum": 0 },
+        "retries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Summed broker txretries delta; the capacity SLO requires zero."
+        },
+        "timeouts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Summed broker req_timeouts delta; the capacity SLO requires zero."
+        },
+        "by_type": {
+          "type": "object",
+          "description": "Per-request-type deltas, key-sorted, omitting zero-delta types.",
+          "additionalProperties": { "type": "integer", "exclusiveMinimum": 0 }
+        },
+        "records_per_produce_request": { "type": "number", "exclusiveMinimum": 0 },
+        "batches_per_produce_request": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "sampled_request_queues": {
+      "type": "object",
+      "description": "Sampled gauges rather than exact peaks; labelled as such because librdkafka does not expose an exact in-flight peak.",
+      "required": [
+        "configured_max_in_flight_per_broker",
+        "peak_waiting_response",
+        "peak_waiting_response_per_broker",
+        "peak_output",
+        "peak_output_per_broker"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "configured_max_in_flight_per_broker": { "type": "integer", "exclusiveMinimum": 0 },
+        "peak_waiting_response": { "type": "integer", "minimum": 0 },
+        "peak_waiting_response_per_broker": { "type": "integer", "minimum": 0 },
+        "peak_output": { "type": "integer", "minimum": 0 },
+        "peak_output_per_broker": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "sampled_producer_queue": {
+      "type": "object",
+      "description": "Producer queue depth sampled over measured windows, plus its least-squares slope. Nulls appear when fewer than two samples or a zero time span make the trend undefined.",
+      "required": [
+        "samples",
+        "span_ns",
+        "first_records",
+        "last_records",
+        "peak_records",
+        "linear_slope_records_per_second"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "samples": { "type": "integer", "minimum": 0 },
+        "span_ns": { "type": "integer", "minimum": 0 },
+        "first_records": { "type": ["integer", "null"] },
+        "last_records": { "type": ["integer", "null"] },
+        "peak_records": { "type": "integer", "minimum": 0 },
+        "linear_slope_records_per_second": { "type": ["number", "null"] }
+      }
+    },
+    "batches": {
+      "type": "object",
+      "description": "Reset-on-emit topic batch windows aggregated across measured snapshots; records must cover every measured record exactly once.",
+      "required": [
+        "count",
+        "records",
+        "transmitted_bytes",
+        "records_per_batch",
+        "bytes_per_batch",
+        "record_count_min",
+        "record_count_max",
+        "byte_count_min",
+        "byte_count_max"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "count": { "type": "integer", "exclusiveMinimum": 0 },
+        "records": { "type": "integer", "minimum": 0 },
+        "transmitted_bytes": { "type": "integer", "minimum": 0 },
+        "records_per_batch": { "type": "number", "exclusiveMinimum": 0 },
+        "bytes_per_batch": { "type": "number", "exclusiveMinimum": 0 },
+        "record_count_min": { "type": "integer", "minimum": 0 },
+        "record_count_max": { "type": "integer", "minimum": 0 },
+        "byte_count_min": { "type": "integer", "minimum": 0 },
+        "byte_count_max": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "latency_us": {
+      "type": "object",
+      "description": "Broker-side reset-on-emit latency windows in microseconds.",
+      "required": ["internal_queue", "output_queue", "round_trip"],
+      "additionalProperties": true,
+      "properties": {
+        "internal_queue": { "$ref": "#/$defs/window" },
+        "output_queue": { "$ref": "#/$defs/window" },
+        "round_trip": { "$ref": "#/$defs/window" }
+      }
+    },
+    "partitions": {
+      "type": "array",
+      "description": "Per-partition transmitted-record deltas for the measured topic; the sum must equal the measured record count.",
+      "items": {
+        "type": "object",
+        "required": ["partition", "records"],
+        "additionalProperties": true,
+        "properties": {
+          "partition": { "type": "integer", "minimum": 0 },
+          "records": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "window": {
+      "type": "object",
+      "required": ["samples", "sum", "average", "minimum", "maximum"],
+      "additionalProperties": true,
+      "properties": {
+        "samples": { "type": "integer", "exclusiveMinimum": 0 },
+        "sum": { "type": "integer", "minimum": 0 },
+        "average": { "type": "number", "minimum": 0 },
+        "minimum": { "type": "integer", "minimum": 0 },
+        "maximum": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

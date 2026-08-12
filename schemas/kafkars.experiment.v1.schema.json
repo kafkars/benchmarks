@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.experiment.v1",
+  "title": "Resolved experiment",
+  "description": "Canonical resolved-experiment.json: the single machine-readable intent a benchctl attempt executes, resolved from a scenario TOML plus profile, cluster profile, subjects file, adapter describe documents, and seed. Authored by crates/benchctl (resolve.rs) and consumed by every adapter through `<adapter> validate|run --experiment`. Documentation mirror of the ResolvedExperiment serde type in crates/bench-schema/src/experiment.rs, which is the source of truth.",
+  "type": "object",
+  "required": [
+    "schema",
+    "name",
+    "kind",
+    "profile",
+    "claim_eligible",
+    "load_mode",
+    "records",
+    "warmup_records",
+    "seed",
+    "application",
+    "payload",
+    "producer",
+    "budget",
+    "cluster",
+    "slo",
+    "subjects"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.experiment.v1"
+    },
+    "name": {
+      "type": "string",
+      "description": "Scenario name carried from the source TOML."
+    },
+    "kind": {
+      "enum": ["producer"],
+      "description": "Only the producer experiment kind exists in milestone 0."
+    },
+    "profile": {
+      "type": "string",
+      "description": "Resolution profile applied on top of the scenario, for example a smoke or headline profile."
+    },
+    "claim_eligible": {
+      "type": "boolean",
+      "description": "Always false in milestone 0; claim eligibility requires calibrated runner classification."
+    },
+    "load_mode": {
+      "enum": ["closed-loop", "scheduled-open-loop-fixed-rate"],
+      "description": "Resolved load model. Source TOMLs carry the longer legacy strings (closed-loop-capacity-point, scheduled-open-loop-capacity-search); the resolver normalizes them to these two."
+    },
+    "records": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Measured record count. Identity-relevant numbers are integers only."
+    },
+    "warmup_records": { "type": "integer", "minimum": 0 },
+    "offered_records_per_second": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Required if and only if load_mode is scheduled-open-loop-fixed-rate, enforced by ResolvedExperiment::validate()."
+    },
+    "arrival": {
+      "type": "string",
+      "description": "Arrival process for the offered schedule. Required if and only if load_mode is scheduled-open-loop-fixed-rate."
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Deterministic seed for payload generation and execution-order selection. Part of the experiment identity."
+    },
+    "application": {
+      "type": "object",
+      "description": "ApplicationSpec: how the benchmark application drives the client.",
+      "additionalProperties": true,
+      "properties": {
+        "producer_instances": { "type": "integer", "exclusiveMinimum": 0 },
+        "callers_per_producer": { "type": "integer", "exclusiveMinimum": 0 },
+        "backpressure": { "type": "string" },
+        "admission_shape": { "type": "string" },
+        "completion_shape": { "type": "string" },
+        "batch_records": { "type": "integer", "exclusiveMinimum": 0 }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "description": "PayloadSpec: record body shape and its deterministic generator.",
+      "additionalProperties": true,
+      "properties": {
+        "bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "keyed": { "type": "boolean" },
+        "profile": { "type": "string" },
+        "seed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "description": "ProducerSpec: normalized durability, batching, and retry settings every subject must honor.",
+      "additionalProperties": true,
+      "properties": {
+        "acks": { "type": "string" },
+        "idempotence": { "type": "boolean" },
+        "compression": { "type": "string" },
+        "linger_ms": { "type": "integer", "minimum": 0 },
+        "batch_records": { "type": "integer", "exclusiveMinimum": 0 },
+        "batch_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "request_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "max_in_flight_requests_per_broker": { "type": "integer", "exclusiveMinimum": 0 },
+        "delivery_timeout_ms": { "type": "integer", "exclusiveMinimum": 0 },
+        "partitioning": { "type": "string" },
+        "retry_max_replacements": { "type": "integer", "minimum": 0 },
+        "retry_backoff_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "description": "BudgetSpec: application-boundary queue and outstanding-record bounds applied identically to every subject.",
+      "additionalProperties": true,
+      "properties": {
+        "queue_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "max_outstanding_records": { "type": "integer", "exclusiveMinimum": 0 }
+      }
+    },
+    "cluster": {
+      "type": "object",
+      "description": "ClusterSpec: required broker topology and topic durability, independent of any bootstrap address.",
+      "additionalProperties": true,
+      "properties": {
+        "brokers": { "type": "integer", "exclusiveMinimum": 0 },
+        "partitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "replication_factor": { "type": "integer", "exclusiveMinimum": 0 },
+        "min_in_sync_replicas": { "type": "integer", "exclusiveMinimum": 0 },
+        "security": { "type": "string" },
+        "unclean_leader_election": { "type": "boolean" }
+      }
+    },
+    "slo": {
+      "type": "object",
+      "description": "SloSpec: predeclared service-level objectives used to classify a run as sustainable.",
+      "additionalProperties": true,
+      "properties": {
+        "corrected_p99_ms": { "type": "integer", "exclusiveMinimum": 0 },
+        "schedule_delay_p99_ms": { "type": "integer", "exclusiveMinimum": 0 },
+        "drain_tail_ms": { "type": "integer", "exclusiveMinimum": 0 },
+        "queue_slope_percent": { "type": "integer", "minimum": 0 },
+        "queue_slope_floor_records_per_second": { "type": "integer", "minimum": 0 },
+        "minimum_queue_samples": { "type": "integer", "minimum": 0 },
+        "native_retries": { "type": "integer", "minimum": 0 },
+        "native_timeouts": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "subjects": {
+      "type": "array",
+      "description": "Subjects under comparison, in declaration order. Each subject's command is excluded from the experiment identity so that rebuilding a binary elsewhere does not change the identity.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "adapter_name", "adapter_version", "command"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Subject identity, also used to derive topic names; charset-validated at resolve time."
+          },
+          "adapter_name": { "type": "string" },
+          "adapter_version": { "type": "string" },
+          "command": {
+            "type": ["array", "string"],
+            "description": "Adapter argv prefix. Excluded from the experiment identity.",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "runtime": {
+      "type": ["object", "null"],
+      "description": "RuntimeBinding: the concrete cluster and naming this attempt used. Excluded from the experiment identity, so the same intent keeps one identity across attempts and clusters.",
+      "required": ["bootstrap", "run_id", "topic_prefix", "topics", "execution_order"],
+      "additionalProperties": false,
+      "properties": {
+        "bootstrap": { "type": "string" },
+        "run_id": {
+          "type": "string",
+          "description": "First 16 hex characters of sha256(experiment_id || attempt_id).",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "topic_prefix": { "type": "string" },
+        "topics": {
+          "type": "object",
+          "description": "Per-subject measured and warmup topics, keyed by subject name.",
+          "additionalProperties": {
+            "type": "object",
+            "required": ["measured", "warmup"],
+            "additionalProperties": false,
+            "properties": {
+              "measured": { "type": "string" },
+              "warmup": { "type": "string" }
+            }
+          }
+        },
+        "execution_order": {
+          "type": "array",
+          "description": "Subject names in the order they were executed.",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": { "load_mode": { "const": "scheduled-open-loop-fixed-rate" } },
+    "required": ["load_mode"]
+  },
+  "then": {
+    "required": ["offered_records_per_second", "arrival"]
+  }
+}

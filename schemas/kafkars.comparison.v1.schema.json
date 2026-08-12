@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.comparison.v1",
+  "title": "Subject pair comparison",
+  "description": "Derived per-pair ratios between subjects of one attempt, sealed as evidence alongside the run. Floats are allowed here because a comparison is evidence, never an identity: no identity document may contain a float. Written by crates/benchctl from the legacy result views and modeled in crates/bench-report; documentation mirror of the Comparison serde type in crates/bench-schema/src/classify.rs, which is the source of truth.",
+  "type": "object",
+  "required": ["schema", "comparable", "pairs"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.comparison.v1"
+    },
+    "comparable": {
+      "type": "boolean",
+      "description": "True only when every compared subject produced valid, semantically matched evidence. False leaves the ratios present but meaningless."
+    },
+    "reasons": {
+      "type": "array",
+      "description": "Why the subjects are not comparable; empty when comparable is true.",
+      "items": { "type": "string" }
+    },
+    "pairs": {
+      "type": "array",
+      "description": "One entry per ordered subject pair.",
+      "items": {
+        "type": "object",
+        "required": ["baseline", "candidate"],
+        "additionalProperties": false,
+        "properties": {
+          "baseline": {
+            "type": "string",
+            "description": "Subject name in the denominator of every ratio."
+          },
+          "candidate": {
+            "type": "string",
+            "description": "Subject name in the numerator of every ratio."
+          },
+          "goodput_ratio": {
+            "type": ["number", "null"],
+            "description": "candidate acknowledged_records_per_second over baseline. Null when either subject produced no result."
+          },
+          "p99_ratio": {
+            "type": ["number", "null"],
+            "description": "candidate latency_ns.p99 over baseline. Null when either subject produced no result."
+          }
+        }
+      }
+    }
+  }
+}

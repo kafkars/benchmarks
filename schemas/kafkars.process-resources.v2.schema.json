@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.process-resources.v2",
+  "title": "Whole-adapter process resource evidence (legacy)",
+  "description": "Normalized CPU, memory, fault, and context-switch evidence for one whole adapter process including warmup, produced by readProcessResources in legacy/benchctl/process-resources.mjs from the raw /usr/bin/time output captured by scripts/measure-benchmark-process. Consumed by legacy/benchctl/fixed-seal.mjs, fixed-suite.mjs, and reference-probe-seal.mjs. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "scope",
+    "method",
+    "user_cpu_seconds",
+    "system_cpu_seconds",
+    "elapsed_wall_seconds",
+    "max_rss_bytes",
+    "peak_memory_bytes",
+    "peak_memory_method",
+    "instructions_retired",
+    "cycles_elapsed",
+    "minor_page_faults",
+    "major_page_faults",
+    "voluntary_context_switches",
+    "involuntary_context_switches",
+    "cpu_core_seconds",
+    "cpu_core_seconds_per_million_acknowledged_records",
+    "instructions_retired_per_million_acknowledged_records",
+    "cycles_elapsed_per_million_acknowledged_records"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.process-resources.v2"
+    },
+    "scope": { "const": "whole-adapter-process-including-warmup" },
+    "method": {
+      "enum": ["darwin-bsd-time-lp", "linux-gnu-time-v"],
+      "description": "Which raw resource-meter dialect was parsed. Selected by the presence of the GNU maximum-resident-set-size line."
+    },
+    "user_cpu_seconds": { "type": "number", "minimum": 0 },
+    "system_cpu_seconds": { "type": "number", "minimum": 0 },
+    "elapsed_wall_seconds": { "type": "number", "exclusiveMinimum": 0 },
+    "max_rss_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+    "peak_memory_bytes": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Darwin peak physical footprint, or the GNU maximum resident set size on Linux. Both adapters in a comparison must use the same peak_memory_method."
+    },
+    "peak_memory_method": {
+      "enum": ["darwin-peak-physical-footprint", "linux-maximum-resident-set-size"]
+    },
+    "instructions_retired": {
+      "type": ["integer", "null"],
+      "description": "Darwin-only counter; null when the host or dialect does not expose it."
+    },
+    "cycles_elapsed": {
+      "type": ["integer", "null"],
+      "description": "Darwin-only counter; null when the host or dialect does not expose it."
+    },
+    "minor_page_faults": { "type": "integer", "minimum": 0 },
+    "major_page_faults": { "type": "integer", "minimum": 0 },
+    "voluntary_context_switches": { "type": "integer", "minimum": 0 },
+    "involuntary_context_switches": { "type": "integer", "minimum": 0 },
+    "cpu_core_seconds": {
+      "type": "number",
+      "exclusiveMinimum": 0,
+      "description": "user_cpu_seconds plus system_cpu_seconds."
+    },
+    "cpu_core_seconds_per_million_acknowledged_records": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "instructions_retired_per_million_acknowledged_records": {
+      "type": ["number", "null"]
+    },
+    "cycles_elapsed_per_million_acknowledged_records": {
+      "type": ["number", "null"]
+    }
+  }
+}

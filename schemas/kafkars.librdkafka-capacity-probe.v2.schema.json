@@ -1,0 +1,224 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.librdkafka-capacity-probe.v2",
+  "title": "Raw librdkafka sustainable-capacity probe (legacy)",
+  "description": "Sealed probe-summary.json for one raw librdkafka C stable-window probe at a single offered rate, emitted by legacy/benchctl/reference-probe-seal.mjs. The slo block is the predeclared contract evaluated by evaluateCapacitySlo in legacy/benchctl/capacity-slo.mjs. Consumed by legacy/benchctl/reference-capacity-runner.mjs. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "probe_id",
+    "valid",
+    "sustainable",
+    "claim_eligible",
+    "environment_identity_sha256",
+    "reference_client",
+    "workload",
+    "slo",
+    "exclusion_reasons",
+    "result",
+    "process_resources",
+    "native_metrics",
+    "verification"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.librdkafka-capacity-probe.v2"
+    },
+    "probe_id": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "valid": {
+      "type": "boolean",
+      "description": "Evidence validity. A valid but overloaded probe still contributes a failure side to the search."
+    },
+    "sustainable": {
+      "type": "boolean",
+      "description": "True only when every SLO check passed."
+    },
+    "claim_eligible": { "const": false },
+    "environment_identity_sha256": {
+      "type": "string",
+      "description": "Must be identical across every probe of one capacity curve.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "reference_client": {
+      "type": "object",
+      "required": ["adapter", "version", "api"],
+      "additionalProperties": true,
+      "properties": {
+        "adapter": { "const": "librdkafka-c" },
+        "version": { "type": "string" },
+        "api": { "const": "rd_kafka_produce_batch" }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "required": [
+        "mode",
+        "offered_records_per_second",
+        "window_seconds",
+        "warmup_seconds",
+        "records",
+        "warmup_records",
+        "payload_bytes",
+        "partitions",
+        "callers_per_producer",
+        "max_outstanding_records"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "const": "scheduled-open-loop-fixed-rate" },
+        "offered_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "window_seconds": { "type": "integer", "exclusiveMinimum": 0 },
+        "warmup_seconds": { "type": "integer", "exclusiveMinimum": 0 },
+        "records": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Must equal offered_records_per_second times window_seconds."
+        },
+        "warmup_records": { "type": "integer", "exclusiveMinimum": 0 },
+        "payload_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "partitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "callers_per_producer": { "type": "integer", "const": 4 },
+        "max_outstanding_records": { "type": "integer", "exclusiveMinimum": 0 }
+      }
+    },
+    "slo": {
+      "type": "object",
+      "description": "canonical reports whether the evaluated SLO equals CANONICAL_CAPACITY_SLO; the remaining keys are the evaluateCapacitySlo assessment spread into this object.",
+      "required": ["canonical", "sustainable", "checks", "observed", "budgets"],
+      "additionalProperties": true,
+      "properties": {
+        "canonical": { "type": "boolean" },
+        "sustainable": { "type": "boolean" },
+        "checks": {
+          "type": "object",
+          "required": [
+            "all_records_acknowledged",
+            "no_admission_pressure",
+            "no_native_retries",
+            "no_native_timeouts",
+            "corrected_p99_within_budget",
+            "schedule_delay_p99_within_budget",
+            "drain_tail_within_budget",
+            "native_queue_within_budget",
+            "enough_queue_samples",
+            "native_queue_slope_within_budget"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "all_records_acknowledged": { "type": "boolean" },
+            "no_admission_pressure": { "type": "boolean" },
+            "no_native_retries": { "type": "boolean" },
+            "no_native_timeouts": { "type": "boolean" },
+            "corrected_p99_within_budget": { "type": "boolean" },
+            "schedule_delay_p99_within_budget": { "type": "boolean" },
+            "drain_tail_within_budget": { "type": "boolean" },
+            "native_queue_within_budget": { "type": "boolean" },
+            "enough_queue_samples": { "type": "boolean" },
+            "native_queue_slope_within_budget": { "type": "boolean" }
+          }
+        },
+        "observed": {
+          "type": "object",
+          "required": [
+            "corrected_p99_ns",
+            "schedule_delay_p99_ns",
+            "drain_tail_ns",
+            "native_retries",
+            "native_timeouts",
+            "native_queue_samples",
+            "native_queue_peak_records",
+            "native_queue_slope_records_per_second"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "corrected_p99_ns": { "type": "integer", "minimum": 0 },
+            "schedule_delay_p99_ns": { "type": "integer", "minimum": 0 },
+            "drain_tail_ns": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "drain_duration_ns minus schedule_span_ns, floored at zero."
+            },
+            "native_retries": { "type": "integer", "minimum": 0 },
+            "native_timeouts": { "type": "integer", "minimum": 0 },
+            "native_queue_samples": { "type": "integer", "minimum": 0 },
+            "native_queue_peak_records": { "type": "integer", "minimum": 0 },
+            "native_queue_slope_records_per_second": { "type": ["number", "null"] }
+          }
+        },
+        "budgets": {
+          "type": "object",
+          "description": "The evaluated SLO plus the derived queue-slope budget and the configured outstanding bound.",
+          "required": [
+            "corrected_p99_ns",
+            "schedule_delay_p99_ns",
+            "drain_tail_ns",
+            "queue_slope_floor_records_per_second",
+            "queue_slope_fraction_of_offered_rate",
+            "minimum_queue_samples",
+            "max_outstanding_records",
+            "queue_slope_records_per_second"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "corrected_p99_ns": { "type": "number", "exclusiveMinimum": 0 },
+            "schedule_delay_p99_ns": { "type": "number", "exclusiveMinimum": 0 },
+            "drain_tail_ns": { "type": "number", "exclusiveMinimum": 0 },
+            "queue_slope_floor_records_per_second": { "type": "number", "exclusiveMinimum": 0 },
+            "queue_slope_fraction_of_offered_rate": { "type": "number", "exclusiveMinimum": 0 },
+            "minimum_queue_samples": { "type": "number", "exclusiveMinimum": 0 },
+            "max_outstanding_records": { "type": "integer", "exclusiveMinimum": 0 },
+            "queue_slope_records_per_second": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    },
+    "exclusion_reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "result": {
+      "type": "object",
+      "description": "Embedded kafkars.producer-fixed-load.v1 result for the raw C adapter.",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "kafkars.producer-fixed-load.v1" }
+      }
+    },
+    "process_resources": {
+      "type": "object",
+      "description": "Embedded kafkars.process-resources.v2 document.",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "kafkars.process-resources.v2" }
+      }
+    },
+    "native_metrics": {
+      "type": "object",
+      "description": "Embedded kafkars.librdkafka-native-metrics.v1 document.",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "kafkars.librdkafka-native-metrics.v1" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": ["measured", "warmup"],
+      "additionalProperties": true,
+      "properties": {
+        "measured": { "$ref": "#/$defs/verificationReport" },
+        "warmup": { "$ref": "#/$defs/verificationReport" }
+      }
+    }
+  },
+  "$defs": {
+    "verificationReport": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "kafkars.producer-verification.v1" }
+      }
+    }
+  }
+}

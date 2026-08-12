@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.producer-comparison-suite.v1",
+  "title": "Balanced closed-loop comparison suite aggregate (legacy)",
+  "description": "Sealed suite-summary.json aggregating a balanced sequence of kafkars.producer-comparison.v1 pairs, emitted by legacy/benchctl/suite.mjs. Ratio summaries and the credibility verdict come from summarizeRatios and assessStatisticalCredibility in legacy/benchctl/statistics.mjs. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "valid",
+    "claim_eligible",
+    "repetitions",
+    "balance",
+    "exclusion_reasons",
+    "statistical_credibility",
+    "paired_ratios",
+    "pairs"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.producer-comparison-suite.v1"
+    },
+    "valid": { "type": "boolean" },
+    "claim_eligible": { "const": false },
+    "repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+    "balance": {
+      "type": "object",
+      "description": "How often each adapter ran first; odd repetition counts round toward kafkars.",
+      "required": ["kafkars_first", "librdkafka_first"],
+      "additionalProperties": true,
+      "properties": {
+        "kafkars_first": { "type": "integer", "minimum": 0 },
+        "librdkafka_first": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "exclusion_reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "statistical_credibility": {
+      "type": "object",
+      "description": "Five paired blocks and at most 5% coefficient of variation on both goodput and p99 are the minimum credibility gate.",
+      "required": [
+        "minimum_paired_repetitions",
+        "coefficient_of_variation_budget",
+        "enough_repetitions",
+        "goodput_inside_noise_budget",
+        "p99_inside_noise_budget",
+        "valid"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "minimum_paired_repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "coefficient_of_variation_budget": { "type": "number", "exclusiveMinimum": 0 },
+        "enough_repetitions": { "type": "boolean" },
+        "goodput_inside_noise_budget": { "type": "boolean" },
+        "p99_inside_noise_budget": { "type": "boolean" },
+        "valid": { "type": "boolean" }
+      }
+    },
+    "paired_ratios": {
+      "type": "object",
+      "required": [
+        "acknowledged_goodput_kafkars_over_librdkafka",
+        "p99_latency_kafkars_over_librdkafka",
+        "produce_requests_librdkafka_over_kafkars"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "acknowledged_goodput_kafkars_over_librdkafka": { "$ref": "#/$defs/ratioSummary" },
+        "p99_latency_kafkars_over_librdkafka": { "$ref": "#/$defs/ratioSummary" },
+        "produce_requests_librdkafka_over_kafkars": { "$ref": "#/$defs/ratioSummary" }
+      }
+    },
+    "pairs": {
+      "type": "array",
+      "description": "One entry per paired block, in execution order.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "index",
+          "directory",
+          "run_id",
+          "execution_order",
+          "acknowledged_goodput_kafkars_over_librdkafka",
+          "p99_latency_kafkars_over_librdkafka",
+          "produce_requests_librdkafka_over_kafkars"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "index": { "type": "integer", "exclusiveMinimum": 0 },
+          "directory": {
+            "type": "string",
+            "description": "Pair directory relative to the suite root, for example pair-01."
+          },
+          "run_id": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+          "execution_order": {
+            "type": "array",
+            "items": { "enum": ["kafkars", "librdkafka-c"] },
+            "minItems": 2,
+            "maxItems": 2,
+            "uniqueItems": true
+          },
+          "acknowledged_goodput_kafkars_over_librdkafka": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "p99_latency_kafkars_over_librdkafka": { "type": "number", "exclusiveMinimum": 0 },
+          "produce_requests_librdkafka_over_kafkars": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ratioSummary": {
+      "type": "object",
+      "description": "Descriptive statistics plus a deterministic geometric-mean bootstrap interval over positive ratios.",
+      "required": [
+        "repetitions",
+        "geometric_mean",
+        "arithmetic_mean",
+        "median",
+        "minimum",
+        "maximum",
+        "coefficient_of_variation",
+        "confidence_interval_95"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "geometric_mean": { "type": "number", "exclusiveMinimum": 0 },
+        "arithmetic_mean": { "type": "number", "exclusiveMinimum": 0 },
+        "median": { "type": "number", "exclusiveMinimum": 0 },
+        "minimum": { "type": "number", "exclusiveMinimum": 0 },
+        "maximum": { "type": "number", "exclusiveMinimum": 0 },
+        "coefficient_of_variation": {
+          "type": ["number", "null"],
+          "description": "Null for a single repetition, where sample variation is undefined."
+        },
+        "confidence_interval_95": {
+          "type": "object",
+          "required": ["method", "resamples", "seed", "lower", "upper"],
+          "additionalProperties": true,
+          "properties": {
+            "method": {
+              "enum": [
+                "paired-block-percentile-bootstrap",
+                "repetition-percentile-bootstrap"
+              ]
+            },
+            "resamples": { "type": "integer", "exclusiveMinimum": 0 },
+            "seed": { "type": "integer" },
+            "lower": { "type": "number", "exclusiveMinimum": 0 },
+            "upper": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

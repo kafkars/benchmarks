@@ -1,0 +1,192 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.producer-benchmark.v1",
+  "title": "Closed-loop producer adapter result (legacy)",
+  "description": "Normalized result.json written by each adapter for one closed-loop measured producer phase: adapters/kafkars/src/report.rs and adapters/librdkafka-c/report.c. Consumed by validateProducerResult in legacy/benchctl/validation.mjs, which requires exact identity, exact record counts, finite positive rates, integer latency percentiles, a byte-identical settings object, and valid true. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "adapter",
+    "adapter_version",
+    "run_id",
+    "topic",
+    "offered_records",
+    "accepted_records",
+    "acknowledged_records",
+    "failed_records",
+    "payload_bytes",
+    "acknowledged_payload_bytes",
+    "duration_ns",
+    "acknowledged_records_per_second",
+    "acknowledged_mib_per_second",
+    "latency_ns",
+    "settings",
+    "native_metrics",
+    "valid"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.producer-benchmark.v1"
+    },
+    "adapter": {
+      "enum": ["kafkars", "librdkafka-c"],
+      "description": "Adapter identity; must equal the adapter directory name inside the bundle."
+    },
+    "adapter_version": { "type": "string" },
+    "run_id": {
+      "type": "string",
+      "description": "16-character lowercase hex run identity shared by every adapter in the pair.",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "topic": { "type": "string" },
+    "offered_records": { "type": "integer", "minimum": 0 },
+    "accepted_records": { "type": "integer", "minimum": 0 },
+    "acknowledged_records": { "type": "integer", "minimum": 0 },
+    "failed_records": { "type": "integer", "minimum": 0 },
+    "payload_bytes": { "type": "integer", "minimum": 1 },
+    "acknowledged_payload_bytes": { "type": "integer", "minimum": 0 },
+    "duration_ns": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Measured phase duration; the sealer requires a finite positive value."
+    },
+    "acknowledged_records_per_second": { "type": "number", "exclusiveMinimum": 0 },
+    "acknowledged_mib_per_second": { "type": "number", "exclusiveMinimum": 0 },
+    "latency_ns": {
+      "$ref": "#/$defs/latencySummary",
+      "description": "Batch-call-boundary to aggregate-terminal latency over acknowledged records."
+    },
+    "settings": {
+      "$ref": "#/$defs/producerSettings",
+      "description": "Must be byte-identical to normalized_settings in the run's kafkars.benchmark-adapter-config.v1 document."
+    },
+    "native_metrics": {
+      "type": "object",
+      "description": "Client-native evidence. kafkars reports availability \"captured\" with in-process counters; librdkafka-c reports availability \"raw-jsonl\" and points at the sibling client-metrics.jsonl stream.",
+      "required": ["availability"],
+      "additionalProperties": true,
+      "properties": {
+        "availability": { "enum": ["captured", "raw-jsonl"] },
+        "path": { "type": "string" },
+        "broker_calls": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "admitted": { "type": "integer" },
+            "succeeded": { "type": "integer" },
+            "failed": { "type": "integer" }
+          }
+        },
+        "broker_call_latency_ns": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "samples": { "type": "integer" },
+            "mailbox_total": { "type": "integer" },
+            "routing_total": { "type": "integer" },
+            "preparation_total": { "type": "integer" },
+            "writer_admission_total": { "type": "integer" },
+            "in_flight_total": { "type": "integer" },
+            "end_to_end_total": { "type": "integer" }
+          }
+        },
+        "producer_requests": {
+          "$ref": "#/$defs/producerRequestMetrics",
+          "description": "Required for kafkars: validateKafkarsNativeMetrics gates records against the expected count and both peak in-flight counters against the configured bound."
+        },
+        "application_batch_admission": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "calls": { "type": "integer" },
+            "total_ns": { "type": "integer" },
+            "max_ns": { "type": "integer" },
+            "accepted_calls": { "type": "integer" },
+            "accepted_total_ns": { "type": "integer" },
+            "accepted_max_ns": { "type": "integer" },
+            "rejected_calls": { "type": "integer" },
+            "rejected_total_ns": { "type": "integer" },
+            "rejected_max_ns": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "valid": {
+      "type": "boolean",
+      "description": "True only when offered, accepted, and acknowledged all equal the configured record count with zero failures."
+    }
+  },
+  "$defs": {
+    "latencySummary": {
+      "type": "object",
+      "required": ["p50", "p95", "p99", "p999", "max"],
+      "additionalProperties": true,
+      "properties": {
+        "p50": { "type": "integer", "minimum": 0 },
+        "p95": { "type": "integer", "minimum": 0 },
+        "p99": { "type": "integer", "minimum": 0 },
+        "p999": { "type": "integer", "minimum": 0 },
+        "max": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "producerRequestMetrics": {
+      "type": "object",
+      "required": [
+        "requests",
+        "partition_batches",
+        "records",
+        "encoded_record_bytes",
+        "peak_in_flight_requests",
+        "peak_in_flight_requests_per_broker"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "requests": { "type": "integer", "exclusiveMinimum": 0 },
+        "partition_batches": { "type": "integer", "exclusiveMinimum": 0 },
+        "records": { "type": "integer", "exclusiveMinimum": 0 },
+        "encoded_record_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "peak_in_flight_requests": { "type": "integer", "exclusiveMinimum": 0 },
+        "peak_in_flight_requests_per_broker": { "type": "integer", "exclusiveMinimum": 0 }
+      }
+    },
+    "producerSettings": {
+      "type": "object",
+      "required": [
+        "acks",
+        "idempotence",
+        "compression",
+        "linger_ms",
+        "batch_records",
+        "batch_bytes",
+        "request_bytes",
+        "max_in_flight_requests_per_broker",
+        "queue_bytes",
+        "max_outstanding_records",
+        "retry_max_replacements",
+        "retry_backoff_ms",
+        "explicit_balanced_partitioning",
+        "admission_shape",
+        "completion_shape"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "acks": { "enum": ["all"] },
+        "idempotence": { "type": "boolean" },
+        "compression": { "enum": ["none"] },
+        "linger_ms": { "type": "integer" },
+        "batch_records": { "type": "integer" },
+        "batch_bytes": { "type": "integer" },
+        "request_bytes": { "type": "integer" },
+        "max_in_flight_requests_per_broker": { "type": "integer" },
+        "queue_bytes": { "type": "integer" },
+        "max_outstanding_records": { "type": "integer" },
+        "retry_max_replacements": { "type": "integer" },
+        "retry_backoff_ms": { "type": "integer" },
+        "explicit_balanced_partitioning": { "type": "boolean" },
+        "admission_shape": { "enum": ["public-batch"] },
+        "completion_shape": { "enum": ["aggregate-batch-terminal"] }
+      }
+    }
+  }
+}

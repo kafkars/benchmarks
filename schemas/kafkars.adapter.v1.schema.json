@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.adapter.v1",
+  "title": "Adapter capability description",
+  "description": "The document an adapter prints for `<adapter> describe --json`, declaring what it can measure and which result schema it emits per load mode. Authored by each adapter (adapters/kafkars/src/protocol.rs, crates/bench-adapter-librdkafka) and consumed by benchctl during the probe phase, which seals it into subjects.lock.json. Documentation mirror of the AdapterDescription serde type in crates/bench-schema/src/adapter.rs, which is the source of truth.",
+  "type": "object",
+  "required": ["schema", "name", "version", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.adapter.v1"
+    },
+    "name": {
+      "type": "string",
+      "description": "Adapter identity, for example kafkars or librdkafka-c."
+    },
+    "version": {
+      "type": "string",
+      "description": "Adapter version. For the librdkafka shim this is the pinned build version; the runtime rd_kafka_version stays in result.json."
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "What this adapter supports. benchctl refuses to resolve an experiment a subject cannot express.",
+      "required": [
+        "producer",
+        "consumer",
+        "idempotence",
+        "transactions",
+        "tls",
+        "compression",
+        "completion_modes",
+        "ownership_modes",
+        "metric_families"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "producer": { "type": "boolean" },
+        "consumer": { "type": "boolean" },
+        "idempotence": { "type": "boolean" },
+        "transactions": { "type": "boolean" },
+        "tls": { "type": "boolean" },
+        "compression": {
+          "type": "array",
+          "description": "Supported compression codecs, for example none, lz4, zstd.",
+          "items": { "type": "string" }
+        },
+        "completion_modes": {
+          "type": "array",
+          "description": "Completion boundaries this adapter can observe, for example aggregate-batch-terminal.",
+          "items": { "type": "string" }
+        },
+        "ownership_modes": {
+          "type": "array",
+          "description": "Payload ownership contracts this adapter can honor.",
+          "items": { "type": "string" }
+        },
+        "metric_families": {
+          "type": "array",
+          "description": "Client-native metric families this adapter can emit.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "result_schemas": {
+      "type": "object",
+      "description": "Optional map from load mode to the schema id of the result.json this adapter writes in that mode.",
+      "propertyNames": {
+        "enum": ["closed-loop", "scheduled-open-loop-fixed-rate"]
+      },
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.adapter-status.v1",
+  "title": "Adapter run status",
+  "description": "The status.json an adapter writes into its own output directory for `<adapter> run`, reporting its self-assessed outcome independently of its process exit status. Adapters attempt to write it even on a failure path; benchctl reads it in results.rs and folds it into the sealed kafkars.run-status.v1 document. Documentation mirror of the AdapterStatus serde type in crates/bench-schema/src/adapter.rs, which is the source of truth.",
+  "type": "object",
+  "required": ["schema", "outcome", "started_at", "finished_at"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.adapter-status.v1"
+    },
+    "outcome": {
+      "enum": ["succeeded", "failed"],
+      "description": "The adapter's own verdict. An adapter that succeeded can still belong to an invalid run; validity is the separate classification axis."
+    },
+    "failure": {
+      "type": "object",
+      "description": "Present when outcome is failed.",
+      "required": ["stage", "reason"],
+      "additionalProperties": false,
+      "properties": {
+        "stage": {
+          "type": "string",
+          "description": "Which adapter stage failed, for example setup, warmup, measured, or drain."
+        },
+        "reason": { "type": "string" }
+      }
+    },
+    "started_at": {
+      "type": "string",
+      "description": "UTC RFC 3339 instant.",
+      "format": "date-time"
+    },
+    "finished_at": {
+      "type": "string",
+      "description": "UTC RFC 3339 instant.",
+      "format": "date-time"
+    }
+  },
+  "if": {
+    "properties": { "outcome": { "const": "failed" } },
+    "required": ["outcome"]
+  },
+  "then": {
+    "required": ["failure"]
+  }
+}
