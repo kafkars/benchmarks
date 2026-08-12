@@ -1,0 +1,82 @@
+# Executable source-shape and dependency policy for this repository.
+#
+# `crates/bench-guardrails` reads this file and fails `cargo test -p
+# bench-guardrails` when the tree stops matching it. Everything here is a
+# reviewed decision, not a lint default: a change to a number below is a change
+# to what this repository claims about its own shape, and belongs in the
+# changelog beside the code that needed it.
+schema = 1
+
+[paths]
+# Where Rust sources subject to this policy live. `adapters/kafkars/src` rather
+# than `adapters/kafkars`, because that adapter is a separate workspace with its
+# own lock file and its own narrower lint set; this policy governs the source
+# shape it shares with the house, not its dependency graph.
+rust_roots = ["crates", "adapters/kafkars/src"]
+
+# Per-category line budgets. `target` is a design goal and prints as an advisory
+# only. `soft` is the gate: a file above it fails unless `[budgets].baseline`
+# carries a justified, exact-line entry for it.
+#
+# A file's category is decided by path and name, in this precedence order:
+#
+#   1. auxiliary      path contains `/bin/` or `/tests/common/`, or the file is
+#                     a `#[cfg(test)]`-declared support module named
+#                     `fixture.rs`
+#   2. facade         file name is `lib.rs` or `mod.rs`
+#   3. test           file name ends `_test.rs`, or the path lies under a
+#                     `tests/` directory
+#   4. implementation `main.rs` and everything else
+#
+# Auxiliary is tested before facade on purpose, and the case it settles is
+# `tests/common/mod.rs`: cargo mandates that exact filename for helpers shared
+# between integration test binaries — any other name under `tests/` is compiled
+# as a test target of its own — so that one file carries real code and is not a
+# declarative facade. Reading it as a facade would contradict AGENTS.md and
+# would make the `/tests/common/` clause here unreachable.
+
+[budgets.facade]
+target = 80
+soft = 120
+
+[budgets.implementation]
+target = 240
+soft = 300
+
+[budgets.test]
+target = 300
+soft = 500
+
+[budgets.auxiliary]
+target = 300
+soft = 500
+
+[budgets]
+# Per-file justified exceptions to the soft gate: { path, lines, reason }.
+#
+# An entry freezes a file at an exact measured length, so a baselined file may
+# not grow and may not silently shrink either — either direction is an error,
+# because the number here is evidence about a specific file rather than a
+# ceiling to spend. An entry whose file now fits its category's soft cap, or
+# whose file no longer exists, is an error too: a baseline that no longer
+# describes anything is a stale claim, and deleting it is the point of having
+# ratcheted it. Empty is the goal.
+baseline = []
+
+[forbidden_transitive_dependencies]
+# Async runtimes banned from this repository's own dependency graph, checked
+# against the root `Cargo.lock` — the whole graph, not just direct edges, since
+# a runtime that arrives transitively is linked just the same.
+#
+# `adapters/kafkars/Cargo.lock` is deliberately exempt and is not read here: the
+# client under test brings its own dependency graph, and what a subject links is
+# the subject's business. The rule is about what the *harness* links.
+crates = [
+  "tokio",
+  "async-std",
+  "smol",
+  "glommio",
+  "monoio",
+  "compio",
+  "futures-executor",
+]

@@ -88,22 +88,30 @@ and it is not a place to make a client look good.
 - `unwrap`, `expect`, `todo!`, `unimplemented!`, and `dbg!` are denied. Tests
   that genuinely want a panic on a bad fixture opt in with an explicit
   `#![expect(clippy::unwrap_used, reason = "...")]`.
+- **These rules are enforced, not merely written down.**
+  [`crates/bench-guardrails`](crates/bench-guardrails) reads the hand-authored
+  [`guardrails.toml`](guardrails.toml) and fails `scripts/check-guardrails` when
+  the tree stops matching it: module contracts, facade purity, unit tests that
+  name a subject and live behind `#[cfg(test)]`, per-category line budgets, and
+  the absence of every banned async runtime from the root `Cargo.lock` — the
+  adapter's own lock stays exempt, because the client under test brings its own
+  graph. The budgets are a target/gate pair per role — facade 80/120,
+  implementation 240/300, test and auxiliary 300/500 — where the target only
+  prints an advisory and the gate fails. A file over its gate needs a
+  `[budgets].baseline` entry naming it, its exact current length, and a reason a
+  reviewer can weigh; because the length is exact, a baselined file may neither
+  grow nor silently shrink, and an entry whose file now fits, or no longer
+  exists, is itself an error. The ratchet has to be released as the work lands
+  rather than accumulated.
 - Run `scripts/check` before requesting review.
 
 ## Deferred decisions
 
 Recorded here so that they stay decisions rather than becoming accidents. The
-two below are repository-contract deferrals; the current loop's deferrals live
+one below is a repository-contract deferral; the current loop's deferrals live
 in [`docs/ROADMAP.md`](docs/ROADMAP.md), and workloads that cannot run yet live
 in [`scenarios/DEFERRED.md`](scenarios/DEFERRED.md).
 
-- **Guardrails-crate enforcement is deferred.** The sibling client repository
-  enforces dependency edges, file counts, and capability ownership with a
-  dedicated `guardrails` crate and a `guardrails.toml` policy. This repository
-  has no such crate yet; the async-runtime and benchmarking-framework bans live
-  in the workspace lints and in this file, which means they are enforced by
-  review and by the dependency tree rather than by a test. Adding the crate is
-  worthwhile once the workspace stops changing shape every wave.
 - **Evidence storage and publication policy is deferred.** Bundles are written
   to a gitignored `results/` tree. Nothing decides yet what is retained,
   archived, or published.

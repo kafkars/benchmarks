@@ -5,6 +5,7 @@ members = [
   "crates/bench-report",
   "crates/benchctl",
   "crates/bench-adapter-librdkafka",
+  "crates/bench-guardrails",
 ]
 default-members = [
   "crates/bench-schema",
@@ -12,6 +13,7 @@ default-members = [
   "crates/bench-report",
   "crates/benchctl",
   "crates/bench-adapter-librdkafka",
+  "crates/bench-guardrails",
 ]
 resolver = "2"
 

@@ -13,12 +13,15 @@
 #
 #   workspace             Proves the Rust control plane compiles at the MSRV,
 #                         is formatted, is clippy-clean under -D warnings, its
-#                         unit tests pass, every schema file parses and is
-#                         registered, and the librdkafka pin reads the same in
-#                         all seven places it is written down — including the
-#                         cache key this file uses below. Proves NOTHING about
-#                         the adapters, which are separate workspaces, or about
-#                         any run against a real broker.
+#                         unit tests pass, the source tree still matches
+#                         `guardrails.toml` — file budgets, declarative facades,
+#                         module contracts, test siblings, and no async runtime
+#                         in the harness's own lock file — every schema file
+#                         parses and is registered, and the librdkafka pin reads
+#                         the same in all seven places it is written down —
+#                         including the cache key this file uses below. Proves
+#                         NOTHING about the adapters, which are separate
+#                         workspaces, or about any run against a real broker.
 #
 #   control-plane         Proves the migrated Node control plane's own tests
 #                         pass under the pinned Node, and that the model-summary
@@ -103,6 +106,12 @@ jobs:
         run: cargo fetch --locked
       - name: Validate the workspace
         run: scripts/check-workspace
+      # Runs beside the workspace lane rather than inside it: the guardrails are
+      # a policy over the source tree and the resolved lock file, not a property
+      # of a compiled artifact, and a separate step keeps a budget violation
+      # legible as one instead of buried in a test sweep.
+      - name: Validate the source-shape and dependency guardrails
+        run: scripts/check-guardrails
       - name: Validate the schema registry
         run: scripts/check-schemas
       # Cheap, needs no toolchain, and guards the cache key used by the two
