@@ -19,9 +19,15 @@
 #                         real broker.
 #
 #   control-plane         Proves the migrated Node control plane's own tests
-#                         pass under the pinned Node. Proves NOTHING about its
-#                         ability to drive a cluster; those paths are exercised
-#                         by the diagnostic lane and by local runs.
+#                         pass under the pinned Node, and that the model-summary
+#                         request the nightly would send still matches the
+#                         reviewed prompt artifact — prompt version, defaults,
+#                         packet digest, and a strict schema mirroring
+#                         kafkars.llm-summary.v1 — with no network, no API key,
+#                         and no build. Proves NOTHING about its ability to
+#                         drive a cluster, and nothing about what a model
+#                         replies; those paths are exercised by the diagnostic
+#                         lane, the nightly workflow, and local runs.
 #
 #   adapters-conformance  The lane that earns its 35 minutes. Proves both
 #                         adapters build --locked against the REVIEWED sibling
@@ -116,6 +122,13 @@ jobs:
           package-manager-cache: false
       - name: Validate the legacy control plane
         run: scripts/check-control-plane
+      # python3 is preinstalled on ubuntu-24.04, and this test needs nothing
+      # else: it drives the summary script's --dry-run against a committed
+      # fixture, so it reaches no network and builds nothing. It lives in this
+      # lane rather than in workspace because it is a script contract, not a
+      # Rust one.
+      - name: Validate the model-summary request contract
+        run: scripts/benchmark-openai-summary-test
 
   adapters-conformance:
     name: adapters-conformance

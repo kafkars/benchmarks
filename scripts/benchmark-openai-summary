@@ -1,0 +1,497 @@
+#!/usr/bin/env bash
+# The narration step: prose over one analysis packet, written by a model and
+# then checked against that packet before anybody reads it.
+#
+# What this is allowed to do is narrow by construction. The model is sent the
+# analysis packet and nothing else — not a bundle, not a result document, not
+# the scenario, not which subject is "ours" — because the packet is the whole
+# boundary between measurement and interpretation (docs/EVIDENCE.md). The
+# prompt is the committed, versioned artifact under analysis/prompts/, not a
+# string in this file, so the request can be diffed against a reviewed
+# document.
+#
+# What this is not allowed to do is decide anything. Every number the summary
+# may cite already exists under a stable key in the packet, the verdict is
+# copied rather than concluded, and `benchctl packet` enforces both mechanically
+# after the reply lands. A summary that fails that check is a nonzero exit and
+# no markdown: the rendered document is only ever produced for prose that is
+# bound to its packet. Rejecting a summary costs nothing — the packet still
+# holds every number, and none of them depended on the prose.
+#
+# The transcript is on disk either way: the exact request before the call, the
+# raw structured reply, and a provenance document carrying the digests of both
+# the packet that went in and the summary that came out.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+REPORTS_DIR=""
+OUTPUT_JSON=""
+OUTPUT_MARKDOWN=""
+MODEL="${OPENAI_MODEL:-gpt-5.5}"
+REASONING_EFFORT="${OPENAI_REASONING_EFFORT:-high}"
+DRY_RUN=false
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/benchmark-openai-summary --reports DIR [options]
+
+Writes a model-generated summary of one analysis packet, and validates it
+against that packet with `benchctl packet` before rendering any markdown.
+Requires OPENAI_API_KEY unless --dry-run is used.
+
+Options:
+  --reports DIR             Report directory holding suite-summary.json and
+                            analysis-packet.json. Required.
+  --output-json FILE        Validated summary JSON. Default: DIR/llm-summary.json.
+  --output-markdown FILE    Rendered summary. Default: DIR/llm-summary.md.
+  --model MODEL             OpenAI model. Default: OPENAI_MODEL or gpt-5.5.
+  --reasoning-effort VALUE  Reasoning effort. Default: OPENAI_REASONING_EFFORT or high.
+  --dry-run                 Write the request JSON without calling the API.
+  -h, --help                Show this help.
+
+Also written beside --output-json:
+  llm-summary-request.json  The exact request payload, written before the call.
+  llm-provenance.json       Prompt version, model, response id, and the sha256
+                            of both the packet in and the summary out.
+USAGE
+}
+
+fail() {
+  printf 'error: %s\n' "$1" >&2
+  exit 1
+}
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --reports)
+      [[ "$#" -ge 2 ]] || fail "--reports requires a value"
+      REPORTS_DIR="$2"
+      shift 2
+      ;;
+    --output-json)
+      [[ "$#" -ge 2 ]] || fail "--output-json requires a value"
+      OUTPUT_JSON="$2"
+      shift 2
+      ;;
+    --output-markdown)
+      [[ "$#" -ge 2 ]] || fail "--output-markdown requires a value"
+      OUTPUT_MARKDOWN="$2"
+      shift 2
+      ;;
+    --model)
+      [[ "$#" -ge 2 ]] || fail "--model requires a value"
+      MODEL="$2"
+      shift 2
+      ;;
+    --reasoning-effort)
+      [[ "$#" -ge 2 ]] || fail "--reasoning-effort requires a value"
+      REASONING_EFFORT="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown option '$1'"
+      ;;
+  esac
+done
+
+[[ -n "$REPORTS_DIR" ]] || fail "--reports is required"
+[[ -d "$REPORTS_DIR" ]] || fail "reports directory not found: $REPORTS_DIR"
+
+PACKET="$REPORTS_DIR/analysis-packet.json"
+SUITE_SUMMARY="$REPORTS_DIR/suite-summary.json"
+[[ -f "$PACKET" ]] || fail "no analysis-packet.json in $REPORTS_DIR"
+# Required even for a dry run: the guardrail needs it, and a --dry-run that
+# passed against inputs the real call would refuse is a dry run that proved
+# nothing.
+[[ -f "$SUITE_SUMMARY" ]] || fail "no suite-summary.json in $REPORTS_DIR"
+
+PROMPT="$repo_root/analysis/prompts/producer-comparison.v1.md"
+[[ -f "$PROMPT" ]] || fail "the versioned prompt is missing: $PROMPT"
+
+if [[ -z "$OUTPUT_JSON" ]]; then
+  OUTPUT_JSON="$REPORTS_DIR/llm-summary.json"
+fi
+if [[ -z "$OUTPUT_MARKDOWN" ]]; then
+  OUTPUT_MARKDOWN="$REPORTS_DIR/llm-summary.md"
+fi
+mkdir -p "$(dirname "$OUTPUT_JSON")" "$(dirname "$OUTPUT_MARKDOWN")"
+
+BENCHCTL="$repo_root/target/release/benchctl"
+if [[ "$DRY_RUN" == false ]]; then
+  [[ -n "${OPENAI_API_KEY:-}" ]] || fail "OPENAI_API_KEY is required unless --dry-run is used"
+  # A dry run never reaches the guardrail, so it never needs the binary; a real
+  # one always does, and building it here means the failure mode is "the
+  # control plane would not compile" rather than "the summary was written and
+  # nothing checked it".
+  if [[ ! -x "$BENCHCTL" ]]; then
+    printf 'building the control plane to validate the summary with\n'
+    cargo build --locked --release -p benchctl >&2
+  fi
+  [[ -x "$BENCHCTL" ]] || fail "no benchctl binary to validate the summary with: $BENCHCTL"
+fi
+
+python3 - \
+  "$PACKET" \
+  "$SUITE_SUMMARY" \
+  "$PROMPT" \
+  "$OUTPUT_JSON" \
+  "$OUTPUT_MARKDOWN" \
+  "$MODEL" \
+  "$REASONING_EFFORT" \
+  "$DRY_RUN" \
+  "$BENCHCTL" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+packet_path = pathlib.Path(sys.argv[1])
+suite_path = pathlib.Path(sys.argv[2])
+prompt_path = pathlib.Path(sys.argv[3])
+output_json_path = pathlib.Path(sys.argv[4])
+output_markdown_path = pathlib.Path(sys.argv[5])
+model = sys.argv[6]
+reasoning_effort = sys.argv[7]
+dry_run = sys.argv[8] == "true"
+benchctl = sys.argv[9]
+
+# The version of the committed prompt artifact this request was built from.
+# It is this constant and the file's name that must agree; changing the wording
+# of the prompt without changing both is the drift the version exists to catch.
+PROMPT_VERSION = "producer-comparison.v1"
+
+# The schema the reply must satisfy, and the name the strict structured-output
+# format is registered under.
+SUMMARY_SCHEMA_ID = "kafkars.llm-summary.v1"
+PACKET_SCHEMA_ID = "kafkars.analysis-packet.v1"
+STRUCTURED_OUTPUT_NAME = "kafkars_llm_summary"
+
+# The two headings analysis/prompts/producer-comparison.v1.md is split at.
+PROMPT_HEADING = "## Prompt"
+PACKET_HEADING = "### The packet"
+PACKET_SLOT = "{{ANALYSIS_PACKET_JSON}}"
+
+# Copied verbatim from bench_report::DIAGNOSTIC_BANNER in
+# crates/bench-report/src/render.rs, which is the source of truth. Every report
+# this repository renders opens with this sentence, and a model summary that
+# circulated without it would be the one document in the set a reader could
+# quote without its limits attached. scripts/benchmark-openai-summary-test
+# reconstructs the Rust literal and fails if these two ever drift apart.
+DIAGNOSTIC_BANNER = (
+    "Diagnostic only — never claim-eligible. These numbers describe the machine "
+    "and configuration they were measured on, and support no published "
+    "comparison between clients."
+)
+
+
+def die(message):
+    raise SystemExit(f"error: {message}")
+
+
+packet_bytes = packet_path.read_bytes()
+packet_sha256 = hashlib.sha256(packet_bytes).hexdigest()
+try:
+    packet = json.loads(packet_bytes)
+except json.JSONDecodeError as exc:
+    die(f"{packet_path} is not JSON: {exc}")
+if packet.get("schema") != PACKET_SCHEMA_ID:
+    die(
+        f"{packet_path} declares schema {packet.get('schema')!r}, "
+        f"not {PACKET_SCHEMA_ID!r}"
+    )
+
+# The packet text is injected exactly as it sits on disk, not re-serialized:
+# the digest recorded below covers these bytes, so the model is sent the bytes
+# that were hashed and a reader can check one against the other.
+packet_text = packet_bytes.decode("utf-8").rstrip("\n")
+
+prompt_text = prompt_path.read_text(encoding="utf-8")
+prompt_start = prompt_text.find(f"\n{PROMPT_HEADING}\n")
+packet_start = prompt_text.find(f"\n{PACKET_HEADING}\n")
+if prompt_start < 0 or packet_start < 0 or packet_start < prompt_start:
+    die(
+        f"{prompt_path} no longer carries the {PROMPT_HEADING!r} and "
+        f"{PACKET_HEADING!r} headings this script splits it at"
+    )
+system_prompt = prompt_text[prompt_start + 1 : packet_start].strip()
+user_prompt = prompt_text[packet_start + 1 :].strip()
+if PACKET_SLOT not in user_prompt:
+    die(f"{prompt_path} no longer carries the {PACKET_SLOT} slot")
+user_prompt = user_prompt.replace(PACKET_SLOT, packet_text)
+
+# A strict json_schema mirroring kafkars.llm-summary.v1 exactly: the same seven
+# fields, the same two enumerations, and additionalProperties false everywhere.
+# `schema` is a single-value enum rather than a const because strict structured
+# output does not accept const — the effect is the same, and it means the model
+# emits the schema id rather than this script adding one to a document it did
+# not write. The field set is exactly what LlmSummary's deny_unknown_fields
+# accepts, so a reply that satisfies this schema parses on the Rust side.
+string_array = {"type": "array", "items": {"type": "string"}}
+summary_schema = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "schema",
+        "verdict",
+        "executive_summary",
+        "findings",
+        "hypotheses",
+        "next_experiments",
+        "caveats",
+    ],
+    "properties": {
+        "schema": {"type": "string", "enum": [SUMMARY_SCHEMA_ID]},
+        "verdict": {
+            "type": "string",
+            "enum": ["improved", "regressed", "mixed", "inconclusive", "invalid"],
+        },
+        "executive_summary": {"type": "string"},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["text", "metric_refs", "evidence_refs"],
+                "properties": {
+                    "text": {"type": "string"},
+                    "metric_refs": string_array,
+                    "evidence_refs": string_array,
+                },
+            },
+        },
+        "hypotheses": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["text", "confidence", "evidence_refs"],
+                "properties": {
+                    "text": {"type": "string"},
+                    "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "evidence_refs": string_array,
+                },
+            },
+        },
+        "next_experiments": string_array,
+        "caveats": string_array,
+    },
+}
+
+request_payload = {
+    "model": model,
+    "input": [
+        {"role": "system", "content": [{"type": "input_text", "text": system_prompt}]},
+        {"role": "user", "content": [{"type": "input_text", "text": user_prompt}]},
+    ],
+    "reasoning": {"effort": reasoning_effort},
+    "text": {
+        "verbosity": "low",
+        "format": {
+            "type": "json_schema",
+            "name": STRUCTURED_OUTPUT_NAME,
+            "strict": True,
+            "schema": summary_schema,
+        },
+    },
+}
+
+# Written before the call, not after it: a request that is only recorded once a
+# reply arrives is a request nobody can inspect when the call is what failed.
+request_path = output_json_path.with_name("llm-summary-request.json")
+request_path.write_text(
+    json.dumps(
+        {
+            "promptVersion": PROMPT_VERSION,
+            "model": model,
+            "reasoningEffort": reasoning_effort,
+            "inputSha256": packet_sha256,
+            "packetPath": str(packet_path),
+            "request": request_payload,
+        },
+        indent=2,
+    )
+    + "\n",
+    encoding="utf-8",
+)
+print(f"wrote the model request: {request_path}")
+
+if dry_run:
+    # Deliberately nothing else. A dry run has no reply to validate, so writing
+    # a summary here would be writing one nothing checked.
+    raise SystemExit(0)
+
+api_key = os.environ["OPENAI_API_KEY"]
+request = urllib.request.Request(
+    "https://api.openai.com/v1/responses",
+    data=json.dumps(request_payload).encode("utf-8"),
+    headers={
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    },
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(request, timeout=300) as response:
+        response_body = response.read().decode("utf-8")
+except urllib.error.HTTPError as exc:
+    body = exc.read().decode("utf-8", errors="replace")
+    die(f"OpenAI request failed: HTTP {exc.code}: {body}")
+except urllib.error.URLError as exc:
+    die(f"OpenAI request failed: {exc.reason}")
+
+raw_response = json.loads(response_body)
+output_text = raw_response.get("output_text")
+if not output_text:
+    chunks = []
+    for item in raw_response.get("output", []):
+        for content in item.get("content", []):
+            if content.get("type") in {"output_text", "text"} and content.get("text"):
+                chunks.append(content["text"])
+    output_text = "\n".join(chunks)
+if not output_text:
+    die("the OpenAI response carried no output text")
+
+try:
+    summary = json.loads(output_text)
+except json.JSONDecodeError as exc:
+    die(f"the OpenAI response was not valid JSON: {exc}")
+if not isinstance(summary, dict):
+    die("the OpenAI response was not a JSON object")
+
+# The strict schema above requires the model to emit the schema id, so this is
+# a belt on top of a brace: a model that dropped it gets the field it should
+# have written, and one that wrote a *different* id is left alone so the
+# guardrail refuses the document rather than this script quietly correcting a
+# summary that claims to be something else.
+if "schema" not in summary:
+    summary["schema"] = SUMMARY_SCHEMA_ID
+
+summary_bytes = (json.dumps(summary, indent=2) + "\n").encode("utf-8")
+output_json_path.write_bytes(summary_bytes)
+output_sha256 = hashlib.sha256(summary_bytes).hexdigest()
+
+provenance_path = output_json_path.with_name("llm-provenance.json")
+provenance = {
+    "created_at": datetime.now(timezone.utc).isoformat(),
+    "prompt_version": PROMPT_VERSION,
+    "model": model,
+    "reasoning_effort": reasoning_effort,
+    "response_id": raw_response.get("id"),
+    "input_sha256": packet_sha256,
+    "output_sha256": output_sha256,
+}
+provenance_path.write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
+
+# The guardrail. Nothing downstream of this line runs for a summary that did
+# not pass it, and the failure is reported with the reason `benchctl` gave
+# rather than a summary of it.
+check = subprocess.run(
+    [
+        benchctl,
+        "packet",
+        "--suite",
+        str(suite_path),
+        "--llm-summary",
+        str(output_json_path),
+    ],
+    capture_output=True,
+    text=True,
+    check=False,
+)
+sys.stdout.write(check.stdout)
+sys.stderr.write(check.stderr)
+if check.returncode != 0:
+    die(
+        f"the summary is not bound to its packet: benchctl packet exited "
+        f"{check.returncode}. The summary is at {output_json_path} and the "
+        f"packet at {packet_path}; no markdown was rendered."
+    )
+
+
+def reference_list(keys):
+    return ", ".join(f"`{key}`" for key in keys)
+
+
+lines = [
+    f"# Model summary — {packet.get('scenario_name', 'unknown scenario')}",
+    "",
+    f"> {DIAGNOSTIC_BANNER}",
+    "",
+    f"**Verdict: `{summary['verdict']}`** — copied from the analysis packet, "
+    "which is the only place a verdict is decided.",
+    "",
+    summary["executive_summary"],
+    "",
+    "## Findings",
+    "",
+]
+if summary["findings"]:
+    for finding in summary["findings"]:
+        cited = []
+        if finding["metric_refs"]:
+            cited.append(f"metrics {reference_list(finding['metric_refs'])}")
+        if finding["evidence_refs"]:
+            cited.append(f"evidence {reference_list(finding['evidence_refs'])}")
+        suffix = f" ({'; '.join(cited)})" if cited else ""
+        lines.append(f"- {finding['text']}{suffix}")
+else:
+    lines.append("_The model stated no findings._")
+lines.extend(["", "## Hypotheses", ""])
+if summary["hypotheses"]:
+    # Confidence is labeled on every hypothesis so that speculation cannot be
+    # read as a finding; `low` is the honest default and the prompt says so.
+    for hypothesis in summary["hypotheses"]:
+        cited = (
+            f" (evidence {reference_list(hypothesis['evidence_refs'])})"
+            if hypothesis["evidence_refs"]
+            else ""
+        )
+        lines.append(
+            f"- **{hypothesis['confidence']} confidence** — "
+            f"{hypothesis['text']}{cited}"
+        )
+else:
+    lines.append("_The model proposed no explanations._")
+lines.extend(["", "## Next experiments", ""])
+if summary["next_experiments"]:
+    lines.extend(f"- {experiment}" for experiment in summary["next_experiments"])
+else:
+    lines.append("_The model proposed no further experiments._")
+lines.extend(["", "## Caveats", ""])
+if summary["caveats"]:
+    lines.extend(f"- {caveat}" for caveat in summary["caveats"])
+else:
+    lines.append("_The model named no caveats._")
+lines.extend(
+    [
+        "",
+        "---",
+        "",
+        f"Written by `{model}` at reasoning effort `{reasoning_effort}` under "
+        f"prompt `{PROMPT_VERSION}` on {provenance['created_at']}, over analysis "
+        f"packet `sha256:{packet_sha256}`, and accepted by `benchctl packet` "
+        f"against `{suite_path.name}`. Summary digest "
+        f"`sha256:{output_sha256}`; response `{provenance['response_id']}`.",
+        "",
+    ]
+)
+output_markdown_path.write_text("\n".join(lines), encoding="utf-8")
+
+print(f"wrote the validated summary: {output_json_path}")
+print(f"wrote the summary provenance: {provenance_path}")
+print(f"wrote the rendered summary: {output_markdown_path}")
+PY

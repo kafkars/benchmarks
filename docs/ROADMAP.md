@@ -52,13 +52,33 @@ requires classification thresholds calibrated per stable runner, and this
 repository has no stable runner — collecting broker metrics against a laptop
 would produce a classification field nobody should trust.
 
-## `benchctl pack` runner
+## Narration beyond one packet and one provider
 
-`scenarios/packs/` declares which scenarios belong to which cadence; nothing
-executes a pack. Deferred because a pack runner is where repetition ordering,
-paired-block randomization, and cross-attempt aggregation land, and those are
-the parts that must agree with the legacy control plane before the legacy plane
-can be retired.
+`scripts/benchmark-openai-summary` wires the narration layer to the OpenAI
+Responses API, following the same house pattern the sibling repositories use: a
+bash script around a stdlib-only python3 heredoc, the versioned prompt artifact
+as the request text, strict structured output, and the exact request written to
+disk before the call. It runs after a suite has sealed, reads only the analysis
+packet, and produces markdown only for prose `benchctl packet` accepted.
+
+Two things are deliberately not built on top of it. There is no second provider
+and no local model, because the guardrail is what makes a summary evidence and
+the guardrail is provider-agnostic — adding backends multiplies the transport
+code without changing what may be believed. And there is no summary *across*
+packets, for the reason the next entry states: a narrator handed six packets
+would be asked to say what the night showed, which is a claim about a workload
+mix nobody specified.
+
+## Cross-pack aggregation
+
+`benchctl pack` now exists, and runs every entry of a manifest through the verb
+its repetition count implies. What it deliberately does not do is summarize
+*across* entries: there is no document that reads six scenarios at once and says
+what the night showed. Deferred because a cross-scenario statistic is a claim
+about a workload mix nobody has specified, and inventing one in the runner would
+put it beyond review. Repetition ordering and paired blocking already live in
+`benchctl suite`, where a single experiment's repetitions are the only things
+they can legitimately be computed over.
 
 ## `benchctl gc`
 

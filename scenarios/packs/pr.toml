@@ -16,9 +16,11 @@
 # command, not to the pack, so the same pack describes a laptop run and a CI
 # run.
 #
-# There is no `benchctl pack` runner yet. Until there is, a pack is a reviewed
-# statement of which scenarios belong to a cadence, and a caller loops over the
-# entries with `benchctl run`. See `docs/ROADMAP.md`.
+# `benchctl pack --manifest scenarios/packs/pr.toml ...` runs this file. Each
+# entry dispatches to the verb its repetition count implies: two or more is a
+# suite, one is a run, and one over a scenario carrying a `[search]` section is
+# a capacity ladder. Scenario paths are repository-root-relative, so the command
+# is run from the repository root.
 #
 # Why one scenario: a pull request gate must fail for reasons the author
 # changed. Cross-client throughput on a shared runner is noisy enough that a

@@ -60,4 +60,40 @@ not permitted and appears instead as a new schema id.
 - `scenarios/packs/pr.toml` and `scenarios/packs/nightly.toml`, declaring which
   scenarios belong to which cadence and at how many repetitions, plus
   `scenarios/DEFERRED.md` naming every matrix row that cannot run yet and what
-  refuses it.
+  refuses it;
+- `benchctl pack`, which runs every entry of one reviewed manifest in the order
+  it states, dispatching each to the verb its repetition count implies — two or
+  more is a suite, one is a run, and one over a scenario carrying a `[search]`
+  section is a capacity ladder. It contributes no measurement and no statistic
+  of its own, so a pack leaves exactly the evidence those verbs would have left
+  if the commands had been typed one at a time; it exits 0 only when every
+  entry did, and 20 otherwise;
+- `scripts/benchmark-openai-summary`, the narration step: it reads one analysis
+  packet — never a bundle, never a result document — sends it under the
+  versioned `analysis/prompts/producer-comparison.v1.md` prompt with a strict
+  structured-output schema mirroring `kafkars.llm-summary.v1`, records the exact
+  request before the call, and then runs `benchctl packet` over the reply. The
+  markdown is rendered only for a summary the guardrail accepted, and
+  `llm-provenance.json` carries the sha256 of both the packet in and the summary
+  out. `scripts/benchmark-openai-summary-test` proves that request contract
+  offline against a committed fixture, with no network, no API key, and no
+  build;
+- `.github/workflows/nightly.yml`, which runs the nightly pack against the dev
+  compose cluster on a schedule, uploads the sealed evidence and reports for 30
+  days, and narrates each suite's packet in the run summary. Its numbers are
+  shared-runner diagnostics and never a comparison between clients. A rejected
+  model summary is reported and does not fail the workflow: narration is
+  commentary on evidence and may never be the reason evidence is discarded;
+- `scripts/generate-subject-config`, the one place the per-machine subject list
+  and cluster profile are written, shared by `scripts/bench-suite-acceptance`
+  and the nightly workflow so the two cannot drift into measuring different
+  subjects.
+
+### Changed
+
+- `analysis/prompts/producer-comparison.v1.md` no longer says that nothing in
+  this repository invokes a language model. Nothing on a *measurement's path*
+  does, which is the claim that mattered and is still true; the prompt now names
+  the script that calls a model after sealing, and the guardrail that decides
+  whether the reply is evidence. The prompt's own rules are unchanged, so the
+  version is unchanged.

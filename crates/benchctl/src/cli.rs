@@ -2,7 +2,7 @@
 //! fixed by the design plan, and the dispatch into the pipeline, the suite, the
 //! capacity search, and the reporting verbs.
 //!
-//! # The six verbs
+//! # The seven verbs
 //!
 //! ```text
 //! benchctl resolve  --experiment <toml> --subjects <toml> --cluster <toml>
@@ -15,6 +15,11 @@
 //! benchctl suite    <run flags> --repetitions <n> [--reports <dir>]
 //!
 //! benchctl capacity <run flags> [--reports <dir>]
+//!
+//! benchctl pack     --manifest <pack.toml> --subjects <toml> --cluster <toml>
+//!                   --bootstrap <host:port,...> [--results <dir>]
+//!                   [--reports <dir>] [--seed <n>] [--run-timeout-secs <n>]
+//!                   [--tool-timeout-secs <n>] [--probe-timeout-secs <n>]
 //!
 //! benchctl report   --bundle <dir> [--out <path>]
 //!
@@ -31,6 +36,12 @@
 //! inputs, because a repetition and a probe must be the same kind of run as the
 //! one a person would have made by hand — see [`crate::suite`] for the
 //! execution-order rule and [`crate::capacity`] for the ladder.
+//!
+//! `pack` is a loop over those three. It takes no `--experiment`, because a
+//! pack manifest names the scenarios; everything else a run needs is passed
+//! once and shared by every entry, which is what lets the same reviewed pack
+//! describe a laptop and a nightly runner. See [`crate::pack`] for the dispatch
+//! rule.
 //!
 //! `report` and `packet` run nothing at all: they read sealed evidence back out,
 //! and check prose written over it.
@@ -77,7 +88,8 @@
 //! The looping verbs keep the same two ranges. A suite exits 0 only when every
 //! attempt sealed `complete` and at least two classified valid, and 20
 //! otherwise; a capacity search exits 0 when it converged and 20 when it did
-//! not. An unconverged search is a sealed outcome, not a fault.
+//! not; a pack exits 0 only when every entry exited 0. An unconverged search is
+//! a sealed outcome, not a fault.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -89,10 +101,11 @@ use bench_schema::{BudgetSpec, pretty_bytes};
 use crate::attempt::AttemptId;
 use crate::capacity::CapacityCommand;
 use crate::error::{CtlError, CtlResult, EXIT_SEALED_COMPLETE};
+use crate::pack::PackCommand;
 use crate::pipeline::{self, AttemptEnd, CommonArguments};
 use crate::report::{PacketCommand, ReportCommand};
 use crate::suite::{DEFAULT_REPORTS_ROOT, MINIMUM_REPETITIONS, SuiteCommand};
-use crate::{capacity, report, suite};
+use crate::{capacity, pack, report, suite};
 
 /// The full usage text, printed for `--help` and quoted on a usage error.
 pub const USAGE: &str = "\
@@ -104,6 +117,10 @@ usage:
                     [--tool-timeout-secs <n>] [--probe-timeout-secs <n>]
   benchctl suite    <run flags> --repetitions <n> [--reports <dir>]
   benchctl capacity <run flags> [--reports <dir>]
+  benchctl pack     --manifest <pack.toml> --subjects <toml> --cluster <toml>
+                    --bootstrap <host:port,...> [--results <dir>]
+                    [--reports <dir>] [--seed <n>] [--run-timeout-secs <n>]
+                    [--tool-timeout-secs <n>] [--probe-timeout-secs <n>]
   benchctl report   --bundle <dir> [--out <path>]
   benchctl packet   --suite <suite-summary.json> --llm-summary <file>
 
@@ -111,6 +128,7 @@ usage:
   run       resolve, execute every subject, and always seal an evidence bundle
   suite     run the same experiment N times and summarize the repetitions
   capacity  search for the highest offered rate that still meets the objectives
+  pack      run every entry of one cadence's manifest, in the order it states
   report    render one sealed bundle as markdown
   packet    check an LLM summary against the packet derived from a suite";
 
@@ -150,6 +168,8 @@ pub enum Command {
     Suite(SuiteCommand),
     /// Search for the highest satisfying offered rate.
     Capacity(CapacityCommand),
+    /// Run every entry of one cadence's manifest.
+    Pack(PackCommand),
     /// Render one sealed bundle.
     Report(ReportCommand),
     /// Check an LLM summary against its packet.
@@ -174,6 +194,7 @@ pub fn run(argv: &[String]) -> i32 {
         Ok(Command::Run(command)) => execute_run(&command),
         Ok(Command::Suite(command)) => suite::execute(&command),
         Ok(Command::Capacity(command)) => capacity::execute(&command),
+        Ok(Command::Pack(command)) => pack::execute(&command),
         Ok(Command::Report(command)) => report::execute_report(&command),
         Ok(Command::Packet(command)) => report::execute_packet(&command),
         Err(error) => {
@@ -193,7 +214,7 @@ pub fn parse(arguments: &[String]) -> CtlResult<Command> {
     let Some((verb, rest)) = arguments.split_first() else {
         return Err(CtlError::usage(
             "no verb; expected one of resolve, run, \
-                                    suite, capacity, report, packet",
+                                    suite, capacity, pack, report, packet",
         ));
     };
     match verb.as_str() {
@@ -202,11 +223,12 @@ pub fn parse(arguments: &[String]) -> CtlResult<Command> {
         "run" => parse_run(rest),
         "suite" => parse_suite(rest),
         "capacity" => parse_capacity(rest),
+        "pack" => parse_pack(rest),
         "report" => parse_report(rest),
         "packet" => parse_packet(rest),
         other => Err(CtlError::usage(format!(
             "unknown verb {other:?}; expected one of resolve, run, suite, \
-             capacity, report, packet"
+             capacity, pack, report, packet"
         ))),
     }
 }
@@ -270,6 +292,34 @@ fn parse_capacity(arguments: &[String]) -> CtlResult<Command> {
         results_root,
         budget,
         reports_root,
+    }))
+}
+
+/// `pack` shares every input a run takes except the scenario, which each
+/// manifest entry names for itself.
+fn parse_pack(arguments: &[String]) -> CtlResult<Command> {
+    let mut flags = collect_flags(arguments)?;
+    let manifest = PathBuf::from(required(&mut flags, "manifest")?);
+    let subjects = PathBuf::from(required(&mut flags, "subjects")?);
+    let cluster = PathBuf::from(required(&mut flags, "cluster")?);
+    let bootstrap = required(&mut flags, "bootstrap")?;
+    let seed = match flags.remove("seed") {
+        None => None,
+        Some(value) => Some(unsigned("seed", &value)?),
+    };
+    let results_root = results_root(&mut flags);
+    let reports_root = reports_root(&mut flags);
+    let budget = parse_budget(&mut flags)?;
+    reject_unknown(&flags)?;
+    Ok(Command::Pack(PackCommand {
+        manifest,
+        subjects,
+        cluster,
+        bootstrap,
+        results_root,
+        reports_root,
+        budget,
+        seed,
     }))
 }
 
