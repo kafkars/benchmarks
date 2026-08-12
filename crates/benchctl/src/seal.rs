@@ -533,6 +533,10 @@ fn run_subject(
     name: &str,
 ) -> SubjectOutcome {
     let mut outcome = SubjectOutcome::skipped(name);
+    // The objectives travel with the subject because the validity gate reads
+    // them: an experiment that declares any objective is one where a lost
+    // record is a different run, not a slower one.
+    outcome.slo = request.resolved.slo;
     let phase = format!("subject:{name}:run");
     if interrupt.is_set() {
         state.record(

@@ -60,6 +60,7 @@ pub(crate) fn experiment(subjects: &[(&str, Vec<String>)]) -> ResolvedExperiment
             adapter_name: "fake-adapter".to_owned(),
             adapter_version: "0.1.0".to_owned(),
             command: command.clone(),
+            role: None,
         });
     }
     ResolvedExperiment {

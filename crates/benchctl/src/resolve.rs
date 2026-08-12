@@ -266,7 +266,7 @@ fn unbound_experiment(inputs: &ResolveInputs) -> CtlResult<ResolvedExperiment> {
             security: source.cluster.security.clone(),
             unclean_leader_election: source.cluster.unclean_leader_election.unwrap_or(false),
         },
-        slo: slo(source),
+        slo: slo_spec(source),
         subjects: subjects(inputs)?,
         runtime: None,
     };
@@ -301,7 +301,12 @@ fn offered_rate(
 }
 
 /// Copies the scenario's objectives, defaulting to "none declared".
-fn slo(source: &SourceExperiment) -> SloSpec {
+///
+/// Public because the capacity search judges probes against exactly these
+/// objectives and must read them before it resolves anything: a search with no
+/// objective to search against is refused before a topic is created.
+#[must_use]
+pub fn slo_spec(source: &SourceExperiment) -> SloSpec {
     source.slo.map_or_else(SloSpec::default, |slo| SloSpec {
         corrected_p99_ms: slo.corrected_p99_ms,
         schedule_delay_p99_ms: slo.schedule_delay_p99_ms,
@@ -352,6 +357,9 @@ fn subjects(inputs: &ResolveInputs) -> CtlResult<Vec<SubjectSpec>> {
             adapter_name: probe.describe.name.clone(),
             adapter_version: probe.describe.version.clone(),
             command: probe.subject.command.clone(),
+            // Carried, not invented: the role is the operator's statement about
+            // what the subject is for, and it participates in the experiment id.
+            role: probe.subject.role.clone(),
         })
         .collect())
 }

@@ -26,6 +26,23 @@
 //! form exists because integration tests run in parallel threads of one process,
 //! where a per-test environment variable would be a race.
 //!
+//! `rate-slo:<threshold>` is the capacity-search fixture: it behaves exactly like
+//! `ok` except that its latencies jump above every objective the experiment
+//! declares as soon as `offered_records_per_second` exceeds the threshold. The
+//! jump is a step function of the resolved experiment alone, so a capacity search
+//! over this fixture converges on the threshold with no clock, no load, and no
+//! run-to-run variation to bracket around.
+//!
+//! # What `run` emits
+//!
+//! `kafkars.producer-benchmark.v2`, for both load modes, satisfying every
+//! accounting invariant the schema states: every offer is accepted and
+//! acknowledged, the three histograms carry exactly the totals the outcome
+//! counts imply, scheduler lateness is present exactly for the scheduled
+//! open-loop mode, and the run drains completely. Latencies are sixteen distinct
+//! values cycled across the records, so the derived 99th percentile is the top of
+//! the cycle regardless of how many records the scenario asks for.
+//!
 //! # Which subject am I?
 //!
 //! The resolved experiment names topics per subject, and a subject's adapter is
@@ -40,8 +57,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use bench_schema::{
-    AdapterCapabilities, AdapterDescription, AdapterStatus, LoadMode, ResolvedExperiment,
-    ValidateReport,
+    AdapterCapabilities, AdapterDescription, AdapterStatus, DeclaredExecution, EncodedHistogram,
+    Histogram, LoadMode, MeasuredThroughput, OfferOutcomes, OfferTiming, ProcessResources,
+    ProducerBenchmarkV2, QueueObservation, ResolvedExperiment, ValidateReport,
 };
 use benchctl::utc_rfc3339_millis;
 use serde_json::json;
@@ -76,11 +94,25 @@ enum Mode {
     DescribeGarbage,
     /// `topics-create` exits non-zero.
     TopicsFail,
+    /// `run` succeeds, but its latencies exceed every declared objective as soon
+    /// as the offered rate is above this threshold.
+    RateSlo(u64),
 }
 
 impl Mode {
+    /// The prefix of the parameterised capacity mode.
+    const RATE_SLO_PREFIX: &'static str = "rate-slo:";
+
     /// Parses a mode name, defaulting to [`Mode::Ok`] for anything unknown.
+    ///
+    /// An unparseable threshold in `rate-slo:<n>` is a usage mistake in a test,
+    /// and falling back to [`Mode::Ok`] would turn it into a capacity search that
+    /// never saturates. A threshold of zero saturates at every rate instead,
+    /// which fails loudly and immediately.
     fn parse(text: &str) -> Self {
+        if let Some(threshold) = text.strip_prefix(Self::RATE_SLO_PREFIX) {
+            return Self::RateSlo(threshold.parse().unwrap_or(0));
+        }
         match text {
             "run-nonzero" => Self::RunNonzero,
             "run-hang" => Self::RunHang,
@@ -142,14 +174,9 @@ fn describe(mode: Mode) -> i32 {
         return 0;
     }
     let mut result_schemas = BTreeMap::new();
-    result_schemas.insert(
-        LoadMode::ClosedLoop,
-        bench_schema::PRODUCER_BENCHMARK_V1.to_owned(),
-    );
-    result_schemas.insert(
-        LoadMode::ScheduledOpenLoopFixedRate,
-        bench_schema::PRODUCER_FIXED_LOAD_V1.to_owned(),
-    );
+    for load_mode in [LoadMode::ClosedLoop, LoadMode::ScheduledOpenLoopFixedRate] {
+        result_schemas.insert(load_mode, bench_schema::PRODUCER_BENCHMARK_V2.to_owned());
+    }
     let description = AdapterDescription {
         schema: AdapterDescription::SCHEMA.to_owned(),
         name: ADAPTER_NAME.to_owned(),
@@ -251,6 +278,7 @@ fn run_measuring(mode: Mode, tail: &[String], output: &Path) -> i32 {
         render(bench_schema::pretty_bytes(&result_document(
             &experiment,
             &subject,
+            mode,
         )))
         .as_bytes(),
     ) {
@@ -267,41 +295,172 @@ fn run_measuring(mode: Mode, tail: &[String], output: &Path) -> i32 {
     0
 }
 
-/// Builds a plausible closed-loop producer result for one subject.
-fn result_document(experiment: &ResolvedExperiment, subject: &str) -> serde_json::Value {
-    let topic = experiment
-        .runtime
-        .as_ref()
-        .and_then(|runtime| runtime.topics.get(subject))
-        .map_or_else(String::new, |pair| pair.measured.clone());
+/// Distinct latency values cycled across the records of one histogram.
+///
+/// Sixteen is enough that the derived 99th percentile is the top of the cycle
+/// for every record count above a hundred, and small enough that the sparse
+/// bucket list stays short whatever the scenario asks for.
+const LATENCY_STEPS: u64 = 16;
+
+/// The four latency knobs one run's histograms are built from, all nanoseconds.
+#[derive(Debug, Clone, Copy)]
+struct LatencyShape {
+    /// Smallest `terminal - intended`.
+    terminal_base: u64,
+    /// Distance between consecutive `terminal - intended` values.
+    terminal_step: u64,
+    /// Smallest `call_start - intended`.
+    lateness_base: u64,
+    /// Distance between consecutive `call_start - intended` values.
+    lateness_step: u64,
+}
+
+impl LatencyShape {
+    /// The shape of a run that comfortably meets every objective.
+    ///
+    /// `spread` makes the numbers differ per subject, so a comparison between
+    /// two fixtures is a ratio somebody has to look at rather than a constant
+    /// one.
+    fn healthy(spread: u64) -> Self {
+        Self {
+            terminal_base: 200_000 + spread * 1_000,
+            terminal_step: 20_000,
+            lateness_base: 5_000,
+            lateness_step: 1_000,
+        }
+    }
+
+    /// The shape of a run that misses every objective the experiment declared.
+    ///
+    /// The top of the cycle lands a full second above the largest declared
+    /// ceiling, so no rounding, no bucket width, and no reader's choice of
+    /// percentile can make this run look satisfied.
+    fn saturated(ceiling_ms: u64) -> Self {
+        let target = ceiling_ms.saturating_add(1_000).saturating_mul(1_000_000);
+        let step = target / (LATENCY_STEPS * 2);
+        Self {
+            terminal_base: target - step * (LATENCY_STEPS - 1),
+            terminal_step: step,
+            lateness_base: target - step * (LATENCY_STEPS - 1),
+            lateness_step: step,
+        }
+    }
+}
+
+/// Builds a valid v2 producer measurement for one subject.
+///
+/// Every accounting invariant the schema states holds by construction: nothing
+/// is refused admission, nothing fails, nothing is left unknown, and the three
+/// histograms carry exactly the totals the outcome counts imply.
+fn result_document(
+    experiment: &ResolvedExperiment,
+    subject: &str,
+    mode: Mode,
+) -> ProducerBenchmarkV2 {
     let run_id = experiment
         .runtime
         .as_ref()
         .map_or_else(String::new, |runtime| runtime.run_id.clone());
-    // Deterministic per subject so that a comparison between two fixtures is a
-    // ratio somebody has to look at rather than a constant one.
-    let spread = u32::from(subject.bytes().fold(0u8, u8::wrapping_add));
-    let goodput = 100_000.0 + f64::from(spread);
-    let p99 = 1_000_000 + u64::from(spread) * 1_000;
-    json!({
-        "schema": bench_schema::PRODUCER_BENCHMARK_V1,
-        "adapter": ADAPTER_NAME,
-        "adapter_version": ADAPTER_VERSION,
-        "run_id": run_id,
-        "topic": topic,
-        "valid": true,
-        "offered_records": experiment.records,
-        "acknowledged_records": experiment.records,
-        "failed_records": 0,
-        "acknowledged_records_per_second": goodput,
-        "latency_ns": {
-            "p50": 400_000,
-            "p95": 800_000,
-            "p99": p99,
-            "p999": p99 * 2,
-            "max": p99 * 4,
+    let spread = u64::from(subject.bytes().fold(0u8, u8::wrapping_add));
+    let records = experiment.records;
+    let shape = latency_shape(experiment, mode, spread);
+    let lateness = matches!(experiment.load_mode, LoadMode::ScheduledOpenLoopFixedRate)
+        .then(|| latencies(records, shape.lateness_base, shape.lateness_step));
+    ProducerBenchmarkV2 {
+        schema: ProducerBenchmarkV2::SCHEMA.to_owned(),
+        adapter: ADAPTER_NAME.to_owned(),
+        adapter_version: ADAPTER_VERSION.to_owned(),
+        run_id,
+        load_mode: experiment.load_mode,
+        declared: DeclaredExecution {
+            payload_construction: "prebuilt-pool".to_owned(),
+            ownership: "copy-in".to_owned(),
+            completion_mode: "aggregate-batch-terminal".to_owned(),
+            serialization: "excluded".to_owned(),
         },
-    })
+        outcomes: OfferOutcomes {
+            offered: records,
+            accepted: records,
+            acknowledged: records,
+            failed: 0,
+            timed_out: 0,
+            unknown: 0,
+        },
+        timing: OfferTiming {
+            clock: "monotonic-ns".to_owned(),
+            intended_to_terminal: latencies(records, shape.terminal_base, shape.terminal_step),
+            accepted_to_terminal: latencies(
+                records,
+                shape.terminal_base / 2,
+                shape.terminal_step / 2,
+            ),
+            call_start_to_accepted: latencies(records, 10_000, 1_000),
+            intended_to_call_start: lateness,
+        },
+        throughput: throughput(experiment, spread),
+        queue: QueueObservation {
+            max_outstanding_observed: experiment.application.max_outstanding_records.min(records),
+            final_outstanding: 0,
+        },
+        resources: Some(ProcessResources {
+            max_rss_bytes: 64 * 1024 * 1024,
+            user_cpu_ns: records * 1_000,
+            system_cpu_ns: records * 500,
+        }),
+        native_metrics_path: None,
+        valid: true,
+        invalid_reason: None,
+    }
+}
+
+/// Chooses the latency shape this invocation reports.
+///
+/// Only `rate-slo:<threshold>` can choose the saturated shape, and it chooses it
+/// purely from the resolved experiment: the offered rate above the threshold, and
+/// the largest ceiling the experiment's objectives declare.
+fn latency_shape(experiment: &ResolvedExperiment, mode: Mode, spread: u64) -> LatencyShape {
+    let Mode::RateSlo(threshold) = mode else {
+        return LatencyShape::healthy(spread);
+    };
+    let offered = experiment.offered_records_per_second.unwrap_or(0);
+    if offered > threshold {
+        let ceiling = experiment
+            .slo
+            .corrected_p99_ms
+            .unwrap_or(0)
+            .max(experiment.slo.schedule_delay_p99_ms.unwrap_or(0));
+        LatencyShape::saturated(ceiling)
+    } else {
+        LatencyShape::healthy(spread)
+    }
+}
+
+/// Records `count` latencies cycling through [`LATENCY_STEPS`] distinct values.
+fn latencies(count: u64, base_ns: u64, step_ns: u64) -> EncodedHistogram {
+    let mut histogram = Histogram::new();
+    for index in 0..count {
+        histogram.record(base_ns + (index % LATENCY_STEPS) * step_ns);
+    }
+    histogram.encode()
+}
+
+/// Goodput over the measured interval, deterministic per subject.
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a fixture's throughput is invented evidence, not identity-bearing arithmetic"
+)]
+fn throughput(experiment: &ResolvedExperiment, spread: u64) -> MeasuredThroughput {
+    let acknowledged_records_per_second = 100_000.0 + spread as f64;
+    let measured_duration_ns =
+        (experiment.records as f64 / acknowledged_records_per_second * 1e9) as u64;
+    MeasuredThroughput {
+        measured_duration_ns,
+        acknowledged_records_per_second,
+        acknowledged_payload_bytes_per_second: acknowledged_records_per_second
+            * f64::from(experiment.payload.bytes),
+    }
 }
 
 /// `verify <bootstrap> <topic> <run-id> <records> <payload-bytes> <partitions>`.

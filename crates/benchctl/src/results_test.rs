@@ -1,17 +1,30 @@
 //! Reading subject evidence, the validity verdict and its reasons, and the
 //! rules that decide whether two subjects may be compared at all.
+//!
+//! Every result fixture here is a real `kafkars.producer-benchmark.v2` document
+//! built through the schema types, because the parse is half the gate: a
+//! document whose offers do not add up is unreadable by construction, and a test
+//! that hand-wrote the JSON would be free to disagree with the schema about
+//! what "valid" means.
 #![expect(
     clippy::unwrap_used,
     reason = "an evidence fixture that cannot be written must fail the test immediately"
 )]
 
-use bench_schema::{AdapterOutcome, ProcessExit, SubjectVerification};
+use bench_schema::{
+    AdapterOutcome, DeclaredExecution, EncodedHistogram, Histogram, LoadMode, MeasuredThroughput,
+    OfferOutcomes, OfferTiming, ProcessExit, ProducerBenchmarkV2, QueueObservation, SloSpec,
+    SubjectVerification,
+};
 
 use crate::attempt::AttemptPaths;
 use crate::results::{
     DEFERRED_CHECKS, SubjectOutcome, VerificationVerdict, classify, compare, read_subject,
 };
 use crate::seal_test::workspace;
+
+/// Records for every fixture measurement below.
+const RECORDS: u64 = 1_000;
 
 /// A process exit that says nothing went wrong.
 fn clean_exit() -> ProcessExit {
@@ -34,13 +47,72 @@ fn write_adapter_output(paths: &AttemptPaths, subject: &str, status: &str, resul
     }
 }
 
-/// A producer result document declaring `goodput` and a p99 of `p99`.
+/// A histogram of `count` recordings of exactly `value`.
+///
+/// Every percentile of such a histogram is `value` itself: the bucket's upper
+/// bound is clamped to the exact recorded maximum, so a single-valued sample
+/// reports the value it holds rather than the width of its bucket.
+fn flat(count: u64, value: u64) -> EncodedHistogram {
+    let mut histogram = Histogram::new();
+    for _ in 0..count {
+        histogram.record(value);
+    }
+    histogram.encode()
+}
+
+/// A closed-loop v2 measurement declaring `goodput` and a p99 of `p99`.
+fn measurement(goodput: f64, p99: u64) -> ProducerBenchmarkV2 {
+    ProducerBenchmarkV2 {
+        schema: ProducerBenchmarkV2::SCHEMA.to_owned(),
+        adapter: "fake".to_owned(),
+        adapter_version: "0.1.0".to_owned(),
+        run_id: "0123456789abcdef".to_owned(),
+        load_mode: LoadMode::ClosedLoop,
+        declared: DeclaredExecution {
+            payload_construction: "prebuilt-pool".to_owned(),
+            ownership: "copy-in".to_owned(),
+            completion_mode: "aggregate-batch-terminal".to_owned(),
+            serialization: "excluded".to_owned(),
+        },
+        outcomes: OfferOutcomes {
+            offered: RECORDS,
+            accepted: RECORDS,
+            acknowledged: RECORDS,
+            failed: 0,
+            timed_out: 0,
+            unknown: 0,
+        },
+        timing: OfferTiming {
+            clock: "monotonic-ns".to_owned(),
+            intended_to_terminal: flat(RECORDS, p99),
+            accepted_to_terminal: flat(RECORDS, p99 / 2),
+            call_start_to_accepted: flat(RECORDS, 10_000),
+            intended_to_call_start: None,
+        },
+        throughput: MeasuredThroughput {
+            measured_duration_ns: 1_000_000_000,
+            acknowledged_records_per_second: goodput,
+            acknowledged_payload_bytes_per_second: goodput * 1_024.0,
+        },
+        queue: QueueObservation {
+            max_outstanding_observed: 256,
+            final_outstanding: 0,
+        },
+        resources: None,
+        native_metrics_path: None,
+        valid: true,
+        invalid_reason: None,
+    }
+}
+
+/// The rendered bytes of a v2 measurement.
 fn result_document(goodput: f64, p99: u64) -> String {
-    format!(
-        r#"{{"schema":"kafkars.producer-benchmark.v1","adapter":"fake","run_id":"0123456789abcdef",
-        "valid":true,"acknowledged_records":1000,"acknowledged_records_per_second":{goodput},
-        "latency_ns":{{"p99":{p99}}},"an_unknown_key":[1,2,3]}}"#
-    )
+    render(&measurement(goodput, p99))
+}
+
+/// Renders a v2 measurement the way an adapter would.
+fn render(document: &ProducerBenchmarkV2) -> String {
+    String::from_utf8(bench_schema::pretty_bytes(document).unwrap()).unwrap()
 }
 
 /// A succeeded adapter status document.
@@ -49,15 +121,10 @@ fn status_document() -> &'static str {
     "started_at":"2026-08-12T14:03:05.000Z","finished_at":"2026-08-12T14:03:06.000Z"}"#
 }
 
-/// A subject that did everything right.
-fn healthy(name: &str, goodput: f64, p99: u64) -> SubjectOutcome {
+/// A subject whose evidence is on disk, built from an arbitrary measurement.
+fn subject_with(name: &str, document: &ProducerBenchmarkV2) -> SubjectOutcome {
     let (results_root, paths) = workspace(&format!("evidence-{name}"));
-    write_adapter_output(
-        &paths,
-        name,
-        status_document(),
-        &result_document(goodput, p99),
-    );
+    write_adapter_output(&paths, name, status_document(), &render(document));
     let evidence = read_subject(&paths, name);
     std::fs::remove_dir_all(&results_root).unwrap();
     SubjectOutcome {
@@ -68,27 +135,86 @@ fn healthy(name: &str, goodput: f64, p99: u64) -> SubjectOutcome {
         verification: SubjectVerification::default(),
         measured: VerificationVerdict::Satisfied,
         warmup: VerificationVerdict::Satisfied,
+        slo: SloSpec::default(),
     }
 }
 
+/// A subject that did everything right.
+fn healthy(name: &str, goodput: f64, p99: u64) -> SubjectOutcome {
+    subject_with(name, &measurement(goodput, p99))
+}
+
 #[test]
-fn reading_a_subject_keeps_the_fields_it_needs_and_ignores_the_rest() {
+fn reading_a_subject_derives_its_headline_numbers_from_the_v2_document() {
     let (results_root, paths) = workspace("read");
     write_adapter_output(
         &paths,
         "only",
         status_document(),
-        &result_document(1234.5, 99),
+        &result_document(1234.5, 990_000),
     );
     let evidence = read_subject(&paths, "only");
     assert!(evidence.result_present);
     assert!(evidence.notes.is_empty(), "{:?}", evidence.notes);
     assert_eq!(evidence.adapter_outcome(), Some(AdapterOutcome::Succeeded));
+    assert_eq!(evidence.goodput(), Some(1234.5));
+    assert_eq!(
+        evidence.intended_to_terminal_p99_ns(),
+        Some(990_000),
+        "the percentile is derived from the histogram, never read from the document"
+    );
     let result = evidence.result.unwrap();
-    assert!(result.has_known_schema());
-    assert!(result.adapter_declared_valid());
-    assert_eq!(result.acknowledged_records_per_second, Some(1234.5));
-    assert_eq!(result.headline_p99_ns(), Some(99));
+    assert!(result.valid);
+    assert_eq!(result.outcomes.acknowledged, RECORDS);
+    std::fs::remove_dir_all(&results_root).unwrap();
+}
+
+#[test]
+fn a_v1_result_document_is_no_longer_a_producer_result() {
+    let (results_root, paths) = workspace("read-v1");
+    write_adapter_output(
+        &paths,
+        "legacy",
+        status_document(),
+        r#"{"schema":"kafkars.producer-benchmark.v1","adapter":"fake","valid":true,
+        "acknowledged_records_per_second":100000.0,"latency_ns":{"p99":1000000}}"#,
+    );
+    let evidence = read_subject(&paths, "legacy");
+    assert!(evidence.result_present);
+    assert!(evidence.result.is_none(), "the v1 path is gone");
+    assert_eq!(evidence.notes.len(), 1, "{:?}", evidence.notes);
+    let outcome = SubjectOutcome {
+        evidence,
+        ..healthy("legacy", 1.0, 1)
+    };
+    let validity = outcome.validity();
+    assert!(!validity.valid);
+    assert!(
+        validity
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("kafkars.producer-benchmark.v2")),
+        "{:?}",
+        validity.reasons
+    );
+    std::fs::remove_dir_all(&results_root).unwrap();
+}
+
+#[test]
+fn a_result_whose_offers_do_not_add_up_is_unreadable() {
+    let mut document = measurement(100_000.0, 1_000_000);
+    document.outcomes.acknowledged = RECORDS - 1;
+    let (results_root, paths) = workspace("read-incoherent");
+    write_adapter_output(&paths, "only", status_document(), &render(&document));
+    let evidence = read_subject(&paths, "only");
+    assert!(evidence.result_present);
+    assert!(evidence.result.is_none());
+    assert!(
+        evidence
+            .result_error
+            .is_some_and(|error| error.contains("accepted")),
+        "the accounting invariant names the field it broke"
+    );
     std::fs::remove_dir_all(&results_root).unwrap();
 }
 
@@ -120,6 +246,7 @@ fn an_unreadable_document_is_noted_and_the_subject_stays_invalid() {
         verification: SubjectVerification::default(),
         measured: VerificationVerdict::Satisfied,
         warmup: VerificationVerdict::Satisfied,
+        slo: SloSpec::default(),
     };
     let validity = outcome.validity();
     assert!(!validity.valid);
@@ -143,6 +270,72 @@ fn a_healthy_subject_is_valid_and_a_valid_run_names_no_reasons() {
     assert!(!classification.claim_eligible, "never in this milestone");
     assert!(classification.reasons.is_empty());
     assert_eq!(classification.deferred_checks, DEFERRED_CHECKS.to_vec());
+}
+
+#[test]
+fn an_incomplete_drain_invalidates_a_subject_that_otherwise_passed() {
+    let mut document = measurement(100_000.0, 1_000_000);
+    document.outcomes.acknowledged = RECORDS - 7;
+    document.outcomes.unknown = 7;
+    document.timing.intended_to_terminal = flat(RECORDS - 7, 1_000_000);
+    document.timing.accepted_to_terminal = flat(RECORDS - 7, 500_000);
+    let subject = subject_with("kafkars", &document);
+    let validity = subject.validity();
+    assert!(!validity.valid);
+    assert!(
+        validity
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("7 accepted offers reached no terminal state")),
+        "{:?}",
+        validity.reasons
+    );
+}
+
+#[test]
+fn offers_still_outstanding_at_the_end_are_an_incomplete_drain() {
+    let mut document = measurement(100_000.0, 1_000_000);
+    document.queue.final_outstanding = 3;
+    let subject = subject_with("kafkars", &document);
+    let validity = subject.validity();
+    assert!(!validity.valid);
+    assert!(
+        validity
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("3 offers were still outstanding")),
+        "{:?}",
+        validity.reasons
+    );
+}
+
+#[test]
+fn failed_records_invalidate_a_subject_only_when_objectives_were_declared() {
+    let mut document = measurement(100_000.0, 1_000_000);
+    document.outcomes.acknowledged = RECORDS - 2;
+    document.outcomes.failed = 1;
+    document.outcomes.timed_out = 1;
+    let mut subject = subject_with("kafkars", &document);
+    assert!(
+        subject.validity().valid,
+        "a scenario with no objectives states no ceiling: {:?}",
+        subject.validity().reasons
+    );
+
+    subject.slo = SloSpec {
+        corrected_p99_ms: Some(250),
+        ..SloSpec::default()
+    };
+    let validity = subject.validity();
+    assert!(!validity.valid);
+    assert!(
+        validity
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("2 records failed or timed out")),
+        "{:?}",
+        validity.reasons
+    );
 }
 
 #[test]
@@ -213,7 +406,11 @@ fn two_producer_results_compare_as_candidate_over_baseline() {
     assert_eq!(pair.baseline, "librdkafka-c");
     assert_eq!(pair.candidate, "kafkars");
     assert_eq!(pair.acknowledged_goodput_ratio, Some(1.5));
-    assert_eq!(pair.p99_latency_ratio, Some(0.5));
+    assert_eq!(
+        pair.p99_latency_ratio,
+        Some(0.5),
+        "the ratio is over intended-to-terminal, decoded from both histograms"
+    );
 }
 
 #[test]

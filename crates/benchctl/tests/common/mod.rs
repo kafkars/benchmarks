@@ -83,6 +83,7 @@ pub(crate) fn experiment(subjects: &[(&str, &str)]) -> ResolvedExperiment {
             adapter_name: "fake-adapter".to_owned(),
             adapter_version: "0.1.0".to_owned(),
             command: adapter(mode),
+            role: None,
         });
     }
     ResolvedExperiment {
