@@ -7,7 +7,13 @@ publish = false
 
 [workspace]
 
+# The adapter stays detached from the workspace so that it builds against the
+# client under test rather than against this repository's dependency graph.
+# `bench-schema` is the one exception, taken by path: the protocol documents are
+# the interface the control plane reads, and re-declaring their shape here would
+# guarantee the two copies eventually disagree about the same schema id.
 [dependencies]
+bench-schema = { path = "../../crates/bench-schema" }
 bytes = "1.10"
 kafkars = { path = "../../../kafka-client/crates/kafka-client" }
 serde = { version = "1.0.229", features = ["derive"] }

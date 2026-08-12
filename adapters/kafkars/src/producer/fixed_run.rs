@@ -7,14 +7,14 @@ use kafkars::{Client, ProducerLimits};
 use crate::{arguments::FixedProduceArgs, report::NativeMetrics, topics};
 
 use super::{
-    BATCH_BYTES, BATCH_RECORDS, DELIVERY_TIMEOUT, LINGER, MAX_IN_FLIGHT_REQUESTS_PER_BROKER,
-    MAX_RETRIES, QUEUE_BYTES, REQUEST_BYTES, RETRY_BACKOFF, batch_phase::run_batch_phase,
-    fixed_phase, fixed_report, phase::PhaseSpec,
+    BATCH_BYTES, BATCH_RECORDS, DELIVERY_TIMEOUT, FIXED_RATE_INVALID, LINGER,
+    MAX_IN_FLIGHT_REQUESTS_PER_BROKER, MAX_RETRIES, QUEUE_BYTES, REQUEST_BYTES, RETRY_BACKOFF,
+    RunOutcome, batch_phase::run_batch_phase, fixed_phase, fixed_report, phase::PhaseSpec,
 };
 
 const WAITING_BYTES: usize = BATCH_BYTES;
 
-pub(super) fn run(arguments: &FixedProduceArgs) -> Result<(), Box<dyn Error>> {
+pub(super) fn run(arguments: &FixedProduceArgs) -> Result<RunOutcome, Box<dyn Error>> {
     let common = &arguments.common;
     let limits = ProducerLimits::default()
         .with_retained_bytes(QUEUE_BYTES)
@@ -82,13 +82,9 @@ pub(super) fn run(arguments: &FixedProduceArgs) -> Result<(), Box<dyn Error>> {
     fixed_phase::write_latencies(&common.latency_path, &phase.samples)?;
     let native_metrics = NativeMetrics::between(&before, &after, phase.batch_admission);
     let report = fixed_report::build(arguments, &mut phase, native_metrics)?;
-    println!("{}", serde_json::to_string(&report)?);
+    let outcome = RunOutcome::render(&report, report.valid, FIXED_RATE_INVALID)?;
 
     super::close(&producer)?;
     client.shutdown().wait()?;
-    if report.valid {
-        Ok(())
-    } else {
-        Err("fixed-load phase did not settle every scheduled record".into())
-    }
+    Ok(outcome)
 }

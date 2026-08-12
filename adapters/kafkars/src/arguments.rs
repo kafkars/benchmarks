@@ -1,8 +1,15 @@
 //! Strict command parsing for reproducible benchmark adapter processes.
+//!
+//! Two command surfaces live here and neither may drift from the other. The
+//! legacy positional commands are what the migrated Node control plane drives,
+//! and their stdout bytes are evidence that has already been sealed, so they
+//! are preserved exactly. The three adapter-protocol verbs — `describe`,
+//! `validate`, `run` — take a resolved experiment document instead, and reach
+//! the same phase code through `protocol`.
 
 use std::{error::Error, ffi::OsString, path::PathBuf};
 
-use crate::{payload, producer, schedule, topics};
+use crate::{payload, producer, protocol, schedule, topics};
 
 pub(crate) const RUN_ID_BYTES: usize = 16;
 pub(crate) const MIN_PAYLOAD_BYTES: usize = 64;
@@ -22,10 +29,60 @@ where
     match command.as_str() {
         "payload" => emit_payload(tail),
         "schedule" => emit_schedule(tail),
-        "produce" => producer::run(&parse_produce(tail)?),
-        "produce-fixed" => producer::run_fixed(&parse_fixed_produce(tail)?),
+        "produce" => emit_report(&producer::run(&parse_produce(tail)?)?),
+        "produce-fixed" => emit_report(&producer::run_fixed(&parse_fixed_produce(tail)?)?),
         "topics-create" => topics::create(&parse_topics(tail)?),
         "topics-delete" => topics::delete(&parse_topic_deletion(tail)?),
+        "describe" => describe(tail),
+        "validate" => protocol::validate(&parse_experiment(tail)?),
+        "run" => {
+            let (experiment, output) = parse_run(tail)?;
+            protocol::run(&experiment, &output)
+        }
+        _ => Err(usage().into()),
+    }
+}
+
+/// Prints a completed phase exactly as this adapter always has: the report as
+/// one JSON line on stdout, then a non-zero exit when the phase was not valid.
+fn emit_report(outcome: &producer::RunOutcome) -> Result<(), Box<dyn Error>> {
+    println!("{}", outcome.json);
+    if outcome.valid {
+        Ok(())
+    } else {
+        Err(outcome.invalid_reason.into())
+    }
+}
+
+/// `describe [--json]`: the capability document.
+fn describe(values: &[String]) -> Result<(), Box<dyn Error>> {
+    match values {
+        [] => {}
+        [only] if only == "--json" => {}
+        _ => return Err(usage().into()),
+    }
+    protocol::describe()
+}
+
+/// `validate --experiment <resolved.json>`.
+fn parse_experiment(values: &[String]) -> Result<PathBuf, Box<dyn Error>> {
+    match values {
+        [flag, path] if flag == "--experiment" && !path.is_empty() => Ok(PathBuf::from(path)),
+        _ => Err(usage().into()),
+    }
+}
+
+/// `run --experiment <resolved.json> --output <dir>`.
+fn parse_run(values: &[String]) -> Result<(PathBuf, PathBuf), Box<dyn Error>> {
+    match values {
+        [experiment_flag, experiment, output_flag, output]
+            if experiment_flag == "--experiment"
+                && output_flag == "--output"
+                && !experiment.is_empty()
+                && !output.is_empty() =>
+        {
+            Ok((PathBuf::from(experiment), PathBuf::from(output)))
+        }
         _ => Err(usage().into()),
     }
 }
@@ -247,5 +304,6 @@ fn parse_i32(name: &str, value: &str) -> Result<i32, Box<dyn Error>> {
 }
 
 fn usage() -> &'static str {
-    "usage: kafkars-benchmark-adapter <payload|schedule|produce|produce-fixed|topics-create|topics-delete> ..."
+    "usage: kafkars-benchmark-adapter \
+     <payload|schedule|produce|produce-fixed|topics-create|topics-delete|describe|validate|run> ..."
 }

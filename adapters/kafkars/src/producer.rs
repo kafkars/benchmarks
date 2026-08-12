@@ -1,4 +1,9 @@
 //! Bounded completion-driven execution through the public `kafkars` producer.
+//!
+//! A phase returns its rendered report rather than printing it. The legacy
+//! command arms print exactly the bytes this module renders, and the adapter
+//! protocol writes exactly those bytes to `result.json`, so the two surfaces
+//! cannot drift: there is one serialization, and both callers use it.
 
 mod batch_phase;
 mod fixed_phase;
@@ -13,6 +18,7 @@ use std::{
 };
 
 use kafkars::{Client, ErrorKind, MetricsSnapshot, Producer, ProducerLimits};
+use serde::Serialize;
 
 use crate::{
     arguments::{FixedProduceArgs, ProduceArgs},
@@ -36,7 +42,51 @@ const COMPLETION_TIMEOUT: Duration = Duration::from_secs(65);
 const MAX_RETRIES: u32 = 600;
 const RETRY_BACKOFF: Duration = Duration::from_millis(100);
 
-pub(crate) fn run(arguments: &ProduceArgs) -> Result<(), Box<dyn Error>> {
+/// One completed phase: the exact report bytes, and whether the phase held its
+/// terminal contract.
+///
+/// The bytes are carried rather than the report struct because the two report
+/// shapes differ between load modes while their callers do not care: the legacy
+/// arm prints them, the protocol writes them to a file, and neither may
+/// re-serialize what the other produced.
+#[derive(Debug)]
+pub(crate) struct RunOutcome {
+    /// The report as a single JSON line, with no trailing newline.
+    pub(crate) json: String,
+    /// Whether every offered record reached a terminal, acknowledged state.
+    pub(crate) valid: bool,
+    /// The failure message the legacy surface reports when `valid` is false.
+    pub(crate) invalid_reason: &'static str,
+}
+
+impl RunOutcome {
+    /// Renders a report exactly as the legacy stdout arm always has.
+    ///
+    /// This is the single serialization site for adapter results. A change here
+    /// changes both the legacy stdout bytes and the sealed `result.json` bytes
+    /// together, which is the only way they can be guaranteed to agree.
+    pub(crate) fn render<T: Serialize>(
+        report: &T,
+        valid: bool,
+        invalid_reason: &'static str,
+    ) -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
+            json: serde_json::to_string(report)?,
+            valid,
+            invalid_reason,
+        })
+    }
+}
+
+/// Message the closed-loop phase fails with when it did not fully drain.
+pub(crate) const CLOSED_LOOP_INVALID: &str =
+    "producer phase did not acknowledge every accepted record";
+
+/// Message the fixed-rate phase fails with when it did not fully settle.
+pub(crate) const FIXED_RATE_INVALID: &str =
+    "fixed-load phase did not settle every scheduled record";
+
+pub(crate) fn run(arguments: &ProduceArgs) -> Result<RunOutcome, Box<dyn Error>> {
     let limits = ProducerLimits::default()
         .with_retained_bytes(QUEUE_BYTES)
         .with_in_flight_records(arguments.max_outstanding)
@@ -108,18 +158,14 @@ pub(crate) fn run(arguments: &ProduceArgs) -> Result<(), Box<dyn Error>> {
     write_latencies(&arguments.latency_path, &phase.samples)?;
     let native_metrics = NativeMetrics::between(&before, &after, phase.batch_admission);
     let report = build_report(arguments, &mut phase, native_metrics)?;
-    println!("{}", serde_json::to_string(&report)?);
+    let outcome = RunOutcome::render(&report, report.valid, CLOSED_LOOP_INVALID)?;
 
     close(&producer)?;
     client.shutdown().wait()?;
-    if report.valid {
-        Ok(())
-    } else {
-        Err("producer phase did not acknowledge every accepted record".into())
-    }
+    Ok(outcome)
 }
 
-pub(crate) fn run_fixed(arguments: &FixedProduceArgs) -> Result<(), Box<dyn Error>> {
+pub(crate) fn run_fixed(arguments: &FixedProduceArgs) -> Result<RunOutcome, Box<dyn Error>> {
     fixed_run::run(arguments)
 }
 
