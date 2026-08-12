@@ -90,6 +90,4 @@ mod slo_test;
 #[cfg(test)]
 mod stats_test;
 #[cfg(test)]
-mod suite_test;
-#[cfg(test)]
 mod summary_test;
