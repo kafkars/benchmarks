@@ -264,56 +264,70 @@ gap, ordering, timeout, or unknown outcome.
 ## Canonical workload model
 
 The workload schema separates dimensions that client-specific configuration
-names often conflate:
+names often conflate. This is the middle of the canonical point,
+[`scenarios/producer/headline/balanced-1k-12p.toml`](../scenarios/producer/headline/balanced-1k-12p.toml),
+excerpted verbatim — see that file for the header comment, the `[validity]`
+block, and the question it exists to answer:
 
 ```toml
-name = "producer-balanced-1k"
-load_mode = "fixed-rate" # or "capacity"
-duration_seconds = 120
-warmup_seconds = 30
+name = "producer-balanced-1k-12p"
+status = "diagnostic"
+claim_eligible = false
+load_mode = "scheduled-open-loop-fixed-rate"
+records = 300000
+warmup_records = 30000
 offered_records_per_second = 100000
 
 [application]
 producer_instances = 1
 callers_per_producer = 4
-runtime_workers = 4
-completion_api = "public-future"
-backpressure = "block"
-enqueue_timeout_ms = 60000
-
-[budget]
+backpressure = "block-within-original-offer"
 queue_bytes = 67108864
-max_outstanding_records = 100000
+max_outstanding_records = 8192
+
+[application_api]
+admission_shape = "public-batch"
+completion_shape = "aggregate-batch-terminal"
+batch_records = 256
 
 [payload]
 bytes = 1024
-keyed = false
-profile = "structured-medium-compression"
+profile = "deterministic-ascii-envelope"
 seed = 44
+identity = "KFB1 plus 16-byte run ID plus 64-bit sequence"
 
 [producer]
 acks = "all"
 idempotence = true
 compression = "none"
 linger_ms = 5
+batch_records = 256
 batch_bytes = 65536
-max_in_flight_per_connection = 5
+request_bytes = 1048576
 delivery_timeout_ms = 60000
-
-[cluster]
-brokers = 3
-partitions = 12
-replication_factor = 3
-min_in_sync_replicas = 2
-security = "plaintext"
-unclean_leader_election = false
+partitioning = "explicit-round-robin"
+max_in_flight_requests_per_broker = 5
+retry_max_replacements = 600
+retry_backoff_ms = 100
 ```
+
+Two things this authored form does that the resolved document does not. The
+work is counted in **records rather than seconds**, so two clients do the same
+amount of work rather than the same amount of waiting. And `[application_api]`
+is a separate section here that the resolver folds into `application`, while
+`payload.seed` becomes the experiment's single top-level `seed`: the authored
+file is organized for a person deciding a workload, the resolved
+`kafkars.experiment.v1` for a machine hashing one. `benchctl resolve` prints the
+second from the first, and `schemas/kafkars.experiment.v1.schema.json` describes
+what comes out.
 
 The current
 [`producer-baseline.toml`](../scenarios/producer/producer-baseline.toml)
-remains an input inventory. Implementation will split it into predeclared
-headline manifests and targeted sweeps rather than blindly evaluating its full
-Cartesian product.
+remains an input inventory. Implementation has split it into the predeclared
+headline set under `scenarios/producer/headline/` and targeted sweeps rather
+than blindly evaluating its full Cartesian product; rows that cannot run yet are
+named, with what refuses each one, in
+[`scenarios/DEFERRED.md`](../scenarios/DEFERRED.md).
 
 ## Queue and backpressure fairness
 
@@ -530,16 +544,47 @@ summary.json
 environment.json
 workload.toml
 adapter-config.json
-latency.hdr
-timeseries.jsonl
+latency.hdr             design target - not produced today
+timeseries.jsonl        design target - not produced today
 client-metrics.jsonl
-broker-metrics.jsonl
+broker-metrics.jsonl    design target - deferred, see docs/ROADMAP.md
 verification.json
 classification.json
 stdout.log
 stderr.log
 checksums.txt
 ```
+
+**This layout is the design target, not the current bundle.** What `benchctl`
+seals today is:
+
+```text
+status.json                  execution-order.json    checksums.txt
+experiment.source.toml       classification.json     bundle.json
+experiment.resolved.json     comparison.json         verification/
+subjects.lock.json           environment.json        adapters/<subject>/
+topic-create.stdout.log      topic-cleanup.stdout.log
+topic-create.stderr.log      topic-cleanup.stderr.log
+```
+
+`scripts/bench-m0-acceptance` asserts that list, and
+[`docs/EVIDENCE.md`](EVIDENCE.md) explains what each document means and what a
+reader may conclude from it. The differences from the target above are
+deliberate rather than pending cleanup:
+
+- `latency.hdr` and `timeseries.jsonl` do not exist. Distributions are carried
+  inside the result document as `kafkars.log-linear.v1` histograms instead, so
+  evidence memory stops scaling with run length and the Rust and C adapters can
+  be asserted byte-equal. A separate per-record latency file would reintroduce
+  exactly the run-sized artifact that encoding removed.
+- `broker-metrics.jsonl` is deferred, not late. Collecting broker JMX against a
+  laptop cluster that shares a CPU with the client under test would produce
+  numbers that describe the laptop; the roadmap holds this until there is a
+  stable runner to collect them on.
+- `summary.json`, `workload.toml`, and `adapter-config.json` are the target's
+  names for documents the Rust engine seals under different ones, and each
+  subject's own output lives under `adapters/<subject>/` rather than at the
+  bundle root, because a bundle carries more than one subject.
 
 `environment.json` includes source commits, dirty-state rejection, compiler and
 linker flags, feature sets, dependency and TLS/compression library versions,

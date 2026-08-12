@@ -50,3 +50,37 @@ if ((major < required_major)) ||
 fi
 
 node --test "$repo_root/legacy/benchctl/"*.test.mjs
+
+# The one place legacy/ deliberately diverges from the harness it was extracted
+# from, and the only thing guarding that divergence.
+#
+# Upstream, this control plane lived INSIDE the client repository, so its
+# environment capture read the client's git state out of its own repository
+# root: `kafka_client: gitState(repo)`. Here the client is a sibling checkout,
+# so both capture sites resolve it through KAFKA_BENCH_CLIENT_ROOT falling back
+# to `../kafka-client`. See ARCHITECTURE.md, "The legacy plane".
+#
+# Why this is worth a tripwire rather than a comment. legacy/ is kept close to
+# verbatim on purpose, which makes "restore fidelity with upstream" a plausible
+# and well-intentioned edit. Making it would not break a test: the capture would
+# succeed, the schema would still validate, and every bundle sealed afterwards
+# would record THIS repository's git state under kafka_client — attributing the
+# harness's own commit to the client under measurement. Every number in every
+# such bundle would be labelled with the wrong subject, silently.
+for capture in environment seal; do
+  capture_file="$repo_root/legacy/benchctl/$capture.mjs"
+  if ! LC_ALL=C grep -q 'KAFKA_BENCH_CLIENT_ROOT' "$capture_file"; then
+    echo "check-control-plane: legacy/benchctl/$capture.mjs no longer honours" \
+      "KAFKA_BENCH_CLIENT_ROOT; the client under measurement is a sibling" \
+      "checkout here, not this repository" >&2
+    exit 1
+  fi
+  if LC_ALL=C grep -q 'kafka_client: gitState(repo' "$capture_file"; then
+    echo "check-control-plane: legacy/benchctl/$capture.mjs captures this" \
+      "repository's git state as the client's; that is the upstream shape and" \
+      "it mis-attributes every sealed bundle" >&2
+    exit 1
+  fi
+done
+
+echo "check-control-plane: ok"

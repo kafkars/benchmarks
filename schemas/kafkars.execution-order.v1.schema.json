@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "kafkars.execution-order.v1",
   "title": "Subject execution order",
-  "description": "The execution-order.json sealed into every evidence bundle, recording the order subjects ran in and how that order was chosen, so order effects can be balanced across repetitions and audited afterwards. Written by crates/benchctl and mirrored into the resolved experiment's runtime binding. Documentation mirror of the ExecutionOrder serde type in crates/bench-schema/src/status.rs, which is the source of truth.",
+  "description": "The execution-order.json sealed into every evidence bundle, recording the order subjects ran in and what decided that order, so order effects can be balanced across repetitions and audited afterwards. Written by crates/benchctl and mirrored into the resolved experiment's runtime binding. Documentation mirror of the ExecutionOrder serde type in crates/bench-schema/src/status.rs, which is the source of truth.",
   "type": "object",
-  "required": ["schema", "order"],
+  "required": ["schema", "order", "decided_by"],
   "additionalProperties": false,
   "properties": {
     "schema": {
@@ -17,14 +17,9 @@
       "items": { "type": "string" },
       "uniqueItems": true
     },
-    "method": {
+    "decided_by": {
       "type": "string",
-      "description": "How the order was chosen, for example a seeded permutation or an explicit --order flag."
-    },
-    "seed": {
-      "type": ["integer", "null"],
-      "minimum": 0,
-      "description": "Seed the order was derived from, when the method is seeded."
+      "description": "What decided the order, as a free-text vocabulary rather than an enum - for example resolved-experiment-runtime-binding, run-id-coin-flip, or operator. It is recorded rather than assumed because 'the operator chose it' and 'a coin flip derived from the run id chose it' are very different claims about a paired comparison, in which the second subject runs on a cluster the first one warmed."
     }
   }
 }

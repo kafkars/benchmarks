@@ -23,14 +23,14 @@
       "description": "Per-subject validity, in execution order.",
       "items": {
         "type": "object",
-        "required": ["name", "valid"],
+        "required": ["name", "valid", "reasons"],
         "additionalProperties": false,
         "properties": {
           "name": { "type": "string" },
           "valid": { "type": "boolean" },
           "reasons": {
             "type": "array",
-            "description": "Why this subject's evidence is invalid; empty when valid.",
+            "description": "One reason per failed check for this subject; empty when valid. Always present - the SubjectValidity type carries a plain Vec rather than an Option, so an empty list and an absent list are not two different states.",
             "items": { "type": "string" }
           }
         }

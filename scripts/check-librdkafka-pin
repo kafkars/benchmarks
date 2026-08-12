@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+# One librdkafka pin, seven copies of it, and nothing that noticed when they
+# disagreed.
+#
+# The reviewed librdkafka is named by a version and the SHA-256 of its release
+# archive. That pair is the trust boundary: scripts/bootstrap-librdkafka
+# downloads the archive and refuses it unless the checksum matches, so the
+# checksum is what makes "we measured librdkafka 2.15.0" a checkable claim
+# rather than a label. The problem is that the same pair is also written down in
+# six other places for six different reasons — a describe document, a CI cache
+# key, a nightly cache key, a schema const, and the two legacy environment
+# capture sites — and none of them is derived from the bootstrap script.
+#
+# A bump that misses one of those copies does not fail loudly. It produces a
+# bundle whose environment document names one version while the binary that ran
+# was another, which is the specific failure this repository exists to prevent:
+# evidence that is internally consistent and wrong. The cache keys have their
+# own version of it — a stale key silently serves a build of the old source.
+#
+# So this lane asserts only one thing: every copy says the same version and the
+# same checksum. It deliberately does NOT check the copies in prose
+# (docs/BENCHMARK_HARNESS_DESIGN.md, docs/LEGACY_DIAGNOSTIC_HARNESS.md), which
+# are narrative rather than load-bearing, and it does not fetch anything.
+#
+# legacy/ is read here and never written. The two .mjs capture sites are part of
+# the behavioral reference, so they are held to the pin like everything else.
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+bootstrap="$repo_root/scripts/bootstrap-librdkafka"
+describe="$repo_root/crates/bench-adapter-librdkafka/src/describe.rs"
+ci_workflow="$repo_root/.github/workflows/ci.yml"
+nightly_workflow="$repo_root/.github/workflows/nightly.yml"
+environment_schema="$repo_root/schemas/kafkars.benchmark-environment.v1.schema.json"
+legacy_seal="$repo_root/legacy/benchctl/seal.mjs"
+legacy_environment="$repo_root/legacy/benchctl/environment.mjs"
+
+# Each entry is "<where>|<version>|<checksum>". A checksum of "-" means that
+# copy names only a version; a checksum prefix is compared as a prefix, because
+# the cache keys deliberately carry only the first bytes.
+findings=()
+problems=0
+
+note() {
+  findings+=("$1|$2|$3")
+}
+
+fail() {
+  echo "check-librdkafka-pin: $*" >&2
+  problems=$((problems + 1))
+}
+
+# Extracts the first capture group of a POSIX ERE from a file, or the empty
+# string when the file has no match. Never fails the script: a copy that has
+# gone missing is reported as a finding rather than as a grep error.
+extract() {
+  local file=$1
+  local expression=$2
+  local line
+  if [[ ! -f "$file" ]]; then
+    return 0
+  fi
+  line=$(LC_ALL=C grep -Eom1 "$expression" "$file" || true)
+  if [[ -z "$line" ]]; then
+    return 0
+  fi
+  LC_ALL=C sed -E "s/$expression/\\1/" <<< "$line"
+}
+
+# 1. The bootstrap script: the source of truth, because it is the only copy that
+#    is actually enforced against downloaded bytes.
+bootstrap_version=$(extract "$bootstrap" 'version=([0-9]+\.[0-9]+\.[0-9]+)')
+bootstrap_sha=$(extract "$bootstrap" 'archive_sha=([0-9a-f]{64})')
+note "scripts/bootstrap-librdkafka" "$bootstrap_version" "$bootstrap_sha"
+
+# 2. The adapter's describe constant: what every subjects.lock.json records as
+#    the version of the C reference that ran.
+describe_version=$(extract "$describe" 'LIBRDKAFKA_VERSION: &str = "([0-9]+\.[0-9]+\.[0-9]+)"')
+note "crates/bench-adapter-librdkafka/src/describe.rs" "$describe_version" "-"
+
+# 3 and 4. The two workflow cache keys, which carry a version and a checksum
+#    prefix and no restore-keys, so a wrong key means building unreviewed source.
+for workflow in "$ci_workflow" "$nightly_workflow"; do
+  key=$(extract "$workflow" 'key: librdkafka-([0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]+)')
+  note ".github/workflows/$(basename "$workflow") cache key" "${key%%-*}" "${key#*-}"
+done
+
+# 5. The environment schema's consts, which are what a reader of a sealed bundle
+#    checks the environment document against.
+schema_version=$(extract "$environment_schema" '"release": \{ "const": "v([0-9]+\.[0-9]+\.[0-9]+)"')
+schema_sha=$(extract "$environment_schema" '"const": "([0-9a-f]{64})"')
+note "schemas/$(basename "$environment_schema")" "$schema_version" "$schema_sha"
+
+# 6 and 7. The legacy capture sites, which write the environment document the
+#    schema above describes.
+for legacy in "$legacy_seal" "$legacy_environment"; do
+  legacy_version=$(extract "$legacy" 'release: "v([0-9]+\.[0-9]+\.[0-9]+)"')
+  legacy_sha=$(extract "$legacy" '"([0-9a-f]{64})"')
+  note "legacy/benchctl/$(basename "$legacy")" "$legacy_version" "$legacy_sha"
+done
+
+if [[ -z "$bootstrap_version" || -z "$bootstrap_sha" ]]; then
+  fail "could not read the version and archive checksum out of scripts/bootstrap-librdkafka;" \
+    "that file is the pin, so there is nothing to compare the other copies against"
+fi
+
+for finding in "${findings[@]}"; do
+  where=${finding%%|*}
+  rest=${finding#*|}
+  version=${rest%%|*}
+  checksum=${rest#*|}
+  if [[ -z "$version" ]]; then
+    fail "$where names no librdkafka version at all"
+    continue
+  fi
+  if [[ -n "$bootstrap_version" && "$version" != "$bootstrap_version" ]]; then
+    fail "$where says version $version"
+  fi
+  if [[ "$checksum" == "-" ]]; then
+    continue
+  fi
+  if [[ -z "$checksum" ]]; then
+    fail "$where names no archive checksum at all"
+    continue
+  fi
+  # A prefix compare, so the abbreviated cache keys and the full checksums are
+  # held to the same pin without pretending the keys carry all 64 characters.
+  if [[ -n "$bootstrap_sha" && "$bootstrap_sha" != "$checksum"* ]]; then
+    fail "$where says checksum $checksum"
+  fi
+done
+
+if [[ "$problems" -gt 0 ]]; then
+  echo "" >&2
+  echo "check-librdkafka-pin: the librdkafka pin is not consistent across the repository." >&2
+  echo "Every copy below must name the same version and the same archive checksum," >&2
+  echo "because a bundle's environment document is only evidence if the version it" >&2
+  echo "records is the version that ran. What each copy says today:" >&2
+  echo "" >&2
+  for finding in "${findings[@]}"; do
+    where=${finding%%|*}
+    rest=${finding#*|}
+    version=${rest%%|*}
+    checksum=${rest#*|}
+    printf '  %-52s version=%-10s checksum=%s\n' \
+      "$where" "${version:-<none>}" "${checksum:-<none>}" >&2
+  done
+  echo "" >&2
+  echo "scripts/bootstrap-librdkafka is the pin: it is the only copy checked" >&2
+  echo "against downloaded bytes. Change it first, then bring the rest to it." >&2
+  exit 1
+fi
+
+echo "check-librdkafka-pin: ${#findings[@]} copies agree on librdkafka $bootstrap_version"

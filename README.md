@@ -81,7 +81,7 @@ legacy/benchctl/         the Node harness this repository was extracted from
 scenarios/producer/headline/   the headline producer set (TOML)
 scenarios/packs/         which scenarios belong to which cadence
 schemas/                 one JSON Schema document per schema id
-conformance/             committed payload and schedule vectors
+conformance/             committed payload, schedule, and histogram vectors
 clusters/                local broker topologies for development runs
 scripts/                 the gate and the harness entry points
 docs/                    the performance contract, harness design, and roadmap
@@ -102,11 +102,19 @@ Three inputs are separate files on purpose: a scenario is reviewed and stable, a
 subject list says which binaries exist on this machine today, and a cluster
 profile says where the brokers are and which tools reach them. The subject list
 and the profile are per-machine and are not committed;
-`scripts/bench-m0-acceptance` writes a working pair you can copy.
+`scripts/generate-subject-config <dir> <bootstrap>` writes a working pair, and
+`scripts/bench-m0-acceptance` writes its own under `target/m0-acceptance`.
+
+Every example below is one command against those inputs. Build the binary and
+set the two variables first:
 
 ```sh
-inputs=/tmp/kafka-benchmarks
+cargo build --release --locked -p benchctl
+export PATH="$PWD/target/release:$PATH"
+
 bootstrap=127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094
+inputs=target/quickstart
+scripts/generate-subject-config "$inputs" "$bootstrap"
 ```
 
 **`resolve`** prints the resolved experiment and its `experiment_id` without
@@ -181,10 +189,13 @@ write their own reports as they go; this is how you read a single attempt after
 the fact. It reaches no broker and rewrites no bundle, so a reporting bug cannot
 move a measurement.
 
+A bundle is `results/<experiment-id>/<attempt-id>/`, so the most recent one is
+whichever directory holds the newest `status.json`:
+
 ```sh
-benchctl report \
-  --bundle "results/$experiment_id/$attempt_id" \
-  --out reports/attempt.md
+bundle=$(dirname "$(ls -t results/*/*/status.json | head -n 1)")
+
+benchctl report --bundle "$bundle" --out reports/attempt.md
 ```
 
 **`packet`** checks prose against the analysis packet a suite derived, and is
@@ -193,10 +204,15 @@ summary's verdict is the packet's and every citation resolves, and 65 when it is
 not — see [CI and the nightly](#ci-and-the-nightly) below.
 
 ```sh
+suite_dir=$(dirname "$(ls -t reports/*/*-suite/suite-summary.json | head -n 1)")
+
 benchctl packet \
-  --suite reports/"$experiment_id"/*-suite/suite-summary.json \
-  --llm-summary reports/"$experiment_id"/*-suite/llm-summary.json
+  --suite "$suite_dir/suite-summary.json" \
+  --llm-summary "$suite_dir/llm-summary.json"
 ```
+
+The `llm-summary.json` is what `scripts/benchmark-openai-summary` writes; a
+suite that was never narrated has a packet and no summary to check against it.
 
 ## CI and the nightly
 
@@ -238,10 +254,14 @@ conclude from each field are in [`docs/EVIDENCE.md`](./docs/EVIDENCE.md).
 
 ## Scenarios and packs
 
-`scenarios/producer/headline/` is the predeclared headline set: a latency floor,
-the balanced default, a partition-fanout point, three payload sizes up to a
-default-compatible 900 KB record, a deliberate overload, and a capacity search.
-Each file opens with the question it exists to answer.
+`scenarios/producer/headline/` is the predeclared headline set: a 128-byte
+latency floor, the balanced 1 KiB default, a 96-partition fanout point, a 16 KiB
+payload point, a deliberate overload with a declared SLO, and a balanced
+capacity search. Each file opens with the question it exists to answer.
+
+The 256 KiB and 900 KB payload points are not in that set. They moved to
+`scenarios/producer/deferred/` because the client under test declines records
+that large today; `scenarios/DEFERRED.md` names the specific limit.
 
 `scenarios/packs/` says which of those belong to which cadence — `pr.toml` is
 one balanced attempt, `nightly.toml` is the whole set at three repetitions plus
@@ -255,18 +275,43 @@ the specific thing that refuses each one, in
 ## Quickstart
 
 ```sh
+git clone https://github.com/zsumz/kafka-benchmarks && cd kafka-benchmarks
 scripts/check
 ```
 
-That is the single gate: it formats, lints, tests, and documents the Rust
-workspace, checks the schema registry against `schemas/`, runs the legacy
-control-plane tests, and reports on sibling-checkout provenance. Lanes whose
-files do not exist yet report themselves as skipped rather than passing
-silently.
+That is the single gate, and it runs on a clean clone with nothing beside it. It
+formats, lints, tests, and documents the Rust workspace, checks the schema
+registry against `schemas/`, asserts the librdkafka pin reads the same in every
+place it is written down, runs the legacy control-plane tests and the offline
+model-summary contract, and reports on sibling-checkout provenance.
 
-Running an actual benchmark needs a broker and a built adapter set. The full
-procedure, the experiment format, and the meaning of every document in a sealed
-bundle live in [`docs/BENCHMARK_HARNESS_DESIGN.md`](./docs/BENCHMARK_HARNESS_DESIGN.md);
+Provenance is the one lane that behaves differently on a bare clone: the sibling
+checkouts it attests are `kafka-client`, `kafka-driver`, and `kafka-protocol`
+next to this directory, and when they are absent it says so as an advisory and
+exits 0. That is deliberate — no crate in this workspace depends on them.
+
+What needs the siblings is anything that builds or runs a real subject:
+
+| Command | Needs |
+| --- | --- |
+| `scripts/check` | nothing but the pinned Rust and Node toolchains |
+| `scripts/check-benchmarks` | the three sibling checkouts, plus a bootstrapped librdkafka |
+| `scripts/bench-m0-acceptance`, `scripts/bench-suite-acceptance` | the above, plus a running broker |
+| `KAFKA_BENCH_PROVENANCE=strict scripts/check-dependency-provenance` | the siblings, on their pinned revisions and clean |
+
+The acceptance scripts check for a broker first and exit 69 without touching
+anything if none is listening, so running one on a laptop with no cluster costs
+a second and prints the compose command that would start one. Both write their
+generated inputs and evidence under `target/` — `target/m0-acceptance` and
+`target/suite-acceptance` — and honour `CARGO_TARGET_DIR`.
+
+```sh
+docker compose -f clusters/dev-compose/compose.yml up -d --wait
+scripts/bench-m0-acceptance
+```
+
+The full procedure, the experiment format, and the meaning of every document in
+a sealed bundle live in [`docs/BENCHMARK_HARNESS_DESIGN.md`](./docs/BENCHMARK_HARNESS_DESIGN.md);
 what a result is allowed to claim lives in
 [`docs/PERFORMANCE_CONTRACT.md`](./docs/PERFORMANCE_CONTRACT.md).
 

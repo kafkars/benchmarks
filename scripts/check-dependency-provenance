@@ -21,14 +21,22 @@
 # check` locally just teaches people to skip the gate. CI=true always wins —
 # KAFKA_BENCH_PROVENANCE can escalate to strict but can never relax CI.
 #
-# What advisory mode does NOT forgive: a missing sibling checkout. That is not
-# stale local state, it is a repository layout error, and every downstream
-# script (adapter builds, path deps, environment capture) is broken until it is
-# fixed. Missing siblings fail in both modes.
+# A MISSING sibling checkout is advisory too, and that is a deliberate choice
+# rather than an oversight. No crate in this workspace depends on the siblings —
+# only the out-of-workspace adapter under adapters/kafkars does — so a clean
+# clone with nothing beside it can still run `scripts/check` end to end. Failing
+# hard here would mean the quickstart in README.md did not work on a fresh
+# machine, which teaches the reader that the gate is optional. Strict mode still
+# fails: anything producing a claim-eligible bundle must have the siblings, and
+# CI is where that is enforced.
 #
-# Advisory-mode runs are still recorded: bundles produced against unpinned
-# siblings carry dirty/mismatched provenance in their environment document and
-# are never claim-eligible.
+# What is NOT forgiven in either mode: a malformed or missing revision file.
+# Without it there is no pin to check against, so there is nothing to be
+# advisory about.
+#
+# Advisory-mode runs are still recorded: bundles produced against unpinned or
+# absent siblings carry dirty/mismatched provenance in their environment
+# document and are never claim-eligible.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -42,20 +50,22 @@ if [[ "${CI:-}" == "true" || "${KAFKA_BENCH_PROVENANCE:-}" == "strict" ]]; then
   mode=strict
 fi
 
-hard_failures=0
+missing_siblings=0
 soft_failures=0
 
-# hard  = broken layout; fails in both modes.
-# soft  = provenance mismatch; fails in strict, warns in advisory.
+# missing = a sibling checkout that is not there at all.
+# soft    = provenance mismatch against a sibling that is.
+# Both fail in strict mode and warn in advisory mode; they are counted
+# separately only so that the advisory summary can say which one happened, since
+# "absent" and "on the wrong commit" call for different fixes.
 report() {
   local severity=$1
   shift
-  if [[ "$severity" == hard ]]; then
-    hard_failures=$((hard_failures + 1))
-    echo "provenance failure: $*" >&2
-    return 0
+  if [[ "$severity" == missing ]]; then
+    missing_siblings=$((missing_siblings + 1))
+  else
+    soft_failures=$((soft_failures + 1))
   fi
-  soft_failures=$((soft_failures + 1))
   if [[ "$mode" == strict ]]; then
     echo "provenance failure: $*" >&2
   else
@@ -106,7 +116,7 @@ check_revision() {
   local tree
 
   actual=$(git -C "$checkout" rev-parse --verify 'HEAD^{commit}' 2>/dev/null) || {
-    report hard "$name is not checked out at $checkout"
+    report missing "$name is not checked out at $checkout"
     return 0
   }
   if [[ "$actual" != "$expected" ]]; then
@@ -133,12 +143,22 @@ check_revision() {
   }
   unexpected=
   while IFS= read -r entry; do
-    if [[ -z "$entry" || "$entry" == "!! target/"* ]]; then
+    # Global allowances. `target/` is build output in every sibling, and
+    # `.DS_Store` is written by the Finder into whatever directory somebody
+    # opened — neither is a tracked byte, so neither says anything about
+    # whether the measured source matches the reviewed source.
+    if [[ -z "$entry" ||
+      "$entry" == "!! target/"* ||
+      "$entry" == "!! .DS_Store" ||
+      "$entry" == *"/.DS_Store" ]]; then
       continue
     fi
+    # kafka-client vendors its own copy of this repository's adapter under
+    # benchmarks/adapters/kafkars, so it carries a second, nested target/ that
+    # the global allowance above does not match.
     if [[ "$name" == "kafka-client" ]] &&
       { [[ "$entry" == "!! node_modules/"* ]] ||
-        [[ "$entry" == "!! target/"* ]]; }; then
+        [[ "$entry" == "!! benchmarks/adapters/kafkars/target/"* ]]; }; then
       continue
     fi
     if [[ "$name" == "kafka-driver" ]] &&
@@ -248,16 +268,19 @@ check_revision kafka-protocol "$protocol_root" "$KAFKA_PROTOCOL_REVISION"
 check_client_declared_siblings
 check_driver_protocol_revision
 
-if [[ "$hard_failures" -gt 0 ]]; then
-  echo "provenance: $hard_failures unrecoverable failure(s); sibling checkouts must exist beside this repository" >&2
+if [[ "$mode" == strict ]] &&
+  { [[ "$missing_siblings" -gt 0 ]] || [[ "$soft_failures" -gt 0 ]]; }; then
+  echo "provenance: $missing_siblings absent and $soft_failures mismatched sibling check(s) in strict mode" >&2
   exit 1
 fi
-if [[ "$soft_failures" -gt 0 ]]; then
-  if [[ "$mode" == strict ]]; then
-    echo "provenance: $soft_failures mismatch(es) in strict mode" >&2
-    exit 1
-  fi
-  echo "provenance advisory: $soft_failures mismatch(es); measurements taken now are diagnostic only, never claim-eligible" >&2
-  exit 0
+if [[ "$missing_siblings" -gt 0 ]]; then
+  echo "provenance advisory: sibling checkouts absent; adapter builds and check-benchmarks require them" >&2
+  echo "provenance advisory: the workspace, schema, control-plane, and summary lanes do not, so scripts/check is still meaningful here" >&2
 fi
-echo "provenance: siblings match dependencies/sibling-revisions.env"
+if [[ "$soft_failures" -gt 0 ]]; then
+  echo "provenance advisory: $soft_failures mismatch(es); measurements taken now are diagnostic only, never claim-eligible" >&2
+fi
+if [[ "$missing_siblings" -eq 0 ]] && [[ "$soft_failures" -eq 0 ]]; then
+  echo "provenance: siblings match dependencies/sibling-revisions.env"
+fi
+exit 0

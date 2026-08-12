@@ -23,7 +23,7 @@ are correct about the underlying durations.
 | Values | What breaks without them |
 | --- | --- |
 | `0`–`7`, `126`, `127` | The exact-bucket region below `2^7`, where `index == value` |
-| `128`, `129`, `255`, `256`, `257` | The first scale change, where a one-off in `bit_length` shows up |
+| `128`, `129`, `254`, `255`, `256`, `257` | The first scale change, where a one-off in `bit_length` shows up |
 | `511`–`513`, `1000`–`1029` | Dense mid-range values straddling several adjacent buckets |
 | `0`, `128`, `255`, `1023`–`1025` repeated | Counts accumulate in one bucket instead of appending a second pair |
 | `1099511627776` (`2^40`) and above | Scales an implementation using 32-bit intermediates cannot reach |

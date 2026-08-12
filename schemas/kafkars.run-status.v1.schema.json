@@ -2,11 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "kafkars.run-status.v1",
   "title": "Attempt run status",
-  "description": "The status.json at the root of every sealed evidence bundle: what benchctl attempted, how far it got, and how each subject exited. Written on every path including crash, timeout, and interrupt by the always-seal supervisor in crates/benchctl/src/seal.rs. Documentation mirror of the RunStatus serde type in crates/bench-schema/src/status.rs, which is the source of truth and pins the snake_case wire strings below.",
+  "description": "The status.json at the root of every sealed evidence bundle: what benchctl attempted, how far it got, and how each subject exited. Written on every path including crash, timeout, and interrupt by the always-seal supervisor in crates/benchctl/src/seal.rs. Documentation mirror of the RunStatus serde type in crates/bench-schema/src/status.rs, which is the source of truth and pins the snake_case wire strings below. Optional fields are OMITTED rather than serialized as null: the type marks them `skip_serializing_if = \"Option::is_none\"`, so a reader tells 'absent' from 'present and null' by the key not being there at all.",
   "type": "object",
   "required": [
     "schema",
-    "experiment_id",
     "attempt_id",
     "execution_status",
     "interrupted",
@@ -19,8 +18,8 @@
       "const": "kafkars.run-status.v1"
     },
     "experiment_id": {
-      "type": ["string", "null"],
-      "description": "64-character lowercase hex identity of the resolved intent. Null when the attempt failed before resolution, which still seals a bundle.",
+      "type": "string",
+      "description": "64-character lowercase hex identity of the resolved intent. Absent when the attempt failed before resolution produced an id, which is exactly the case the always-seal rule exists for.",
       "pattern": "^[0-9a-f]{64}$"
     },
     "attempt_id": {
@@ -33,8 +32,8 @@
       "description": "Worst-wins precedence: timed_out beats crashed beats partial beats complete. A complete run can still be invalid; validity is the separate kafkars.classification.v1 axis."
     },
     "failure_reason": {
-      "type": ["string", "null"],
-      "description": "Why the status is not complete. Null for a complete run."
+      "type": "string",
+      "description": "Why the status is not complete, in one line. Absent for a complete run."
     },
     "interrupted": {
       "type": "boolean",
@@ -45,52 +44,91 @@
       "description": "One entry per subject, in execution order. A failing subject records evidence and the run continues; there is no fail-fast.",
       "items": {
         "type": "object",
-        "required": ["name", "execution", "adapter_outcome", "result_present", "verification"],
+        "required": ["name", "result_present", "verification"],
         "additionalProperties": false,
         "properties": {
           "name": { "type": "string" },
           "execution": {
-            "type": ["object", "null"],
-            "description": "Process exit facts. Null when the subject was never spawned, for example after an earlier phase failed.",
-            "required": ["exit_code", "signal", "timed_out", "duration_ms"],
+            "type": "object",
+            "description": "Process exit facts. Absent when the subject was never spawned, for example after an earlier phase failed.",
+            "required": ["timed_out", "duration_ms"],
             "additionalProperties": false,
             "properties": {
-              "exit_code": { "type": ["integer", "null"] },
+              "exit_code": {
+                "type": "integer",
+                "description": "Exit status when the process exited normally. Absent when it died on a signal, and absent together with signal when it was never spawned."
+              },
               "signal": {
-                "type": ["integer", "null"],
-                "description": "Terminating signal number when the child died from a signal."
+                "type": "integer",
+                "description": "Terminating signal number when the child died from a signal. Mutually exclusive with exit_code on Unix."
               },
               "timed_out": { "type": "boolean" },
               "duration_ms": { "type": "integer", "minimum": 0 }
             }
           },
           "adapter_outcome": {
-            "type": ["string", "null"],
-            "description": "outcome field of this subject's kafkars.adapter-status.v1 document. Null when the adapter wrote no status.",
-            "enum": ["succeeded", "failed", null]
+            "type": "string",
+            "description": "outcome field of this subject's kafkars.adapter-status.v1 document. Absent when the adapter wrote no status, which is what a crashed subject looks like.",
+            "enum": ["succeeded", "failed"]
           },
           "result_present": {
             "type": "boolean",
             "description": "Whether a parseable result.json was found for this subject."
           },
           "verification": {
-            "type": ["object", "null"],
-            "description": "Outcome of the configured verifier tool for this subject's measured and warmup topics. Null when verification was skipped.",
-            "additionalProperties": true
+            "type": "object",
+            "description": "Read-back verification of this subject's measured and warmup topics. Always present; an empty object means neither topic was verified.",
+            "additionalProperties": false,
+            "properties": {
+              "measured": { "$ref": "#/$defs/verificationOutcome" },
+              "warmup": { "$ref": "#/$defs/verificationOutcome" }
+            }
           }
         }
       }
     },
     "phases": {
       "type": "array",
-      "description": "Phase records of the attempt state machine, in order. A skipped phase makes the run partial.",
+      "description": "Phase records of the attempt state machine, in the order they were attempted. A skipped phase makes the run partial.",
       "items": {
         "type": "object",
-        "additionalProperties": true,
+        "required": ["name", "outcome"],
+        "additionalProperties": false,
         "properties": {
-          "name": { "type": "string" },
-          "status": { "type": "string" },
-          "reason": { "type": ["string", "null"] }
+          "name": {
+            "type": "string",
+            "description": "Phase name from the control plane's state machine, for example seal-inputs, topic-create, or subject:<name>:run."
+          },
+          "outcome": {
+            "enum": ["succeeded", "failed", "skipped"],
+            "description": "Whether the phase ran and did what it was supposed to. skipped is a deferred phase, not a pass."
+          },
+          "detail": {
+            "type": "string",
+            "description": "One line of detail, when there is something worth saying. Absent otherwise."
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "verificationOutcome": {
+      "type": "object",
+      "description": "What the configured verifier tool did for one topic.",
+      "required": ["ran"],
+      "additionalProperties": false,
+      "properties": {
+        "ran": {
+          "type": "boolean",
+          "description": "Whether the tool ran at all. False means the check was skipped, which is a deferred check rather than a pass."
+        },
+        "valid": {
+          "type": "boolean",
+          "description": "The tool's verdict, when it produced one. Absent when it did not."
+        },
+        "exit_code": {
+          "type": "integer",
+          "description": "The tool's exit status, when it exited normally. Absent when it did not."
         }
       }
     }

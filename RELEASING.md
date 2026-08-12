@@ -41,4 +41,16 @@ when it is.
    ways.
 3. `CHANGELOG.md` updated.
 4. `dependencies/sibling-revisions.env` pointing at the revisions the tag is
-   meant to describe, with strict provenance passing.
+   meant to describe, and strict provenance passing over them:
+
+   ```sh
+   KAFKA_BENCH_PROVENANCE=strict scripts/check-dependency-provenance
+   ```
+
+   This step is not covered by item 1. Plain `scripts/check` runs provenance in
+   **advisory** mode, where an absent, mismatched, or dirty sibling prints a
+   warning and still exits 0 — which is what lets the gate run on a machine
+   sitting on another branch, and on a clone with no siblings beside it at all.
+   Strict mode is the one that refuses. A tag is the point at which a bundle's
+   recorded revisions become something someone else may cite, so the strict run
+   has to be made deliberately, here, rather than assumed from a green gate.

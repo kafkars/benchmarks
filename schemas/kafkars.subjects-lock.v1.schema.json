@@ -26,9 +26,17 @@
             "items": { "type": "string" }
           },
           "binary_sha256": {
-            "type": ["string", "null"],
-            "description": "sha256 of the adapter binary. Null when the binary could not be hashed.",
+            "type": "string",
+            "description": "sha256 of the program file, when it could be read. Omitted - not null - for a subject invoked through a wrapper, a shell builtin, or anything else that is not a readable file, which is recorded honestly rather than filled in with a placeholder.",
             "pattern": "^[0-9a-f]{64}$"
+          },
+          "argument_binary_sha256s": {
+            "type": "object",
+            "description": "sha256 of each further readable file named in the argument vector, keyed by the argument as written. A shim subject's real measured binary arrives as an argument rather than as the program, so hashing only the program would pin the wrapper and leave the thing under test unrecorded. Omitted when the argument vector names no readable file.",
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
           },
           "describe": {
             "type": "object",

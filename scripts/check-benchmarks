@@ -7,6 +7,40 @@ binary_root=$("$repo_root/scripts/build-benchmark-adapters")
 run_id=0123456789abcdef
 export CARGO_TARGET_DIR="$repo_root/target/benchmarks/kafkars-check"
 
+# The same Node floor scripts/check-control-plane enforces, for the same reason
+# and against the same test suite. Without it, an old runtime fails partway
+# through `node --test` with a parse error inside a test file, which reads as a
+# broken legacy module rather than as "your Node is too old" — and here it would
+# do so only after the adapter build above has already spent several minutes.
+# The floor matches the engines range in package.json; changing one without the
+# other makes the declaration a lie.
+required_major=22
+required_minor=18
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "check-benchmarks: node was not found on PATH;" \
+    "the legacy control plane requires Node >= $required_major.$required_minor" >&2
+  exit 1
+fi
+
+node_version=$(node --version)
+numeric=${node_version#v}
+major=${numeric%%.*}
+remainder=${numeric#*.}
+minor=${remainder%%.*}
+
+if [[ ! "$major" =~ ^[0-9]+$ ]] || [[ ! "$minor" =~ ^[0-9]+$ ]]; then
+  echo "check-benchmarks: could not parse the node version '$node_version'" >&2
+  exit 1
+fi
+
+if ((major < required_major)) ||
+  ((major == required_major && minor < required_minor)); then
+  echo "check-benchmarks: node $node_version is too old;" \
+    "the legacy control plane requires Node >= $required_major.$required_minor" >&2
+  exit 1
+fi
+
 node --test "$repo_root/legacy/benchctl/"*.test.mjs
 cargo fmt --manifest-path "$manifest" --all -- --check
 cargo clippy \

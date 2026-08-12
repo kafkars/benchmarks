@@ -18,10 +18,15 @@ and it is not a place to make a client look good.
 
 ## Non-negotiable rules
 
-- **No async runtime anywhere**, including dev-dependencies. A harness that
-  borrows a scheduler cannot describe the scheduling behavior of what it
-  measures. `signal-hook` is the one concession, because `unsafe_code` is
-  forbidden and an interrupt must still seal.
+- **No async runtime in this repository's own code**, including
+  dev-dependencies. A harness that borrows a scheduler cannot describe the
+  scheduling behavior of what it measures. `signal-hook` is the one concession,
+  because `unsafe_code` is forbidden and an interrupt must still seal. The rule
+  is about what the *harness* links, not about what appears anywhere in a lock
+  file: the client under test brings its own dependency graph, and the kafkars
+  adapter transitively acquires `mio` through it. That is the subject's
+  business. The control plane, the evidence crates, and the adapters' own code
+  stay free of one.
 - **No `criterion`, no `divan`, no benchmarking framework.** Timing, warmup, and
   statistics are the subject matter here, not an imported convenience.
 - **The harness model is a process-spawning control plane plus adapter
@@ -37,7 +42,12 @@ and it is not a place to make a client look good.
   bytes of a committed vector, a schema document under `schemas/`, or a
   conformance fixture is a schema-affecting change, not a test fixup. Regenerate
   a golden only together with the new schema id that justifies it, and say so in
-  the changelog.
+  the changelog. The one carve-out: the documents under `schemas/` are
+  *documentation mirrors* of the serde types, which are the source of truth, so
+  correcting a mirror that mis-described an **unchanged** wire format is a
+  documentation fix rather than a schema-affecting change — the bytes on disk
+  never moved, only the description of them. It stays a schema-affecting change
+  the moment the wire format itself moves.
 - **The histogram encoding is a byte contract, not an implementation detail.**
   `kafkars.log-linear.v1` fixes the bucketing (`SUB_BUCKET_BITS = 7`), the field
   order — `layout`, `unit`, `sub_bucket_bits`, `total`, `min`, `max`, `sum`,
@@ -62,11 +72,19 @@ and it is not a place to make a client look good.
 
 - Every Rust source file begins with a `//!` module contract.
 - `lib.rs` and `mod.rs` are declarative facades: module declarations and
-  re-exports only.
+  re-exports only. The one carve-out is `tests/common/mod.rs`: cargo mandates
+  that filename for helpers shared between integration test binaries — any
+  other name in `tests/` is compiled as a test target of its own — so that file
+  carries real code and is not a facade.
 - Unit tests live in sibling `*_test.rs` files, declared with
   `#[cfg(test)] mod ...;` from the nearest facade.
-- Warnings are denied in clippy and rustdoc, and `missing_docs` is on, so an
-  undocumented public item fails the build.
+- In the crates of *this* workspace, warnings are denied in clippy and rustdoc
+  and `missing_docs` is on, so an undocumented public item fails the build. The
+  adapter workspaces under `adapters/` are separate: the kafkars adapter carries
+  its own, narrower lint set and no rustdoc gate, because it is a binary built
+  against a pinned client rather than a documented library surface. Do not
+  assume a lint is in force there because it is in force here — check
+  `adapters/kafkars/Cargo.toml`.
 - `unwrap`, `expect`, `todo!`, `unimplemented!`, and `dbg!` are denied. Tests
   that genuinely want a panic on a bad fixture opt in with an explicit
   `#![expect(clippy::unwrap_used, reason = "...")]`.
