@@ -10,18 +10,36 @@ scenario TOML + profile + cluster + seed
               │
               ▼
         benchctl (control plane)
-              │  resolve → probe → capture → spawn → supervise → verify → seal
+              │
+   run ───────┤  resolve → probe → capture → spawn → supervise → verify → seal
+   suite ─────┤  the same attempt, repeated in paired blocks with alternating
+              │  subject order; every repetition seals on its own
+   capacity ──┤  probe → judge against the SLO → raise or refine the rate →
+              │  repeat; every probe seals on its own
               │
       ┌───────┴────────┬──────────────────┬─────────────────┐
       ▼                ▼                  ▼                 ▼
  adapter A        adapter B          topic tool         verifier
  (kafkars)        (librdkafka)       (configured)       (configured)
       │                │                                    │
-      └───── result.json, status.json ─────┐                │
+      └── result.json (producer-benchmark.v2), status.json ──┐
                                             ▼               ▼
                               results/<experiment-id>/<attempt-id>/
                                      sealed, checksummed, immutable
+                                            │
+                                            ▼
+                                report ── one sealed bundle, rendered
+                                packet ── suite summary → analysis-packet.v1
+                                            │
+                                            ▼
+                                          prose
 ```
+
+`run` is one attempt. `suite` and `capacity` are loops over attempts that
+decide *which* attempt to run next — a repetition count, or the next candidate
+rate — and nothing else: neither touches the measured path, and neither can
+produce a bundle that `run` could not have produced on its own. `report` and
+`packet` are downstream of sealing and reach no broker.
 
 ## The four roles
 
@@ -52,6 +70,38 @@ subject, so no subject benefits from a friendlier reader.
 they hash to, and the statistics computed over them. It never reaches a broker,
 spawns a process, or reads a clock, so a reporting bug can never move a
 measurement.
+
+## The evidence path
+
+A number moves through four documents on its way from a record to a sentence,
+and each boundary is narrower than the one before it.
+
+**The adapter writes `kafkars.producer-benchmark.v2`.** Every offer carries one
+immutable identity and four instants — intended, call start, accepted, terminal
+— and none of them is reset because a queue was full. Time spent being pushed
+back on is therefore inside every reported latency, and an offer that never
+crossed the client API is counted as offered but not accepted rather than
+dropped. The accounting is checked, not asserted: accepted equals acknowledged
+plus failed plus timed out plus unknown, and each histogram's total must equal
+the outcome count it claims to describe.
+
+**Distributions are histograms, not arrays.** `kafkars.log-linear.v1` is a
+bounded log-linear encoding — 128 linear sub-buckets per power of two, a sparse
+ascending index/count list, exact `min`, `max`, and `sum` outside the buckets.
+Evidence memory stops scaling with run length, and the encoding is specified
+byte-for-byte so the Rust and C adapters can be asserted equal rather than
+close. Percentiles are derived by the reader from a bucket's inclusive upper
+bound, so a derived latency errs conservative.
+
+**The control plane seals a bundle**, which is where the measurement stops
+changing. Nothing rewrites it, including to fix it.
+
+**`report` produces `kafkars.analysis-packet.v1`**, the boundary between
+measurement and interpretation. Every quantity lives under a stable key with its
+own name and unit; findings cite keys rather than restating values; the verdict
+is computed from the intervals and gates and no downstream prose may contradict
+it. A summary that says *improved* about a packet that says *inconclusive* is
+caught mechanically rather than by a reader noticing.
 
 ## Two identities
 

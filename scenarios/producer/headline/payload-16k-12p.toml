@@ -1,0 +1,70 @@
+# Question: what does the framing and copy path cost once a record no longer
+# fits comfortably inside a batch?
+#
+# 16 KiB records at the balanced partition count, closed-loop so the client
+# sets its own pace and the result is a capacity point rather than a schedule.
+# The record count is the legacy diagnostic's 10,000 exactly, so this is the
+# same amount of work measured at sixteen times the bytes: what changes is
+# per-record framing, copying, and how many records a 64 KiB batch holds.
+#
+# The application window of 2,048 records is 32 MiB of payload — half the
+# 64 MiB client queue budget — so the record window binds before the byte
+# window does and admission is not measuring the byte budget by accident.
+
+name = "producer-payload-16k-12p"
+status = "diagnostic"
+claim_eligible = false
+load_mode = "closed-loop-capacity-point"
+records = 10000
+warmup_records = 1000
+
+[application]
+producer_instances = 1
+callers_per_producer = 1
+backpressure = "block-within-original-offer"
+queue_bytes = 67108864
+max_outstanding_records = 2048
+
+[application_api]
+admission_shape = "public-batch"
+completion_shape = "aggregate-batch-terminal"
+batch_records = 256
+
+[payload]
+bytes = 16384
+profile = "deterministic-ascii-envelope"
+seed = 44
+identity = "KFB1 plus 16-byte run ID plus 64-bit sequence"
+
+[producer]
+acks = "all"
+idempotence = true
+compression = "none"
+linger_ms = 5
+batch_records = 256
+batch_bytes = 65536
+request_bytes = 1048576
+delivery_timeout_ms = 60000
+partitioning = "explicit-round-robin"
+warmup_partitioning = "explicit-round-robin"
+warmup_serialized_partition_primer_records = 12
+max_in_flight_requests_per_broker = 5
+retry_max_replacements = 600
+retry_backoff_ms = 100
+
+[cluster]
+brokers = 3
+partitions = 12
+replication_factor = 3
+min_in_sync_replicas = 2
+security = "plaintext"
+unclean_leader_election = false
+
+[validity]
+require_complete_drain = true
+require_every_delivery_terminal = true
+require_broker_visible_identity = true
+require_no_missing_records = true
+require_no_duplicate_records = true
+require_partition_order = true
+require_exact_payload = true

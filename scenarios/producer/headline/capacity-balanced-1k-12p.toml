@@ -1,0 +1,111 @@
+# Question: what is the highest offered rate the balanced workload sustains
+# while still meeting every declared objective?
+#
+# The same workload as `balanced-1k-12p`, driven by `benchctl capacity` instead
+# of at a chosen rate. The search probes 25,000 records/s, doubles until one
+# rate misses the objectives below, bisects that bracket to within 5% of the
+# passing rate, and then repeats the survivor three times — because a rate that
+# holds once and fails twice is not a capacity. Reaching the 1,000,000
+# records/s ceiling without a miss, or the 1,000 records/s floor without a
+# pass, is reported as inconclusive rather than as a capacity nobody observed.
+#
+# A larger local queue cannot manufacture a higher answer: the objectives
+# include queue growth and drain tail, so buffering an overload merely fails a
+# different check.
+#
+# The load mode is the ordinary fixed-rate one, and every probe is an ordinary
+# attempt: `benchctl capacity` rewrites `offered_records_per_second` for each
+# probe and seals the patched scenario, so each probe is separately
+# reproducible and separately identified. The rate stated below is the search's
+# starting point and is what this file runs at if it is handed to `benchctl
+# run` directly.
+#
+# `records` rather than a window in seconds means the measured interval is
+# `records / rate`: 10 seconds at the starting rate, and shorter as the ladder
+# climbs. Warmup is a fifth of that, so the design document's 10-second window
+# after a 2-second warmup holds exactly at the start of the search.
+#
+# Three repetitions per rate, not the design document's five, because this is
+# the pack's nightly-cadence entry. The five-repetition reference curve stays
+# in `scenarios/producer/legacy-balanced-1k-reference-capacity.toml`.
+#
+# `derived_fixed_load_percentages` names the fixed-load points the found
+# capacity implies; running them is a separate loop.
+
+name = "producer-capacity-balanced-1k-12p"
+status = "reference-capacity"
+claim_eligible = false
+load_mode = "scheduled-open-loop-fixed-rate"
+records = 250000
+warmup_records = 50000
+offered_records_per_second = 25000
+repetitions_per_rate = 3
+
+[search]
+initial_records_per_second = 25000
+minimum_records_per_second = 1000
+maximum_records_per_second = 1000000
+growth_factor = 2
+resolution_percent = 5
+derived_fixed_load_percentages = [25, 50, 75, 90]
+
+[slo]
+corrected_p99_ms = 250
+schedule_delay_p99_ms = 50
+drain_tail_ms = 1000
+queue_slope_percent = 1
+queue_slope_floor_records_per_second = 1000
+minimum_queue_samples = 3
+native_retries = 0
+native_timeouts = 0
+
+[application]
+producer_instances = 1
+callers_per_producer = 4
+backpressure = "block-within-original-offer"
+queue_bytes = 67108864
+max_outstanding_records = 8192
+
+[application_api]
+admission_shape = "public-batch"
+completion_shape = "aggregate-batch-terminal"
+batch_records = 256
+
+[payload]
+bytes = 1024
+profile = "deterministic-ascii-envelope"
+seed = 44
+identity = "KFB1 plus 16-byte run ID plus 64-bit sequence"
+
+[producer]
+acks = "all"
+idempotence = true
+compression = "none"
+linger_ms = 5
+batch_records = 256
+batch_bytes = 65536
+request_bytes = 1048576
+delivery_timeout_ms = 60000
+partitioning = "explicit-round-robin"
+warmup_partitioning = "explicit-round-robin"
+warmup_serialized_partition_primer_records = 12
+max_in_flight_requests_per_broker = 5
+retry_max_replacements = 600
+retry_backoff_ms = 100
+
+[cluster]
+brokers = 3
+partitions = 12
+replication_factor = 3
+min_in_sync_replicas = 2
+security = "plaintext"
+unclean_leader_election = false
+
+[validity]
+require_complete_drain = true
+require_every_delivery_terminal = true
+require_broker_visible_identity = true
+require_no_missing_records = true
+require_no_duplicate_records = true
+require_partition_order = true
+require_exact_payload = true

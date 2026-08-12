@@ -21,6 +21,12 @@
   <span> · </span>
   <a href="#layout">Layout</a>
   <span> · </span>
+  <a href="#the-engine">Engine</a>
+  <span> · </span>
+  <a href="#evidence">Evidence</a>
+  <span> · </span>
+  <a href="#scenarios-and-packs">Scenarios</a>
+  <span> · </span>
   <a href="#quickstart">Quickstart</a>
   <span> · </span>
   <a href="#boundaries">Boundaries</a>
@@ -63,24 +69,136 @@ The design follows from taking that question literally.
 
 ```txt
 crates/bench-schema      evidence documents, canonical JSON, identities
-crates/benchctl          control plane: resolve, spawn, supervise, seal
+crates/benchctl          control plane: resolve/run/suite/capacity/report/packet
 crates/bench-adapter-librdkafka   adapter-protocol shim for the C reference
 crates/bench-verifier    typed views over independent read-back evidence
 crates/bench-report      descriptive statistics over sealed bundles
 
 adapters/                subject adapters; standalone workspaces, not members
 legacy/benchctl/         the Node harness this repository was extracted from
-scenarios/               human-authored experiment definitions (TOML)
+scenarios/producer/headline/   the headline producer set (TOML)
+scenarios/packs/         which scenarios belong to which cadence
 schemas/                 one JSON Schema document per schema id
 conformance/             committed payload and schedule vectors
 clusters/                local broker topologies for development runs
 scripts/                 the gate and the harness entry points
-docs/                    the performance contract and harness design
+docs/                    the performance contract, harness design, and roadmap
 ```
 
 The adapters are deliberately not workspace members. A subject must be built
 against its own pinned dependency graph, not against whatever this workspace
 happens to resolve.
+
+## The engine
+
+`benchctl` is the control plane. It resolves a scenario into an experiment,
+spawns every subject, supervises them against declared deadlines, invokes the
+verifier, and seals a bundle — on every path out, including the ones that
+failed.
+
+Three inputs are separate files on purpose: a scenario is reviewed and stable, a
+subject list says which binaries exist on this machine today, and a cluster
+profile says where the brokers are and which tools reach them. The subject list
+and the profile are per-machine and are not committed;
+`scripts/bench-m0-acceptance` writes a working pair you can copy.
+
+```sh
+inputs=/tmp/kafka-benchmarks
+bootstrap=127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094
+```
+
+**`resolve`** prints the resolved experiment and its `experiment_id` without
+touching the cluster. It is how you ask what would run, and under what identity,
+before spending a cluster on it.
+
+```sh
+benchctl resolve \
+  --experiment scenarios/producer/headline/balanced-1k-12p.toml \
+  --subjects "$inputs/subjects.toml" \
+  --cluster "$inputs/cluster.toml" \
+  --bootstrap "$bootstrap"
+```
+
+**`run`** is one attempt: every subject, in the subject list's order or the one
+`--order` gives, ending in exactly one sealed bundle under
+`results/<experiment-id>/<attempt-id>/`. A subject that fails records its
+failure and the others still run, because "A crashed and B did not" is evidence.
+
+```sh
+benchctl run \
+  --experiment scenarios/producer/headline/payload-16k-12p.toml \
+  --subjects "$inputs/subjects.toml" \
+  --cluster "$inputs/cluster.toml" \
+  --bootstrap "$bootstrap" \
+  --results results
+```
+
+**`suite`** repeats one scenario as paired blocks, alternating which subject
+goes first, so that a drift in the machine falls on both subjects rather than on
+the one that always ran second.
+
+```sh
+benchctl suite \
+  --experiment scenarios/producer/headline/balanced-1k-12p.toml \
+  --subjects "$inputs/subjects.toml" \
+  --cluster "$inputs/cluster.toml" \
+  --bootstrap "$bootstrap" \
+  --repetitions 5
+```
+
+**`capacity`** runs the scheduled open-loop search: it raises the offered rate
+until a declared objective breaks, then refines the bracket. Reaching the
+ceiling without a failure is reported as inconclusive rather than as a capacity
+nobody observed.
+
+```sh
+benchctl capacity \
+  --experiment scenarios/producer/headline/capacity-balanced-1k-12p.toml \
+  --subjects "$inputs/subjects.toml" \
+  --cluster "$inputs/cluster.toml" \
+  --bootstrap "$bootstrap"
+```
+
+**`report`** reads one sealed bundle and renders it. `suite` and `capacity`
+write their own reports as they go; this is how you read a single attempt after
+the fact. It reaches no broker and rewrites no bundle, so a reporting bug cannot
+move a measurement.
+
+```sh
+benchctl report \
+  --bundle "results/$experiment_id/$attempt_id" \
+  --out reports/attempt.md
+```
+
+## Evidence
+
+The measurement document is `kafkars.producer-benchmark.v2`. Every offer owns
+one immutable identity and four timestamps — intended, call start, accepted,
+terminal — and none of them is ever reset because a queue was full, so the time
+a record spent being pushed back on is part of every latency the document
+reports. Offers that never crossed the client API are counted as offered but not
+accepted, which is what stops an overload from being spent as throughput.
+Distributions are carried as bounded log-linear histograms whose bytes the Rust
+and C adapters must produce identically, so evidence memory does not scale with
+run length and percentiles are derived by the reader rather than chosen by the
+writer. The full document set, the accounting invariants, and what a reader may
+conclude from each field are in [`docs/EVIDENCE.md`](./docs/EVIDENCE.md).
+
+## Scenarios and packs
+
+`scenarios/producer/headline/` is the predeclared headline set: a latency floor,
+the balanced default, a partition-fanout point, three payload sizes up to a
+default-compatible 900 KB record, a deliberate overload, and a capacity search.
+Each file opens with the question it exists to answer.
+
+`scenarios/packs/` says which of those belong to which cadence — `pr.toml` is
+one balanced attempt, `nightly.toml` is the whole set at three repetitions plus
+one capacity search. A pack is a reviewed manifest of scenario paths and
+repetition counts; the runner that executes one is a later loop.
+
+Workloads from the design document's matrix that cannot run yet are listed, with
+the specific thing that refuses each one, in
+[`scenarios/DEFERRED.md`](./scenarios/DEFERRED.md).
 
 ## Quickstart
 
@@ -111,18 +229,32 @@ kafka-benchmarks is not:
 - **a microbenchmark suite for private internals.** Adapters depend only on
   shipped public client surfaces. If a measurement requires reaching inside a
   client, it belongs in that client's repository, not here.
-- **a claim generator from developer-host numbers.** Results measured on a
-  laptop, or against a broker sharing that laptop, are diagnostic. They are
-  useful for spotting a regression while working; they are never evidence for a
-  public statement about performance.
+- **a claim generator from developer-host numbers.** The headline scenarios are
+  sized to run on a laptop against containers sharing that laptop. Numbers taken
+  there are diagnostic: useful for spotting a regression while working, never
+  evidence for a public statement about performance. Every scenario in this
+  repository declares `claim_eligible = false`, and the resolver refuses any
+  that does not.
 - **a Kafka client.** Nothing here implements the protocol. The subjects do.
 
 ## Status
 
-Pre-0.1 and moving. The harness was extracted from the private
-`zsumz/kafka-client-private` repository, where it had grown into a hard-coded
-two-subject script; this repository is the generalization of that work into a
-lab that can measure any client behind the adapter protocol.
+Pre-0.1 and moving. The current milestone is a measurement-correct v2 engine:
+the four-timestamp offer model, bounded histograms in place of run-sized arrays,
+`suite` and `capacity` in Rust rather than only in the legacy Node plane,
+reports over sealed bundles, and a headline scenario pack that says what each of
+its workloads is for.
+
+The harness was extracted from the private `zsumz/kafka-client-private`
+repository, where it had grown into a hard-coded two-subject script; this
+repository is the generalization of that work into a lab that can measure any
+client behind the adapter protocol.
+
+Two things this milestone deliberately did not build: a protocol-aware loopback
+lane, and the client-internal request and batch counters the performance
+contract asks for — the second because reading them would mean changing the
+client, which is out of bounds here. Both, with the rest of the loop's
+deferrals, are in [`docs/ROADMAP.md`](./docs/ROADMAP.md).
 
 Nothing is published. No crate from this workspace goes to a registry, and the
 artifact this repository produces is a sealed evidence bundle, not a release.

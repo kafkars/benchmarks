@@ -28,4 +28,36 @@ not permitted and appears instead as a new schema id.
   minimum-repetition and noise-budget thresholds inherited from the legacy
   control plane;
 - `scripts/check` as the single gate, composing the workspace, schema,
-  control-plane, and dependency-provenance lanes.
+  control-plane, and dependency-provenance lanes;
+- `kafkars.producer-benchmark.v2`, the measurement document of the
+  four-timestamp offer model: every offer carries one immutable identity and its
+  intended, call-start, accepted, and terminal instants, none of which is reset
+  when a queue is full, so admission backpressure is inside every reported
+  latency and an offer that never crossed the client API is counted as
+  offered-but-not-accepted rather than dropped. A new schema id rather than a
+  change to v1: the legacy stdout verbs keep emitting
+  `kafkars.producer-benchmark.v1` unchanged;
+- the `kafkars.log-linear.v1` histogram, a bounded log-linear encoding with 128
+  linear sub-buckets per power of two, carried as a sparse ascending
+  index/count list. Evidence memory stops scaling with run length, percentiles
+  are derived by the reader from a bucket's inclusive upper bound rather than
+  chosen by the writer, and the encoding is specified byte-for-byte so the Rust
+  and C adapters can be asserted equal instead of close;
+- `benchctl suite`, which runs paired repetitions of one scenario with
+  alternating subject order and seals each attempt independently, and
+  `benchctl capacity`, which searches for the highest offered rate that still
+  meets every declared objective and reports an unbracketed search as
+  inconclusive rather than naming an unobserved capacity;
+- `benchctl report` over a sealed bundle and `benchctl packet` over a suite
+  summary, the latter emitting `kafkars.analysis-packet.v1` — the
+  numbered-metric, referenced-finding boundary between measurement and prose,
+  whose verdict downstream summaries may narrow but never contradict;
+- the headline producer set under `scenarios/producer/headline/`: a latency
+  floor, the balanced fixed-rate default, a 96-partition fanout point, 16 KiB,
+  256 KiB and default-compatible 900 KB payload points, a deliberate overload
+  with a declared SLO, and a balanced capacity search — each stating the design
+  question it answers, and each sized to complete on a developer host;
+- `scenarios/packs/pr.toml` and `scenarios/packs/nightly.toml`, declaring which
+  scenarios belong to which cadence and at how many repetitions, plus
+  `scenarios/DEFERRED.md` naming every matrix row that cannot run yet and what
+  refuses it.

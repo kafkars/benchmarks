@@ -1,0 +1,76 @@
+# Question: what happens at the largest record a default-configured cluster
+# will accept?
+#
+# 900,000 bytes is chosen against a limit, not for roundness. A broker's
+# default `message.max.bytes` is 1,048,588 bytes and the client's default
+# request budget here is 1,048,576; 900,000 bytes of payload plus the identity
+# envelope, the key, and record and batch framing stays under both with about
+# 145 KiB of headroom. That makes this a *default-compatible* large-record
+# workload: nothing on the broker, the topic, or the client was raised to let
+# it run, so its numbers can be compared against the rest of the pack. The
+# design document's literal 1 MiB row is a raised-limit workload and is not in
+# this pack — see `scenarios/DEFERRED.md`.
+#
+# The window is tiny on purpose. Sixteen records is 14.4 MiB of payload, and at
+# one record per request that is roughly the fifteen requests three brokers
+# will hold in flight — one network wave, and no application queue hiding
+# behind it. With 300 measured records this is a framing and limit workload,
+# not a percentile workload; read the distribution, not its p99.9.
+
+name = "producer-near-limit-900k-3p"
+status = "diagnostic"
+claim_eligible = false
+load_mode = "closed-loop-capacity-point"
+records = 300
+warmup_records = 30
+
+[application]
+producer_instances = 1
+callers_per_producer = 1
+backpressure = "block-within-original-offer"
+queue_bytes = 67108864
+max_outstanding_records = 16
+
+[application_api]
+admission_shape = "public-batch"
+completion_shape = "aggregate-batch-terminal"
+batch_records = 256
+
+[payload]
+bytes = 900000
+profile = "deterministic-ascii-envelope"
+seed = 44
+identity = "KFB1 plus 16-byte run ID plus 64-bit sequence"
+
+[producer]
+acks = "all"
+idempotence = true
+compression = "none"
+linger_ms = 5
+batch_records = 256
+batch_bytes = 65536
+request_bytes = 1048576
+delivery_timeout_ms = 60000
+partitioning = "explicit-round-robin"
+warmup_partitioning = "explicit-round-robin"
+warmup_serialized_partition_primer_records = 3
+max_in_flight_requests_per_broker = 5
+retry_max_replacements = 600
+retry_backoff_ms = 100
+
+[cluster]
+brokers = 3
+partitions = 3
+replication_factor = 3
+min_in_sync_replicas = 2
+security = "plaintext"
+unclean_leader_election = false
+
+[validity]
+require_complete_drain = true
+require_every_delivery_terminal = true
+require_broker_visible_identity = true
+require_no_missing_records = true
+require_no_duplicate_records = true
+require_partition_order = true
+require_exact_payload = true

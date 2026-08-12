@@ -33,7 +33,21 @@ and it is not a place to make a client look good.
 - **Evidence schemas are versioned and append-only.** Add a field, or mint a new
   schema id. Never change what an existing field means under an existing id:
   sealed bundles are immutable, and a redefinition retroactively falsifies runs
-  that already happened.
+  that already happened. This extends to the goldens: a change that alters the
+  bytes of a committed vector, a schema document under `schemas/`, or a
+  conformance fixture is a schema-affecting change, not a test fixup. Regenerate
+  a golden only together with the new schema id that justifies it, and say so in
+  the changelog.
+- **The histogram encoding is a byte contract, not an implementation detail.**
+  `kafkars.log-linear.v1` fixes the bucketing (`SUB_BUCKET_BITS = 7`), the field
+  order — `layout`, `unit`, `sub_bucket_bits`, `total`, `min`, `max`, `sum`,
+  `counts` — and the sparse `counts` form: strictly ascending indexes, no zero
+  counts. Compact serde output of the Rust struct is the reference encoding, and
+  the C adapter must reproduce it byte for byte, because cross-language
+  conformance asserts equality rather than tolerance. Percentiles report a
+  bucket's inclusive upper bound so a derived latency errs conservative; `min`,
+  `max`, and `sum` stay exact outside the buckets. Changing any of this means a
+  new layout id.
 - **Every sealed bundle is immutable.** Nothing rewrites a bundle after sealing,
   including to fix it. A wrong bundle is superseded by a new attempt, never
   edited.
@@ -60,7 +74,10 @@ and it is not a place to make a client look good.
 
 ## Deferred decisions
 
-Recorded here so that they stay decisions rather than becoming accidents.
+Recorded here so that they stay decisions rather than becoming accidents. The
+two below are repository-contract deferrals; the current loop's deferrals live
+in [`docs/ROADMAP.md`](docs/ROADMAP.md), and workloads that cannot run yet live
+in [`scenarios/DEFERRED.md`](scenarios/DEFERRED.md).
 
 - **Guardrails-crate enforcement is deferred.** The sibling client repository
   enforces dependency edges, file counts, and capability ownership with a

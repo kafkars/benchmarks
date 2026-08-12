@@ -1,0 +1,73 @@
+# Question: what does one record cost when nothing is queued behind it?
+#
+# The smallest payload, a single partition, one caller, and an application
+# window of exactly one batch. Nothing here is a throughput result: the run
+# holds one 256-record batch at a time so that the reported latency is
+# admission plus completion plus one replicated round trip, and not the
+# residence time of a full pipeline. It is the floor every other producer
+# scenario is measured against.
+#
+# `linger_ms` is 5 rather than 0 because both adapters configure the linger
+# their client was built with and decline any other value. A true zero-linger
+# floor needs an adapter argument that does not exist yet; see
+# `scenarios/DEFERRED.md`.
+
+name = "producer-latency-floor-128b-1p"
+status = "diagnostic"
+claim_eligible = false
+load_mode = "closed-loop-capacity-point"
+records = 50000
+warmup_records = 5000
+
+[application]
+producer_instances = 1
+callers_per_producer = 1
+backpressure = "block-within-original-offer"
+queue_bytes = 67108864
+# One application batch outstanding, against the balanced scenario's 8,192.
+# The window, not the client, is what makes this a floor.
+max_outstanding_records = 256
+
+[application_api]
+admission_shape = "public-batch"
+completion_shape = "aggregate-batch-terminal"
+batch_records = 256
+
+[payload]
+bytes = 128
+profile = "deterministic-ascii-envelope"
+seed = 44
+identity = "KFB1 plus 16-byte run ID plus 64-bit sequence"
+
+[producer]
+acks = "all"
+idempotence = true
+compression = "none"
+linger_ms = 5
+batch_records = 256
+batch_bytes = 65536
+request_bytes = 1048576
+delivery_timeout_ms = 60000
+partitioning = "explicit-round-robin"
+warmup_partitioning = "explicit-round-robin"
+warmup_serialized_partition_primer_records = 1
+max_in_flight_requests_per_broker = 5
+retry_max_replacements = 600
+retry_backoff_ms = 100
+
+[cluster]
+brokers = 3
+partitions = 1
+replication_factor = 3
+min_in_sync_replicas = 2
+security = "plaintext"
+unclean_leader_election = false
+
+[validity]
+require_complete_drain = true
+require_every_delivery_terminal = true
+require_broker_visible_identity = true
+require_no_missing_records = true
+require_no_duplicate_records = true
+require_partition_order = true
+require_exact_payload = true

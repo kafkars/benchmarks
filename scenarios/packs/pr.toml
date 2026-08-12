@@ -1,0 +1,35 @@
+# The pull-request pack: one scenario, once.
+#
+# Format
+# ------
+#
+#   name         identifier used in logs and report titles
+#   cadence      which schedule this pack belongs to; prose, not a trigger
+#   description  what a reader should conclude from a complete run of the pack
+#
+#   [[entries]]
+#   scenario     path to a scenario TOML, relative to the repository root
+#   repetitions  how many attempts of that scenario the pack asks for
+#
+# Entries run in the order written. Nothing else is declared here: bootstrap
+# servers, subject binaries, seeds, and the results root belong to the invoking
+# command, not to the pack, so the same pack describes a laptop run and a CI
+# run.
+#
+# There is no `benchctl pack` runner yet. Until there is, a pack is a reviewed
+# statement of which scenarios belong to a cadence, and a caller loops over the
+# entries with `benchctl run`. See `docs/ROADMAP.md`.
+#
+# Why one scenario: a pull request gate must fail for reasons the author
+# changed. Cross-client throughput on a shared runner is noisy enough that a
+# hard gate on it would mostly report the runner. This pack exists to prove the
+# whole path still works end to end — resolve, spawn, produce, verify, seal —
+# not to compare clients.
+
+name = "pr"
+cadence = "pull request"
+description = "One balanced producer attempt: proves the harness runs and seals, gates nothing on the numbers."
+
+[[entries]]
+scenario = "scenarios/producer/headline/balanced-1k-12p.toml"
+repetitions = 1
