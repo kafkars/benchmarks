@@ -51,7 +51,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use bench_report::{DEFAULT_BOOTSTRAP_RESAMPLES, DEFAULT_PRACTICAL_THRESHOLD, SuiteOptions};
-use bench_schema::{BudgetSpec, ExecutionStatus, SuiteSummary, pretty_bytes};
+use bench_schema::{BudgetSpec, ExecutionStatus, pretty_bytes};
 
 use crate::error::{CtlError, CtlResult, EXIT_INTERNAL, EXIT_SEALED_COMPLETE, EXIT_SEALED_PARTIAL};
 use crate::pipeline::{self, AttemptEnd, CommonArguments, SealedAttempt};
@@ -213,10 +213,13 @@ fn summarize(command: &SuiteCommand, sealed: &[SealedAttempt], seed: u64) -> Ctl
         resamples: DEFAULT_BOOTSTRAP_RESAMPLES,
         practical_threshold: DEFAULT_PRACTICAL_THRESHOLD,
     };
-    let summary = bench_report::summarize_suite(&roots, &options)
+    // The report variant carries request economics alongside the sealed
+    // summary; the summary document itself has no economics field, so the
+    // extra columns exist only in the derived report and packet.
+    let report = bench_report::summarize_suite_report(&roots, &options)
         .map_err(|error| CtlError::internal(format!("summarize the suite: {error}")))?;
     let directory = report_directory(command, sealed)?;
-    write_report_set(&directory, &summary)
+    write_report_set(&directory, &report)
 }
 
 /// Creates `<reports>/<experiment-short>/<utc-compact>-suite/`.
@@ -238,18 +241,12 @@ fn report_directory(command: &SuiteCommand, sealed: &[SealedAttempt]) -> CtlResu
 }
 
 /// Writes the four documents a suite produces and prints where they went.
-fn write_report_set(directory: &Path, summary: &SuiteSummary) -> CtlResult<()> {
-    let packet = bench_report::build_packet(summary);
+fn write_report_set(directory: &Path, report: &bench_report::SuiteReport) -> CtlResult<()> {
+    let packet = report.packet();
     for (name, bytes) in [
-        ("suite-summary.json", pretty_bytes(summary)?),
-        (
-            "report.md",
-            bench_report::render_markdown_suite(summary).into_bytes(),
-        ),
-        (
-            "report.html",
-            bench_report::render_html_suite(summary).into_bytes(),
-        ),
+        ("suite-summary.json", pretty_bytes(&report.summary)?),
+        ("report.md", report.markdown().into_bytes()),
+        ("report.html", report.html().into_bytes()),
         ("analysis-packet.json", pretty_bytes(&packet)?),
     ] {
         let path = directory.join(name);

@@ -122,6 +122,22 @@ validity verdict. Validity is decided from the verifier's read-back in
 `kafkars.classification.v1`, because an adapter must never be the thing
 that decides whether its own output was correct.
 
+### Declared execution vocabulary
+
+`declared.payload_construction` is `prebuilt-pool-per-offer-sequence` in
+both shipped adapters, and the string means exactly this: payload template
+bytes are built before the measured interval from a bounded pool, and the
+only per-offer byte work is stamping the offer's sequence number so the
+broker-visible verifier can check every record individually. The two
+adapters differ in *ownership* — the kafkars adapter builds an owned buffer
+per offer from the pool (`owned-per-offer-from-pool`, the public API takes
+ownership), the librdkafka adapter reuses pooled buffers and asks the
+client to copy (`copy-in-reused-buffer`) — and that difference is declared
+where it belongs, in `declared.ownership`, not hidden inside the
+construction string. A reader comparing measurements should require equal
+`payload_construction` and treat unequal `ownership` as a product-surface
+difference to report, not to erase.
+
 ## The histogram
 
 Every distribution above is an embedded `kafkars.log-linear.v1` histogram.

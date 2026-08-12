@@ -21,7 +21,7 @@
  *
  * # What the declaration says, and why it says that
  *
- * `payload_construction` is `per-offer-fill-into-prebuilt-pool` rather than
+ * `payload_construction` is `prebuilt-pool-per-offer-sequence` rather than plain
  * `prebuilt-pool`: the record buffers are allocated before the measured
  * interval starts and reused for every batch, but each record's bytes carry
  * its own sequence number, so they are written per offer — before
@@ -32,7 +32,7 @@
 
 /* What the measured path actually did, stated for a reader deciding whether
    two runs are comparable. */
-#define V2_PAYLOAD_CONSTRUCTION "per-offer-fill-into-prebuilt-pool"
+#define V2_PAYLOAD_CONSTRUCTION "prebuilt-pool-per-offer-sequence"
 #define V2_OWNERSHIP "copy-in-reused-buffer"
 #define V2_COMPLETION_MODE "delivery-callback"
 #define V2_SERIALIZATION "excluded"

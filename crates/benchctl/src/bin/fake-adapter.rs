@@ -373,7 +373,7 @@ fn result_document(
         run_id,
         load_mode: experiment.load_mode,
         declared: DeclaredExecution {
-            payload_construction: "prebuilt-pool".to_owned(),
+            payload_construction: "prebuilt-pool-per-offer-sequence".to_owned(),
             ownership: "copy-in".to_owned(),
             completion_mode: "aggregate-batch-terminal".to_owned(),
             serialization: "excluded".to_owned(),
