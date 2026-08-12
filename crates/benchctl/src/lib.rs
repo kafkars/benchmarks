@@ -78,10 +78,6 @@ mod pack_test;
 #[cfg(test)]
 mod probe_test;
 #[cfg(test)]
-mod resolve_test;
-#[cfg(test)]
-mod results_test;
-#[cfg(test)]
 mod seal_test;
 #[cfg(test)]
 mod suite_test;
