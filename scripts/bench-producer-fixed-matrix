@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+bootstrap=${1:-}
+capacity_summary=${2:-}
+if [[ -z "$bootstrap" || ! -f "$capacity_summary" ]]; then
+  echo "usage: scripts/bench-producer-fixed-matrix host:port[,host:port...] capacity-summary.json [result-root]" >&2
+  exit 64
+fi
+
+identity=$(printf '%s-%s-%s-%s\n' \
+  "$(date -u +%Y%m%dT%H%M%SZ)" "$$" "$bootstrap" "$capacity_summary")
+matrix_id=$(printf '%s' "$identity" | LC_ALL=C shasum -a 256 | awk '{print substr($1,1,16)}')
+matrix=${3:-"$repo_root/target/benchmark-results/fixed-matrix-$matrix_id"}
+if [[ -e "$matrix" ]]; then
+  if [[ "${KAFKARS_MATRIX_RESUME:-false}" != true ]] || \
+    [[ -f "$matrix/matrix-summary.json" ]]; then
+    echo "fixed-load matrix target already exists: $matrix" >&2
+    exit 73
+  fi
+fi
+
+node "$repo_root/legacy/benchctl/fixed-matrix-runner.mjs" \
+  "$repo_root" "$bootstrap" "$capacity_summary" "$matrix"

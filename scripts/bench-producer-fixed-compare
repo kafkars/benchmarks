@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+bootstrap=${1:-}
+if [[ -z "$bootstrap" ]]; then
+  echo "usage: scripts/bench-producer-fixed-compare host:port[,host:port...] [result-root]" >&2
+  exit 64
+fi
+
+records=${KAFKARS_BENCH_RECORDS:-100000}
+warmup_records=${KAFKARS_BENCH_WARMUP_RECORDS:-10000}
+payload_bytes=${KAFKARS_BENCH_PAYLOAD_BYTES:-1024}
+partitions=${KAFKARS_BENCH_PARTITIONS:-12}
+max_outstanding=${KAFKARS_BENCH_MAX_OUTSTANDING:-8192}
+offered_rate=${KAFKARS_BENCH_OFFERED_RATE:-100000}
+callers=${KAFKARS_BENCH_CALLERS:-4}
+broker_version=${KAFKARS_BENCH_BROKER_VERSION:-unknown}
+identity=$(printf '%s-%s-%s-%s\n' \
+  "$(date -u +%Y%m%dT%H%M%SZ)" "$$" "$bootstrap" "$offered_rate")
+run_id=$(printf '%s' "$identity" | LC_ALL=C shasum -a 256 | awk '{print substr($1,1,16)}')
+bundle=${2:-"$repo_root/target/benchmark-results/fixed-$run_id"}
+if [[ -e "$bundle" ]]; then
+  echo "benchmark result target already exists: $bundle" >&2
+  exit 73
+fi
+
+binary_root=$("$repo_root/scripts/build-benchmark-adapters")
+kafkars="$binary_root/kafkars-benchmark-adapter"
+librdkafka="$binary_root/librdkafka-producer-benchmark"
+verifier="$binary_root/librdkafka-benchmark-verifier"
+measure="$repo_root/scripts/measure-benchmark-process"
+topic_prefix="kafkars-fixed-$run_id"
+topics=(
+  "$topic_prefix-kafkars-warmup"
+  "$topic_prefix-kafkars"
+  "$topic_prefix-librdkafka-warmup"
+  "$topic_prefix-librdkafka"
+)
+topics_created=false
+
+cleanup_topics() {
+  if [[ "$topics_created" == true ]]; then
+    set +e
+    "$kafkars" topics-delete "$bootstrap" "${topics[@]}" \
+      >"$bundle/topic-cleanup.stdout.log" \
+      2>"$bundle/topic-cleanup.stderr.log"
+    set -e
+  fi
+}
+trap cleanup_topics EXIT
+
+mkdir -p "$bundle/adapters/kafkars" "$bundle/adapters/librdkafka-c"
+cp "$repo_root/scenarios/producer/legacy-balanced-1k-fixed.toml" \
+  "$bundle/workload-template.toml"
+topics_created=true
+"$kafkars" topics-create "$bootstrap" "$partitions" 3 "${topics[@]}" \
+  >"$bundle/topic-create.stdout.log" 2>"$bundle/topic-create.stderr.log"
+
+requested_order=${KAFKARS_BENCH_ORDER:-kafkars,librdkafka-c}
+IFS=, read -r -a order <<<"$requested_order"
+if [[ ${#order[@]} -ne 2 ]] || [[ "${order[0]}" == "${order[1]}" ]]; then
+  echo "invalid KAFKARS_BENCH_ORDER: $requested_order" >&2
+  exit 64
+fi
+
+run_adapter() {
+  local adapter=$1
+  local directory="$bundle/adapters/$adapter"
+  local warmup_topic="$topic_prefix-$adapter-warmup"
+  local measured_topic="$topic_prefix-$adapter"
+  if [[ "$adapter" == librdkafka-c ]]; then
+    warmup_topic="$topic_prefix-librdkafka-warmup"
+    measured_topic="$topic_prefix-librdkafka"
+    "$measure" "$directory/process-resources.txt" \
+      "$librdkafka" --fixed-rate \
+      "$bootstrap" "$warmup_topic" "$measured_topic" "$run_id" \
+      "$warmup_records" "$records" "$payload_bytes" "$partitions" \
+      "$max_outstanding" "$offered_rate" "$callers" \
+      "$directory/latency.csv" "$directory/client-metrics.jsonl" \
+      >"$directory/result.json" 2>"$directory/stderr.log"
+  elif [[ "$adapter" == kafkars ]]; then
+    "$measure" "$directory/process-resources.txt" \
+      "$kafkars" produce-fixed \
+      "$bootstrap" "$warmup_topic" "$measured_topic" "$run_id" \
+      "$warmup_records" "$records" "$payload_bytes" "$partitions" \
+      "$max_outstanding" "$offered_rate" "$callers" \
+      "$directory/latency.csv" \
+      >"$directory/result.json" 2>"$directory/stderr.log"
+  else
+    echo "invalid adapter order entry: $adapter" >&2
+    exit 64
+  fi
+  cp "$directory/result.json" "$directory/stdout.log"
+  "$verifier" "$bootstrap" "$measured_topic" "$run_id" "$records" \
+    "$payload_bytes" "$partitions" \
+    >"$directory/verification.json" 2>"$directory/verification.stderr.log"
+  "$verifier" "$bootstrap" "$warmup_topic" "$run_id" "$warmup_records" \
+    "$payload_bytes" "$partitions" \
+    >"$directory/warmup-verification.json" \
+    2>"$directory/warmup-verification.stderr.log"
+}
+
+for adapter in "${order[@]}"; do
+  run_adapter "$adapter"
+done
+cleanup_topics
+topics_created=false
+node "$repo_root/legacy/benchctl/fixed-seal.mjs" \
+  "$bundle" "$run_id" "$requested_order" "$records" "$warmup_records" \
+  "$payload_bytes" "$partitions" "$max_outstanding" "$offered_rate" "$callers" \
+  "$bootstrap" "$broker_version"

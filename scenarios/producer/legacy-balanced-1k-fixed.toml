@@ -1,0 +1,44 @@
+name = "producer-balanced-1k-fixed-diagnostic"
+status = "diagnostic"
+claim_eligible = false
+load_mode = "scheduled-open-loop-fixed-rate"
+records = 100000
+warmup_records = 10000
+offered_records_per_second = 100000
+
+[application]
+producer_instances = 1
+callers_per_producer = 4
+backpressure = "block-within-original-offer"
+queue_bytes = 67108864
+max_outstanding_records = 8192
+
+[application_api]
+admission_shape = "public-batch"
+completion_shape = "aggregate-batch-terminal"
+batch_records = 256
+
+[payload]
+bytes = 1024
+profile = "deterministic-ascii-envelope"
+seed = 44
+
+[producer]
+acks = "all"
+idempotence = true
+compression = "none"
+linger_ms = 5
+batch_records = 256
+batch_bytes = 65536
+request_bytes = 1048576
+delivery_timeout_ms = 60000
+partitioning = "explicit-round-robin"
+retry_max_replacements = 600
+retry_backoff_ms = 100
+
+[cluster]
+brokers = 3
+partitions = 12
+replication_factor = 3
+min_in_sync_replicas = 2
+security = "plaintext"

@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+bootstrap=${1:-}
+if [[ -z "$bootstrap" ]]; then
+  echo "usage: scripts/bench-producer-reference-capacity host:port[,host:port...] [result-root]" >&2
+  exit 64
+fi
+
+repetitions=${KAFKARS_CAPACITY_REPETITIONS:-5}
+initial_rate=${KAFKARS_CAPACITY_INITIAL_RATE:-25000}
+minimum_rate=${KAFKARS_CAPACITY_MIN_RATE:-1000}
+maximum_rate=${KAFKARS_CAPACITY_MAX_RATE:-1000000}
+growth_factor=${KAFKARS_CAPACITY_GROWTH_FACTOR:-2}
+resolution_percent=${KAFKARS_CAPACITY_RESOLUTION_PERCENT:-5}
+for value in "$repetitions" "$initial_rate" "$minimum_rate" \
+  "$maximum_rate" "$growth_factor" "$resolution_percent"; do
+  if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "reference capacity search configuration must use positive integers" >&2
+    exit 64
+  fi
+done
+if ((minimum_rate >= initial_rate || initial_rate >= maximum_rate)); then
+  echo "reference capacity rates must satisfy minimum < initial < maximum" >&2
+  exit 64
+fi
+
+identity=$(printf '%s-%s-%s-%s-%s\n' \
+  "$(date -u +%Y%m%dT%H%M%SZ)" "$$" "$bootstrap" "$initial_rate" \
+  "$repetitions")
+capacity_id=$(printf '%s' "$identity" | LC_ALL=C shasum -a 256 | awk '{print substr($1,1,16)}')
+suite=${2:-"$repo_root/target/benchmark-results/reference-capacity-$capacity_id"}
+if [[ -e "$suite" ]]; then
+  if [[ "${KAFKARS_CAPACITY_RESUME:-false}" != true ]] || \
+    [[ -f "$suite/capacity-summary.json" ]]; then
+    echo "reference capacity target already exists: $suite" >&2
+    exit 73
+  fi
+else
+  mkdir -p "$suite"
+fi
+
+node "$repo_root/legacy/benchctl/reference-capacity-runner.mjs" \
+  "$repo_root" "$bootstrap" "$suite" "$repetitions" "$initial_rate" \
+  "$minimum_rate" "$maximum_rate" "$growth_factor" "$resolution_percent"

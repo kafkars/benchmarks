@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+output=${1:-}
+if [[ -z "$output" || $# -lt 2 ]]; then
+  echo "usage: scripts/measure-benchmark-process output command [argument...]" >&2
+  exit 64
+fi
+shift
+
+if [[ ! -x /usr/bin/time ]]; then
+  echo "benchmark process resource measurement requires /usr/bin/time" >&2
+  exit 69
+fi
+
+case $(uname -s) in
+  Darwin)
+    exec /usr/bin/time -lp -o "$output" "$@"
+    ;;
+  Linux)
+    exec /usr/bin/time -v -o "$output" "$@"
+    ;;
+  *)
+    echo "unsupported benchmark resource platform: $(uname -s)" >&2
+    exit 69
+    ;;
+esac

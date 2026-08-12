@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+bootstrap=${1:-}
+if [[ -z "$bootstrap" ]]; then
+  echo "usage: scripts/bench-producer-fixed-suite host:port[,host:port...] [result-root]" >&2
+  exit 64
+fi
+
+repetitions=${KAFKARS_BENCH_REPETITIONS:-5}
+if [[ ! "$repetitions" =~ ^[1-9][0-9]*$ ]]; then
+  echo "KAFKARS_BENCH_REPETITIONS must be a positive integer" >&2
+  exit 64
+fi
+
+identity=$(printf '%s-%s-%s-%s-%s\n' \
+  "$(date -u +%Y%m%dT%H%M%SZ)" "$$" "$bootstrap" "$repetitions" \
+  "${KAFKARS_BENCH_OFFERED_RATE:-100000}")
+suite_id=$(printf '%s' "$identity" | LC_ALL=C shasum -a 256 | awk '{print substr($1,1,16)}')
+suite=${2:-"$repo_root/target/benchmark-results/fixed-suite-$suite_id"}
+if [[ -e "$suite" ]]; then
+  echo "fixed-load suite target already exists: $suite" >&2
+  exit 73
+fi
+mkdir -p "$suite"
+
+for ((index = 1; index <= repetitions; index++)); do
+  if ((index % 2 == 1)); then
+    order=kafkars,librdkafka-c
+  else
+    order=librdkafka-c,kafkars
+  fi
+  pair=$(printf '%s/pair-%02d' "$suite" "$index")
+  KAFKARS_BENCH_ORDER="$order" \
+    "$repo_root/scripts/bench-producer-fixed-compare" "$bootstrap" "$pair"
+done
+
+node "$repo_root/legacy/benchctl/fixed-suite.mjs" \
+  "$suite" "$repetitions"
