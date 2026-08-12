@@ -34,6 +34,7 @@ pub fn sibling_findings(files: &[SourceFile]) -> Vec<String> {
             && !present
                 .iter()
                 .any(|path| path.starts_with(&format!("{stem}/")))
+            && !is_inside_own_subject(stem, &present)
         {
             findings.push(format!(
                 "{}: orphan unit test, no sibling {}.rs or {}/ beside it",
@@ -54,6 +55,18 @@ pub fn sibling_findings(files: &[SourceFile]) -> Vec<String> {
 
 fn tail(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
+}
+
+/// True for `a/b/b_test.rs` when `a/b.rs` exists: a unit test living inside
+/// its subject's own child directory sits within the subject's privacy
+/// boundary, which is the whole reason to allow it — moving it beside
+/// `a/b.rs` would force private items `pub(super)` purely to satisfy this
+/// rule. Accepted only when the test's stem names its parent directory.
+fn is_inside_own_subject(stem: &str, present: &BTreeSet<&str>) -> bool {
+    let Some((directory, name)) = stem.rsplit_once('/') else {
+        return false;
+    };
+    tail(directory) == name && present.contains(format!("{directory}.rs").as_str())
 }
 
 /// Module stems declared behind `#[cfg(test)]` in one file's text.
