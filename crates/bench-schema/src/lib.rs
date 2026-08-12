@@ -60,9 +60,11 @@ mod classify;
 mod environment;
 mod error;
 mod experiment;
+mod histogram;
 mod identity;
 mod legacy;
 mod lock;
+mod result_v2;
 mod schema_id;
 mod source;
 mod status;
@@ -86,12 +88,20 @@ pub use experiment::{
     MAX_SUBJECT_NAME_LENGTH, MAX_TOPIC_NAME_LENGTH, PayloadSpec, ProducerSpec, ResolvedExperiment,
     RuntimeBinding, SloSpec, SubjectSpec, TopicPair, is_topic_charset_safe,
 };
+pub use histogram::{
+    EncodedHistogram, HISTOGRAM_LAYOUT_V1, Histogram, SUB_BUCKET_BITS, SUB_BUCKET_COUNT,
+    bucket_high, bucket_index, bucket_low,
+};
 pub use identity::{
     DIGEST_HEX_LENGTH, ExperimentId, SHORT_ID_LENGTH, experiment_id, identity_bytes,
     identity_document, is_digest_hex, sha256_hex,
 };
 pub use legacy::{KnownProducerResult, LegacyLatency, LegacyPercentiles, VerifierReport};
 pub use lock::{SubjectLockEntry, SubjectsLock};
+pub use result_v2::{
+    DeclaredExecution, MeasuredThroughput, OfferOutcomes, OfferTiming, PRODUCER_BENCHMARK_V2,
+    ProcessResources, ProducerBenchmarkV2, QueueObservation,
+};
 pub use schema_id::{
     ADAPTER_STATUS_V1, ADAPTER_V1, ADAPTER_VALIDATE_V1, BENCHMARK_ADAPTER_CONFIG_V1,
     BENCHMARK_ENVIRONMENT_V1, BENCHMARK_ENVIRONMENT_V2, BUNDLE_V1, CLASSIFICATION_V1,
@@ -128,11 +138,15 @@ mod error_test;
 #[cfg(test)]
 mod experiment_test;
 #[cfg(test)]
+mod histogram_test;
+#[cfg(test)]
 mod identity_test;
 #[cfg(test)]
 mod legacy_test;
 #[cfg(test)]
 mod lock_test;
+#[cfg(test)]
+mod result_v2_test;
 #[cfg(test)]
 mod schema_id_test;
 #[cfg(test)]
