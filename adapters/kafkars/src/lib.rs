@@ -5,6 +5,9 @@ mod payload;
 #[cfg(test)]
 mod payload_test;
 mod producer;
+mod protocol;
+#[cfg(test)]
+mod protocol_test;
 mod report;
 #[cfg(test)]
 mod report_test;
