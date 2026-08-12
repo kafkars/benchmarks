@@ -180,10 +180,26 @@ one that fails:
   lateness distribution has lost the evidence that the schedule was kept.
 - A measurement declared invalid states why.
 
-The `valid` flag is the adapter's verdict on its own measurement, never the
-validity verdict. Validity is decided from the verifier's read-back in
-`kafkars.classification.v1`, because an adapter must never be the thing
-that decides whether its own output was correct.
+The `valid` flag is the adapter's verdict on its own measurement, and it is
+one input to validity, never the whole of it. `kafkars.classification.v1`
+combines several independent gates: the adapter's self-verdict (an adapter
+that disowns its own measurement is believed), the broker-visible
+verifier's read-back, complete drain (`unknown == 0` and
+`final_outstanding == 0`), the failure ceiling, the adapter process's own
+exit, and the provenance cross-check between the declared and reported
+adapter versions. A run is valid only when every gate passes, and each
+failed gate contributes a named reason — so `run_valid: false` always says
+which gate, not just that one existed. What an adapter can never do is
+declare a measurement valid on behalf of the harness: a self-declared
+`valid: true` passes exactly one of the gates.
+
+Two sealing details a bundle reader should know: the checksum walk refuses
+symlinks and other non-regular files outright (a bundle entry the manifest
+cannot vouch for is a seal error, not a silent omission), and a bundle
+whose sealing failed partway carries a `seal-failure.txt` naming the
+failure next to whatever terminal files could still be completed — the
+richer `status.json` written before the failure is preserved, never
+overwritten by the recovery path.
 
 ### Declared execution vocabulary
 
