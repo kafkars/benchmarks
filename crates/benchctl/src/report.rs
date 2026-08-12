@@ -74,10 +74,25 @@ fn render(command: &ReportCommand) -> CtlResult<()> {
 }
 
 /// Writes rendered text to a file or to standard output.
+///
+/// The destination's parent is created first, as `suite` and `capacity` do for
+/// their own report trees. `reports/` is not checked in — it is the output of
+/// running things — so on a fresh clone the obvious `--out reports/run.md` names
+/// a directory that does not exist yet, and refusing that would be refusing the
+/// first command a reader tries.
 fn write_out(destination: Option<&Path>, bytes: &[u8]) -> CtlResult<()> {
     match destination {
-        Some(path) => std::fs::write(path, bytes)
-            .map_err(|error| CtlError::internal(format!("write {}: {error}", path.display()))),
+        Some(path) => {
+            if let Some(parent) = path.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    CtlError::internal(format!("create {}: {error}", parent.display()))
+                })?;
+            }
+            std::fs::write(path, bytes)
+                .map_err(|error| CtlError::internal(format!("write {}: {error}", path.display())))
+        }
         None => std::io::stdout()
             .write_all(bytes)
             .map_err(|error| CtlError::internal(format!("write stdout: {error}"))),

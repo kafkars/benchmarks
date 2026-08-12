@@ -136,6 +136,7 @@ fn subject_with(name: &str, document: &ProducerBenchmarkV2) -> SubjectOutcome {
         measured: VerificationVerdict::Satisfied,
         warmup: VerificationVerdict::Satisfied,
         slo: SloSpec::default(),
+        declared_adapter_version: "0.1.0".to_owned(),
     }
 }
 
@@ -247,6 +248,7 @@ fn an_unreadable_document_is_noted_and_the_subject_stays_invalid() {
         measured: VerificationVerdict::Satisfied,
         warmup: VerificationVerdict::Satisfied,
         slo: SloSpec::default(),
+        declared_adapter_version: "0.1.0".to_owned(),
     };
     let validity = outcome.validity();
     assert!(!validity.valid);
@@ -310,32 +312,60 @@ fn offers_still_outstanding_at_the_end_are_an_incomplete_drain() {
 }
 
 #[test]
-fn failed_records_invalidate_a_subject_only_when_objectives_were_declared() {
+fn failed_records_invalidate_a_subject_whether_or_not_objectives_were_declared() {
     let mut document = measurement(100_000.0, 1_000_000);
     document.outcomes.acknowledged = RECORDS - 2;
     document.outcomes.failed = 1;
     document.outcomes.timed_out = 1;
     let mut subject = subject_with("kafkars", &document);
+
+    // Declaring no objectives is not a licence to lose records. It used to be:
+    // the ceiling was only asked about when the scenario stated a latency
+    // bound, which made a scenario with no `[slo]` the most permissive one in
+    // the repository — and disagreed with `evaluate_slo`, which always asks.
+    let without = subject.validity();
     assert!(
-        subject.validity().valid,
-        "a scenario with no objectives states no ceiling: {:?}",
-        subject.validity().reasons
+        !without.valid,
+        "a lost record is a different run, whatever else the scenario declared"
+    );
+    assert!(
+        without
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("2 records failed or timed out")),
+        "{:?}",
+        without.reasons
     );
 
     subject.slo = SloSpec {
         corrected_p99_ms: Some(250),
         ..SloSpec::default()
     };
-    let validity = subject.validity();
-    assert!(!validity.valid);
+    let with = subject.validity();
+    assert!(!with.valid);
+    assert_eq!(
+        with.reasons, without.reasons,
+        "the ceiling does not move when objectives are declared"
+    );
+
+    // And the reporting layer's gate agrees on the same measurement, which is
+    // the asymmetry this rule exists to remove.
+    let verdict = bench_report::evaluate_slo(&document, &SloSpec::default());
+    assert!(!verdict.satisfied);
     assert!(
-        validity
+        verdict
             .reasons
             .iter()
             .any(|reason| reason.contains("2 records failed or timed out")),
         "{:?}",
-        validity.reasons
+        verdict.reasons
     );
+}
+
+#[test]
+fn a_measurement_that_lost_nothing_is_still_valid_without_objectives() {
+    let subject = healthy("kafkars", 100_000.0, 1_000_000);
+    assert!(subject.validity().valid, "{:?}", subject.validity().reasons);
 }
 
 #[test]
@@ -440,4 +470,171 @@ fn one_subject_is_not_a_comparison() {
         comparison.reasons,
         vec!["a comparison needs at least two subjects that ran".to_owned()]
     );
+}
+
+#[test]
+fn an_adapter_whose_result_reports_a_different_version_than_it_described_is_invalid() {
+    // The shape this exists for: a wrapper whose `describe` pins a version by
+    // hand while the client writes its real one at run time. The described
+    // string is what the experiment id is built from, so a mismatch means the
+    // attempt is filed under a client that did not run — and a suite would
+    // compute a median across two different clients without noticing.
+    let mut document = measurement(100_000.0, 1_000_000);
+    "2.16.1".clone_into(&mut document.adapter_version);
+    let mut subject = subject_with("librdkafka-c", &document);
+    "2.15.0".clone_into(&mut subject.declared_adapter_version);
+
+    let validity = subject.validity();
+
+    assert!(!validity.valid);
+    let reason = validity
+        .reasons
+        .iter()
+        .find(|reason| reason.contains("described itself as version"))
+        .unwrap_or_else(|| panic!("{:?}", validity.reasons));
+    assert!(reason.contains("2.15.0"), "{reason}");
+    assert!(reason.contains("2.16.1"), "{reason}");
+    assert!(!classify(&[subject], &[]).run_valid);
+}
+
+#[test]
+fn a_matching_adapter_version_says_nothing() {
+    // The ordinary case must stay silent, and a subject whose declared version
+    // was never learned must not be accused of disagreeing with itself.
+    let matching = healthy("kafkars", 100_000.0, 1_000_000);
+    assert_eq!(matching.declared_adapter_version, "0.1.0");
+    assert_eq!(
+        matching.evidence.result.as_ref().unwrap().adapter_version,
+        "0.1.0"
+    );
+    assert!(
+        matching.validity().valid,
+        "{:?}",
+        matching.validity().reasons
+    );
+
+    let mut unknown = healthy("kafkars", 100_000.0, 1_000_000);
+    unknown.declared_adapter_version = String::new();
+    assert!(unknown.validity().valid, "{:?}", unknown.validity().reasons);
+}
+
+#[test]
+fn a_hand_edited_classification_is_not_a_readable_one() {
+    // The read side of the same gate the seal applies on the way out. A bundle
+    // whose `classification.json` grants itself claim eligibility, or declares
+    // the run invalid without saying why, is not an answer to "may this be
+    // believed" — and a reader that shrugged and used it would be treating a
+    // hand edit as a verdict.
+    let (results_root, paths) = workspace("classification-edited");
+    let honest = classify(&[healthy("kafkars", 100_000.0, 1_000_000)], &[]);
+    std::fs::write(
+        paths.classification_json(),
+        bench_schema::pretty_bytes(&honest).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        crate::pipeline::read_classification(&paths).is_some_and(|read| read == honest),
+        "an honest classification reads back unchanged"
+    );
+
+    for edit in [
+        |document: &mut bench_schema::Classification| document.claim_eligible = true,
+        |document: &mut bench_schema::Classification| {
+            document.run_valid = false;
+            document.reasons.clear();
+        },
+        |document: &mut bench_schema::Classification| {
+            "kafkars.comparison.v1".clone_into(&mut document.schema);
+        },
+    ] {
+        let mut edited = honest.clone();
+        edit(&mut edited);
+        std::fs::write(
+            paths.classification_json(),
+            bench_schema::pretty_bytes(&edited).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            crate::pipeline::read_classification(&paths).is_none(),
+            "an edited classification must not read as a verdict: {edited:?}"
+        );
+    }
+    std::fs::remove_dir_all(&results_root).unwrap();
+}
+
+/// A measurement whose latency histogram claims a bucket no `u64` can reach.
+///
+/// `8_320` is the first index whose scale is 64: decoding it used to shift a
+/// `u64` by its own width. The document is otherwise a perfectly ordinary
+/// measurement, which is the point — the hostile part is one integer.
+fn measurement_with_an_impossible_bucket() -> ProducerBenchmarkV2 {
+    let mut document = measurement(100_000.0, 1_000_000);
+    document.timing.intended_to_terminal.counts = vec![(8_320, RECORDS)];
+    document
+}
+
+#[test]
+fn a_result_naming_an_impossible_bucket_is_unreadable_rather_than_fatal() {
+    let (results_root, paths) = workspace("read-impossible-bucket");
+    write_adapter_output(
+        &paths,
+        "kafkars",
+        status_document(),
+        &render(&measurement_with_an_impossible_bucket()),
+    );
+    let evidence = read_subject(&paths, "kafkars");
+    assert!(evidence.result_present, "the file is there");
+    assert!(
+        evidence.result.is_none(),
+        "an index above the layout ceiling makes the document unreadable"
+    );
+    assert!(
+        evidence
+            .result_error
+            .as_deref()
+            .is_some_and(|error| error.contains("8320")),
+        "the parse error names the offending bucket: {:?}",
+        evidence.result_error
+    );
+    std::fs::remove_dir_all(&results_root).unwrap();
+}
+
+#[test]
+fn an_impossible_bucket_classifies_and_compares_without_panicking() {
+    // Before the index bound was enforced, this document parsed, and reading a
+    // percentile out of it shifted a `u64` by 64 bits inside `compare`. The
+    // property under test is that a hostile histogram costs the run its
+    // validity, never the control plane its stack.
+    let hostile = subject_with("kafkars", &measurement_with_an_impossible_bucket());
+    let baseline = healthy("librdkafka-c", 100_000.0, 2_000_000);
+    assert_eq!(
+        hostile.evidence.intended_to_terminal_p99_ns(),
+        None,
+        "there is no percentile to read out of a rejected histogram"
+    );
+
+    let validity = hostile.validity();
+    assert!(!validity.valid);
+    assert!(
+        validity
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("is not a readable")),
+        "{:?}",
+        validity.reasons
+    );
+
+    let order = vec!["librdkafka-c".to_owned(), "kafkars".to_owned()];
+    let comparison = compare(&order, &[baseline.clone(), hostile.clone()]);
+    assert!(!comparison.comparable);
+    assert!(comparison.pairs.is_empty());
+    assert!(
+        comparison
+            .reasons
+            .iter()
+            .any(|reason| reason.starts_with("kafkars produced an unreadable result")),
+        "{:?}",
+        comparison.reasons
+    );
+    assert!(!classify(&[baseline, hostile], &[]).run_valid);
 }

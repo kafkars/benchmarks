@@ -102,8 +102,8 @@ pub use experiment::{
     SloSpec, SubjectSpec, TopicPair, is_subject_role, is_topic_charset_safe,
 };
 pub use histogram::{
-    EncodedHistogram, HISTOGRAM_LAYOUT_V1, Histogram, SUB_BUCKET_BITS, SUB_BUCKET_COUNT,
-    bucket_high, bucket_index, bucket_low,
+    EncodedHistogram, HISTOGRAM_LAYOUT_V1, Histogram, MAX_BUCKET_INDEX, SUB_BUCKET_BITS,
+    SUB_BUCKET_COUNT, bucket_high, bucket_index, bucket_low,
 };
 pub use identity::{
     DIGEST_HEX_LENGTH, ExperimentId, SHORT_ID_LENGTH, experiment_id, identity_bytes,

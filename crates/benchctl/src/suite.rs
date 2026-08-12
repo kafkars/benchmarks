@@ -46,6 +46,13 @@
 //! `benchctl run` has for a partial attempt. A failure to *write* the reports is
 //! a different axis and exits `70`, because that is a broken control plane
 //! rather than a disappointing measurement.
+//!
+//! A repetition that could not be sealed at all stops the suite, and its exit
+//! code is the one the process reports — never the verdict over the repetitions
+//! that did seal. The attempts that finished are still summarized, because they
+//! happened and their bundles are real; but a suite asked for five repetitions
+//! that made three and then hit a workspace it could not claim has not answered
+//! the question it was asked, and exiting `0` over the three would say it had.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -158,15 +165,34 @@ pub fn execute(command: &SuiteCommand) -> i32 {
         }
     }
 
-    if let Some(error) = unsealable {
-        eprintln!("benchctl: the suite stopped: {error}");
-        if sealed.is_empty() {
-            return error.exit_code();
-        }
+    // A stop is reported by the process, not only on stderr. The summary below
+    // still runs — the attempts that sealed are honest evidence and reporting
+    // them is right — but its verdict cannot be the exit code, because the
+    // verdict is over fewer repetitions than the operator asked for.
+    let stopped = unsealable.map(|error| {
+        eprintln!(
+            "benchctl: the suite stopped after {} of {} repetitions: {error}",
+            sealed.len(),
+            command.repetitions
+        );
+        error.exit_code()
+    });
+    if sealed.is_empty() {
+        return stopped.unwrap_or(EXIT_INTERNAL);
     }
     let seed = command.common.seed.unwrap_or(inputs.source.payload.seed);
     match summarize(command, &sealed, seed) {
-        Ok(()) => suite_exit_code(&sealed),
+        Ok(()) => stopped.map_or_else(
+            || suite_exit_code(&sealed),
+            |code| {
+                eprintln!(
+                    "benchctl: the reports above cover only the {} attempts that sealed; \
+                     exiting {code} for the repetition that could not",
+                    sealed.len()
+                );
+                code
+            },
+        ),
         Err(error) => {
             eprintln!("benchctl: {error}");
             EXIT_INTERNAL

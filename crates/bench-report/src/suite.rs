@@ -43,8 +43,31 @@
 //! unresolved one, and the gate says so rather than rounding it to a verdict.
 //! Three gates are not about any pair: at least one attempt has to be valid, a
 //! comparison needs [`MINIMUM_PAIRED_REPETITIONS`] valid attempts, and every
-//! subject's goodput and p99 dispersion has to sit inside
+//! compared pair's goodput and p99 *ratio* has to vary by no more than
 //! [`COEFFICIENT_OF_VARIATION_BUDGET`].
+//!
+//! # Which dispersion the budget is about
+//!
+//! [`COEFFICIENT_OF_VARIATION_BUDGET`] is calibrated for the dispersion of the
+//! **paired ratio series** — one ratio per attempt, the same numbers the
+//! bootstrap resamples — because that is what `statistics.mjs` measured it on:
+//! the legacy control plane fed `summarizeRatios` the per-pair
+//! `head/base` ratios and asked `assessStatisticalCredibility` about *those*.
+//!
+//! The distinction is not academic, and it cuts both ways.
+//!
+//! - A machine that drifts — a thermal ramp, a noisy neighbour — moves both
+//!   subjects together. Every subject's raw values are then far outside the
+//!   budget while every ratio is rock steady, and pairing is precisely the
+//!   technique that makes such a run usable. Gating on raw values throws it away.
+//! - Two subjects that move in *opposite* directions produce raw values that
+//!   each look quiet and a ratio that swings twice as far as either. Gating on
+//!   raw values passes the run whose comparison is least trustworthy.
+//!
+//! The per-subject raw coefficients are still reported, and are still worth
+//! reading — they are how a reader tells "the machine was noisy" from "the
+//! subjects disagreed". They are informational rows in the dispersion table,
+//! named after the subject; the gated rows are named `numerator/denominator`.
 //!
 //! `claim_eligible` is false, always, for every summary this milestone can
 //! produce.
@@ -370,10 +393,14 @@ pub fn summarize_suite_report(
         );
     }
     let medians = subject_medians(&subjects, &valid);
-    let dispersion = subject_dispersion(&subjects, &valid);
     let comparisons = comparison_pairs(&subjects);
+    let pair_dispersion = pair_dispersion(&comparisons, &valid);
+    // Informational rows first, gated rows after, so the table reads from
+    // "what each subject did" to "what the comparison did".
+    let mut dispersion = subject_dispersion(&subjects, &valid);
+    dispersion.extend(pair_dispersion.iter().cloned());
     let pairs = paired_ratios(&comparisons, &medians, &valid, options)?;
-    let gates = gates(&comparisons, &pairs, &dispersion, &valid, options);
+    let gates = gates(&comparisons, &pairs, &pair_dispersion, &valid, options);
     let economics = subject_economics(&subjects, &loaded, &attempts, &mut notes);
 
     let repetitions = u32::try_from(bundle_roots.len()).unwrap_or(u32::MAX);
@@ -686,7 +713,73 @@ fn round_to_u64(value: f64) -> u64 {
     }
 }
 
+/// How a paired ratio series is named in the dispersion table.
+///
+/// The slash is the label: a row named `head/base` is a ratio series, a row
+/// named `head` is that subject's own values. Subject names cannot contain a
+/// slash, so the two can never be confused.
+fn ratio_label(comparison: &Comparison) -> String {
+    format!("{}/{}", comparison.numerator, comparison.denominator)
+}
+
+/// One comparison's per-attempt ratios for one metric, in attempt order.
+///
+/// The same series [`paired_ratios`] hands the bootstrap: an attempt where
+/// either subject is missing contributes nothing, because a ratio needs both
+/// halves measured under the same conditions. A denominator of zero produces a
+/// non-finite ratio, which is deliberately *kept* rather than filtered — it
+/// makes the series unsummarizable, and an unsummarizable series fails the gate
+/// instead of quietly shortening it.
+fn ratio_series(comparison: &Comparison, metric: SuiteMetric, valid: &[&SuiteAttempt]) -> Vec<f64> {
+    valid
+        .iter()
+        .filter_map(|attempt| {
+            let observed = |name: &str| {
+                attempt
+                    .subjects
+                    .iter()
+                    .find(|entry| entry.name == name)
+                    .and_then(|entry| metric.observed(entry))
+            };
+            match (
+                observed(&comparison.numerator),
+                observed(&comparison.denominator),
+            ) {
+                (Some(numerator), Some(denominator)) => Some(numerator / denominator),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Per-pair, per-metric dispersion of the ratio series across valid attempts.
+///
+/// These are the rows the budget gate reads. See the module contract for why
+/// the budget is about ratios rather than about either subject's raw values.
+fn pair_dispersion(comparisons: &[Comparison], valid: &[&SuiteAttempt]) -> Vec<SubjectDispersion> {
+    let mut dispersion = Vec::new();
+    for comparison in comparisons {
+        for metric in SuiteMetric::ALL {
+            let ratios = ratio_series(comparison, metric, valid);
+            if ratios.is_empty() {
+                continue;
+            }
+            dispersion.push(SubjectDispersion {
+                name: ratio_label(comparison),
+                metric: metric.field().to_owned(),
+                coefficient_of_variation: summarize_positive_values(&ratios)
+                    .ok()
+                    .and_then(|summary| summary.coefficient_of_variation),
+            });
+        }
+    }
+    dispersion
+}
+
 /// Per-subject, per-metric dispersion across the valid attempts.
+///
+/// Informational: these rows say whether the machine was steady, which is a
+/// different question from whether the comparison was. Nothing gates on them.
 fn subject_dispersion(
     subjects: &[SubjectIdentity],
     valid: &[&SuiteAttempt],
@@ -852,7 +945,7 @@ pub fn metric_of_field(field: &str) -> Option<SuiteMetric> {
 fn gates(
     comparisons: &[Comparison],
     pairs: &[PairedRatio],
-    dispersion: &[SubjectDispersion],
+    pair_dispersion: &[SubjectDispersion],
     valid: &[&SuiteAttempt],
     options: &SuiteOptions,
 ) -> Vec<GateOutcome> {
@@ -873,7 +966,10 @@ fn gates(
         },
     ];
 
-    let noisy: Vec<String> = dispersion
+    // Goodput and p99 for every comparison: the series that must exist before
+    // the budget can say anything.
+    let expected_series = 2 * comparisons.len();
+    let gated: Vec<&SubjectDispersion> = pair_dispersion
         .iter()
         .filter(|entry| {
             matches!(
@@ -881,22 +977,44 @@ fn gates(
                 Some(SuiteMetric::Goodput | SuiteMetric::P99Latency)
             )
         })
+        .collect();
+    let noisy: Vec<String> = gated
+        .iter()
         .filter(|entry| {
             !entry
                 .coefficient_of_variation
                 .is_some_and(|value| value <= COEFFICIENT_OF_VARIATION_BUDGET)
         })
-        .map(|entry| format!("{} {}", entry.name, entry.metric))
+        .map(|entry| {
+            entry.coefficient_of_variation.map_or_else(
+                || format!("{} {} (undefined)", entry.name, entry.metric),
+                |value| format!("{} {} ({value:.4})", entry.name, entry.metric),
+            )
+        })
         .collect();
     gates.push(GateOutcome {
         name: "dispersion-within-budget".to_owned(),
         description: format!(
-            "every subject's goodput and p99 must vary by no more than \
-             {COEFFICIENT_OF_VARIATION_BUDGET:.2} of its mean"
+            "every compared pair's goodput and p99 ratio must vary by no more than \
+             {COEFFICIENT_OF_VARIATION_BUDGET:.2} of its mean, over the same per-attempt \
+             ratios the interval is drawn from"
         ),
-        passed: noisy.is_empty(),
-        detail: if noisy.is_empty() {
-            "every gated dispersion is inside the budget".to_owned()
+        // A suite with no ratio series to judge does not pass this gate by
+        // having nothing to fail. One subject, or no attempt where both subjects
+        // reported, means the dispersion the budget is about was never measured,
+        // and "not measured" is not "inside the budget".
+        passed: expected_series > 0 && gated.len() == expected_series && noisy.is_empty(),
+        detail: if expected_series == 0 {
+            "there is no compared pair, so the dispersion this budget is about was never \
+             measured"
+                .to_owned()
+        } else if gated.len() != expected_series {
+            format!(
+                "{} of the {expected_series} gated ratio series could be formed at all",
+                gated.len()
+            )
+        } else if noisy.is_empty() {
+            "every gated ratio dispersion is inside the budget".to_owned()
         } else {
             format!("outside the budget or undefined: {}", noisy.join(", "))
         },

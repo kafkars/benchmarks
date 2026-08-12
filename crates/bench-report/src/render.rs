@@ -333,21 +333,60 @@ fn write_markdown_gates(out: &mut String, summary: &SuiteSummary) {
 }
 
 /// The dispersion table.
+///
+/// Two kinds of row, and the difference decides what a reader should conclude.
+/// A row named `head/base` is the per-attempt ratio series, which is what the
+/// budget gate judges; a row named after a single subject is that subject's own
+/// values, which nothing gates on. Both are here because together they separate
+/// "the machine drifted" from "the subjects disagreed", and a table that showed
+/// only the gated rows would leave a reader unable to tell those apart.
 fn write_markdown_dispersion(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(out, "\n## Dispersion\n");
-    let _ = writeln!(out, "| Subject | Metric | Coefficient of variation |");
-    let _ = writeln!(out, "| --- | --- | ---: |");
+    let _ = writeln!(
+        out,
+        "| Series | Metric | Coefficient of variation | Gated |"
+    );
+    let _ = writeln!(out, "| --- | --- | ---: | :---: |");
     for entry in &summary.dispersion {
         let _ = writeln!(
             out,
-            "| {} | {} | {} |",
+            "| {} | {} | {} | {} |",
             entry.name,
             entry.metric,
             entry
                 .coefficient_of_variation
-                .map_or_else(|| NOT_REPORTED.to_owned(), format_ratio)
+                .map_or_else(|| NOT_REPORTED.to_owned(), format_ratio),
+            dispersion_role(entry)
         );
     }
+    let _ = writeln!(
+        out,
+        "\nRatio series are gated against the noise budget. Per-subject rows are \
+         informational: they say whether the machine was steady, which is a different \
+         question from whether the comparison was."
+    );
+}
+
+/// Whether a dispersion row is judged or merely reported.
+///
+/// Read off the name rather than carried in the document: a series named
+/// `numerator/denominator` is a ratio, and a subject name cannot contain a
+/// slash. That keeps `kafkars.suite-summary.v1` unchanged while still letting a
+/// reader see which rows the gate acted on.
+fn dispersion_role(entry: &bench_schema::SubjectDispersion) -> &'static str {
+    if entry.name.contains('/') && is_gated_metric(&entry.metric) {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+/// Whether the budget gate covers this metric.
+fn is_gated_metric(field: &str) -> bool {
+    matches!(
+        crate::suite::metric_of_field(field),
+        Some(SuiteMetric::Goodput | SuiteMetric::P99Latency)
+    )
 }
 
 /// The attempt roster, valid and invalid alike.
@@ -587,25 +626,32 @@ fn html_gates(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(out, "</tbody></table>");
 }
 
-/// The dispersion table.
+/// The dispersion table. See [`write_markdown_dispersion`] for the two kinds of
+/// row and why both are shown.
 fn html_dispersion(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(
         out,
-        "<h2>Dispersion</h2>\n<table><thead><tr><th>Subject</th><th>Metric</th>\
-         <th class=\"n\">Coefficient of variation</th></tr></thead><tbody>"
+        "<h2>Dispersion</h2>\n<table><thead><tr><th>Series</th><th>Metric</th>\
+         <th class=\"n\">Coefficient of variation</th><th>Gated</th></tr></thead><tbody>"
     );
     for entry in &summary.dispersion {
         let _ = writeln!(
             out,
-            "<tr><td>{}</td><td>{}</td><td class=\"n\">{}</td></tr>",
+            "<tr><td>{}</td><td>{}</td><td class=\"n\">{}</td><td>{}</td></tr>",
             escape(&entry.name),
             escape(&entry.metric),
             entry
                 .coefficient_of_variation
-                .map_or_else(|| NOT_REPORTED.to_owned(), format_ratio)
+                .map_or_else(|| NOT_REPORTED.to_owned(), format_ratio),
+            dispersion_role(entry)
         );
     }
-    let _ = writeln!(out, "</tbody></table>");
+    let _ = writeln!(
+        out,
+        "</tbody></table>\n<p>Ratio series are gated against the noise budget. \
+         Per-subject rows are informational: they say whether the machine was steady, \
+         which is a different question from whether the comparison was.</p>"
+    );
 }
 
 /// The request economics table, or the sentence that explains its absence.

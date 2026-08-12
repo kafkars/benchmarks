@@ -16,11 +16,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bench_schema::{BudgetSpec, ExecutionStatus, PhaseOutcome};
+use benchctl::CtlErrorKind;
 use benchctl::seal::{run_attempt, seal_failure};
 
 use common::{
-    assert_bundle_is_self_consistent, assert_process_is_gone, assert_system_checksum_check_passes,
-    cleanup, experiment, phase_names, read_classification, read_status, request, tools, workspace,
+    SOURCE_TOML, assert_bundle_is_self_consistent, assert_process_is_gone,
+    assert_system_checksum_check_passes, cleanup, experiment, phase_names, read_classification,
+    read_status, request, tools, workspace,
 };
 
 /// Waits for the fixture to write its process id, then kills it hard.
@@ -208,5 +210,94 @@ fn a_failure_before_the_attempt_seals_the_source_and_the_reason() {
     );
     assert_bundle_is_self_consistent(&paths);
     assert_system_checksum_check_passes(&paths);
+    cleanup(&results_root);
+}
+
+/// Makes `path` unreadable, reporting whether the operating system agreed.
+///
+/// Running as root defeats mode bits, so the caller skips rather than fails:
+/// asserting that a privileged process cannot read a file would be asserting
+/// something untrue about the machine.
+fn make_unreadable(path: &std::path::Path) -> bool {
+    let unreadable = std::process::Command::new("chmod")
+        .args(["000", &path.display().to_string()])
+        .status()
+        .is_ok_and(|status| status.success());
+    unreadable && std::fs::read(path).is_err()
+}
+
+#[test]
+fn a_seal_that_fails_late_keeps_the_evidence_it_had_already_written() {
+    let (results_root, paths) = workspace("seal-fails-late");
+    // The checksum walk is the last thing a seal does, and it opens every file
+    // in the bundle. A file it cannot open fails the seal *after* `status.json`,
+    // `classification.json`, and `comparison.json` are already on disk — which
+    // is the state the recovery path used to overwrite with a stub.
+    let unreadable = paths.root().join("operator-notes.txt");
+    std::fs::write(&unreadable, b"a file the seal cannot read\n").unwrap();
+    if !make_unreadable(&unreadable) {
+        eprintln!("skipping: this process can read a chmod-000 file");
+        cleanup(&results_root);
+        return;
+    }
+
+    let resolved = experiment(&[("kafkars", "ok"), ("librdkafka-c", "ok")]);
+    let error = run_attempt(request(&paths, resolved, tools("ok"))).unwrap_err();
+    assert_eq!(error.kind(), CtlErrorKind::Seal, "{error}");
+    assert_eq!(
+        error.exit_code(),
+        74,
+        "a bundle that could not be written has its own exit code"
+    );
+
+    // What the pipeline does next, verbatim: report the failure through the
+    // pre-attempt sealer. It must not touch the status already there.
+    let rich = read_status(&paths);
+    assert_eq!(
+        rich.subjects.len(),
+        2,
+        "the seal got as far as the subjects"
+    );
+    let preserved = seal_failure(
+        &paths,
+        Some(SOURCE_TOML),
+        ExecutionStatus::Partial,
+        &error.to_string(),
+    )
+    .unwrap();
+
+    let after = read_status(&paths);
+    assert_eq!(after, rich, "the richer status.json survives untouched");
+    assert_eq!(after.subjects.len(), 2);
+    assert!(!after.phases.is_empty());
+    assert_eq!(
+        preserved, rich.execution_status,
+        "the preserved status is the one the bundle records, not an invention"
+    );
+    assert!(
+        paths.classification_json().is_file() && paths.comparison_json().is_file(),
+        "every document written before the failure is still there"
+    );
+
+    // The terminal files could not be produced — the unreadable file is still
+    // unreadable — so the bundle says so in the bundle, not only on stderr.
+    let note = std::fs::read_to_string(paths.seal_failure_txt()).unwrap();
+    assert!(note.contains("sealing did not finish"), "{note}");
+    assert!(note.contains("checksum") || note.contains("open"), "{note}");
+
+    // Once the obstruction is gone the same call completes the bundle, which is
+    // the property that makes this a pause rather than a dead end.
+    std::fs::remove_file(&unreadable).unwrap();
+    seal_failure(
+        &paths,
+        Some(SOURCE_TOML),
+        ExecutionStatus::Partial,
+        "retried",
+    )
+    .unwrap();
+    assert!(paths.checksums_txt().is_file(), "checksums.txt completed");
+    assert!(paths.bundle_json().is_file(), "bundle.json completed");
+    assert_eq!(read_status(&paths), rich, "still not overwritten");
+    assert_bundle_is_self_consistent(&paths);
     cleanup(&results_root);
 }

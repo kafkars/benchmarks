@@ -12,7 +12,12 @@
 //! 2. **A caught panic.** The whole supervision body runs inside
 //!    [`catch_unwind`](std::panic::catch_unwind), so a bug in the control plane
 //!    becomes a `crashed` bundle carrying everything recorded up to the panic,
-//!    rather than a stack trace and an empty directory.
+//!    rather than a stack trace and an empty directory. Deriving the verdict —
+//!    classification, comparison, and the percentiles they read out of the
+//!    subjects' own histograms — runs inside that boundary too, because that
+//!    derivation is the first code in the attempt to *interpret* bytes an
+//!    adapter wrote. A panic there is evidence-triggered, and evidence-triggered
+//!    failures are exactly the ones that must still seal.
 //! 3. **A drop guard.** A last-resort guard is armed on entry and disarmed only by a
 //!    completed seal. If the process unwinds past the funnel for any reason, its
 //!    `Drop` writes a minimal `status.json` and a checksum manifest, best
@@ -38,6 +43,14 @@
 //! `status.json` is written first so that a seal which dies halfway still says
 //! why. `checksums.txt` is written after every other document because it covers
 //! them, and `bundle.json` last because it contains the checksum file's digest.
+//!
+//! That order has a consequence the failure paths must respect: a seal can fail
+//! *after* it has already written a rich `status.json`. [`seal_failure`], which
+//! the pipeline calls when anything downstream reports a failure, therefore
+//! never overwrites a `status.json` that already exists. Replacing a status
+//! carrying every subject and phase with a two-line stub would destroy the
+//! evidence in the name of recording that something went wrong — the same
+//! mistake the last-resort guard already avoids with its `if !exists` check.
 
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
@@ -126,10 +139,46 @@ pub fn run_attempt(request: AttemptRequest) -> CtlResult<ExecutionStatus> {
         state.interrupted = true;
         state.degrade(ExecutionStatus::Partial, "the run was interrupted");
     }
-    let plan = state.into_plan(&request);
+    let plan = derive_plan(&mut state, &request, AttemptState::plan);
     let sealed = seal(&paths, &plan)?;
     guard.disarm();
     Ok(sealed)
+}
+
+/// Runs `derive` inside the panic boundary, falling back to a bundle that says
+/// the verdict could not be derived.
+///
+/// [`AttemptState::plan`] — the `derive` every caller but the tests passes — is
+/// where the attempt stops recording facts and starts interpreting them: it
+/// decodes each subject's histograms to take a percentile, which makes it the
+/// first place a document an adapter wrote reaches code that could give up on
+/// it. Running it outside the panic boundary would send an evidence-triggered
+/// panic all the way out of [`run_attempt`], past the funnel, into a stub.
+/// Running it inside means the same panic seals `crashed` with every subject
+/// record the attempt collected still in the bundle.
+///
+/// The derivation arrives as a parameter rather than being called directly so
+/// that the boundary can be tested for the property it exists for. A panic here
+/// is by definition a bug nobody has written yet, and a guard nobody can
+/// exercise is a guard nobody can trust.
+fn derive_plan(
+    state: &mut AttemptState,
+    request: &AttemptRequest,
+    derive: fn(&AttemptState, &AttemptRequest) -> SealPlan,
+) -> SealPlan {
+    match std::panic::catch_unwind(AssertUnwindSafe(|| derive(state, request))) {
+        Ok(plan) => plan,
+        Err(payload) => {
+            let reason = describe_panic(&*payload);
+            eprintln!("benchctl: deriving the verdict panicked: {reason}");
+            state.record("classify", PhaseOutcome::Failed, Some(reason.clone()));
+            state.degrade(
+                ExecutionStatus::Crashed,
+                format!("deriving the verdict panicked: {reason}"),
+            );
+            state.undecided_plan(request, &reason)
+        }
+    }
 }
 
 /// Seals a bundle for an attempt that failed before it could run.
@@ -141,15 +190,31 @@ pub fn run_attempt(request: AttemptRequest) -> CtlResult<ExecutionStatus> {
 /// because "the file we could not use" is the most useful thing such a bundle
 /// can carry.
 ///
+/// # When the bundle is already sealed
+///
+/// The pipeline also calls this when a failure is reported *after* an attempt
+/// ran, including a seal that died partway through its own write order. In that
+/// case `status.json` already exists and already says more than this function
+/// could: the stub below carries no subjects and one invented phase. It is
+/// therefore kept, the reason is recorded beside it in
+/// [`seal_failure_txt`](AttemptPaths::seal_failure_txt), and the terminal files
+/// are completed over whatever the bundle holds. Overwriting richer evidence
+/// with poorer evidence is not a fallback, it is a loss.
+///
 /// # Errors
 ///
-/// As for [`run_attempt`]: only a failure to write the bundle.
+/// As for [`run_attempt`]: only a failure to write the bundle. The
+/// already-sealed path never errors — there is a bundle either way, and the
+/// failure that brought us here is the news.
 pub fn seal_failure(
     paths: &AttemptPaths,
     source_toml: Option<&str>,
     status: ExecutionStatus,
     failure_reason: &str,
 ) -> CtlResult<ExecutionStatus> {
+    if paths.status_json().exists() {
+        return Ok(preserve_sealed_evidence(paths, status, failure_reason));
+    }
     let mut guard = SealOnDrop::arm(paths);
     if let Some(text) = source_toml {
         if let Err(error) = std::fs::write(paths.experiment_source_toml(), text.as_bytes()) {
@@ -180,6 +245,74 @@ pub fn seal_failure(
     Ok(sealed)
 }
 
+/// Keeps an already-sealed `status.json` and finishes the bundle around it.
+///
+/// Returns the execution status the bundle itself records, read back from disk
+/// rather than remembered, because the document is the evidence. `fallback` is
+/// used only when that document cannot be parsed — at which point the caller's
+/// idea of how the attempt went is the best answer available.
+///
+/// Nothing already in the bundle is rewritten, including the sealed scenario: a
+/// bundle that got this far sealed its own inputs, and rewriting a covered file
+/// would put it at odds with a `checksums.txt` that may already exist. Only the
+/// note is new, and it is written *before* the terminal files so that the
+/// manifest covers it like everything else.
+fn preserve_sealed_evidence(
+    paths: &AttemptPaths,
+    fallback: ExecutionStatus,
+    failure_reason: &str,
+) -> ExecutionStatus {
+    eprintln!(
+        "benchctl: {} is already sealed; keeping its status and recording the later failure \
+         beside it",
+        paths.root().display()
+    );
+    let note = format!(
+        "sealing did not finish at {}\n{failure_reason}\n",
+        utc_rfc3339_millis(SystemTime::now())
+    );
+    if let Err(error) = std::fs::write(paths.seal_failure_txt(), note.as_bytes()) {
+        eprintln!("benchctl: could not record the seal failure in the bundle: {error}");
+    }
+    write_missing_terminal_files(paths);
+    crate::pipeline::read_status(paths).map_or(fallback, |status| status.execution_status)
+}
+
+/// Writes `checksums.txt` and `bundle.json` when they are absent, best effort.
+///
+/// Shared by the last-resort guard and by [`seal_failure`]'s preservation path,
+/// which want exactly the same thing: complete the bundle over whatever is
+/// there, and never disturb terminal files a successful seal already wrote.
+/// Every error is reported and swallowed — this only runs where something else
+/// has already failed, and that failure is the one worth exiting on.
+fn write_missing_terminal_files(paths: &AttemptPaths) {
+    if paths.checksums_txt().exists() && paths.bundle_json().exists() {
+        return;
+    }
+    let manifest = match checksum_bundle(paths.root()) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            eprintln!("benchctl: the bundle could not be checksummed: {error}");
+            return;
+        }
+    };
+    if let Err(error) = std::fs::write(paths.checksums_txt(), manifest.text.as_bytes()) {
+        eprintln!("benchctl: the bundle's checksums could not be written: {error}");
+        return;
+    }
+    let bundle =
+        BundleManifest::from_checksums_bytes(manifest.text.as_bytes(), manifest.total_bytes);
+    match bundle.as_ref().map(bench_schema::pretty_bytes) {
+        Ok(Ok(bytes)) => {
+            if let Err(error) = std::fs::write(paths.bundle_json(), &bytes) {
+                eprintln!("benchctl: the bundle manifest could not be written: {error}");
+            }
+        }
+        Ok(Err(error)) => eprintln!("benchctl: the bundle manifest could not be rendered: {error}"),
+        Err(error) => eprintln!("benchctl: the bundle manifest could not be built: {error}"),
+    }
+}
+
 /// The documents one seal writes, in the order it writes them.
 #[derive(Debug)]
 struct SealPlan {
@@ -194,6 +327,14 @@ struct SealPlan {
 fn seal(paths: &AttemptPaths, plan: &SealPlan) -> CtlResult<ExecutionStatus> {
     write_rendered(&paths.status_json(), pretty_bytes(&plan.status))?;
     if let Some(classification) = &plan.classification {
+        // The verdict document is checked against its own schema before it is
+        // written. Everything that builds one here satisfies the invariants by
+        // construction, so this can only fire on a bug in this crate — and a bug
+        // that seals a self-contradicting verdict is exactly the one worth
+        // catching at the moment it would become evidence.
+        classification
+            .validate()
+            .map_err(|error| seal_error(format!("the classification is malformed: {error}")))?;
         write_rendered(&paths.classification_json(), pretty_bytes(classification))?;
     }
     if let Some(comparison) = &plan.comparison {
@@ -301,31 +442,73 @@ impl AttemptState {
         self.invalidating.push(reason.into());
     }
 
-    /// Turns the accumulated state into the documents to seal.
-    fn into_plan(self, request: &AttemptRequest) -> SealPlan {
-        let order = execution_order(&request.resolved);
-        let status = RunStatus {
+    /// The run status this state describes: pure record-keeping, nothing
+    /// derived from a subject's own bytes, so nothing here can be made to fail
+    /// by the evidence.
+    fn run_status(&self, request: &AttemptRequest) -> RunStatus {
+        RunStatus {
             schema: RunStatus::SCHEMA.to_owned(),
             experiment_id: bench_schema::experiment_id(&request.resolved).ok(),
             attempt_id: attempt_id_of(&request.paths),
             execution_status: self.status,
-            failure_reason: self.failure_reason,
+            failure_reason: self.failure_reason.clone(),
             interrupted: self.interrupted,
             subjects: self
                 .subjects
                 .iter()
                 .map(SubjectOutcome::execution_record)
                 .collect(),
-            phases: self.phases,
-        };
+            phases: self.phases.clone(),
+        }
+    }
+
+    /// Turns the accumulated state into the documents to seal.
+    ///
+    /// Borrows rather than consumes so that [`derive_plan`] still holds the
+    /// state if this panics, and can seal the part of it that never depended on
+    /// reading a subject's evidence.
+    fn plan(&self, request: &AttemptRequest) -> SealPlan {
+        let order = execution_order(&request.resolved);
         SealPlan {
+            status: self.run_status(request),
             classification: Some(results::classify(&self.subjects, &self.invalidating)),
             comparison: Some(results::compare(&order, &self.subjects)),
             execution_order: Some(ExecutionOrder::new(
                 order,
                 "resolved-experiment-runtime-binding",
             )),
-            status,
+        }
+    }
+
+    /// The plan for an attempt whose verdict could not be derived at all.
+    ///
+    /// The status is the full record — every subject, every phase — because
+    /// that is precisely the evidence a reader needs when the derivation over it
+    /// is the thing that broke. The classification names the panic and refuses
+    /// the run; the comparison is absent, because computing it is what failed,
+    /// and a comparison invented here would be the fabrication the whole
+    /// always-seal design exists to prevent.
+    fn undecided_plan(&self, request: &AttemptRequest, reason: &str) -> SealPlan {
+        SealPlan {
+            status: self.run_status(request),
+            classification: Some(Classification {
+                schema: Classification::SCHEMA.to_owned(),
+                run_valid: false,
+                claim_eligible: false,
+                subjects: Vec::new(),
+                deferred_checks: results::DEFERRED_CHECKS
+                    .iter()
+                    .map(|check| (*check).to_owned())
+                    .collect(),
+                reasons: vec![format!(
+                    "the attempt's verdict could not be derived: {reason}"
+                )],
+            }),
+            comparison: None,
+            execution_order: Some(ExecutionOrder::new(
+                execution_order(&request.resolved),
+                "resolved-experiment-runtime-binding",
+            )),
         }
     }
 }
@@ -534,9 +717,18 @@ fn run_subject(
 ) -> SubjectOutcome {
     let mut outcome = SubjectOutcome::skipped(name);
     // The objectives travel with the subject because the validity gate reads
-    // them: an experiment that declares any objective is one where a lost
-    // record is a different run, not a slower one.
+    // them.
     outcome.slo = request.resolved.slo;
+    // So does the version the adapter claimed at probe time, because the gate
+    // compares it against the one the client reports at run time. Taken from the
+    // resolved experiment rather than the subjects lock: the resolved document
+    // is what the experiment id is computed over, so this is exactly the string
+    // the identity was built from.
+    if let Some(subject) = request.resolved.subject(name) {
+        outcome
+            .declared_adapter_version
+            .clone_from(&subject.adapter_version);
+    }
     let phase = format!("subject:{name}:run");
     if interrupt.is_set() {
         state.record(
@@ -631,10 +823,17 @@ fn record_subject_exit(state: &mut AttemptState, phase: &str, run: SupervisedRun
     let status = if run.exit.timed_out {
         ExecutionStatus::TimedOut
     } else if run.interrupted {
+        // Order matters here. A subject that died on `SIGINT` because the
+        // terminal signalled the whole process group arrives with a signal set
+        // *and* the interrupt flag set, and it is an interruption, not a crash.
+        // The supervisor is the one that decides which of those it was, by
+        // consulting its latch after the child is reaped; this branch only has
+        // to be asked first.
         state.interrupted = true;
         ExecutionStatus::Partial
     } else if run.exit.signal.is_some() {
-        // A signal nobody in this process sent is a crash, not a policy.
+        // A signal with no interrupt latched is a signal nobody in this process
+        // asked for: a crash, not a policy.
         ExecutionStatus::Crashed
     } else {
         ExecutionStatus::Partial
@@ -782,30 +981,12 @@ impl Drop for SealOnDrop {
                 }
             }
         }
-        if self.paths.checksums_txt().exists() {
-            return;
-        }
-        match checksum_bundle(self.paths.root()) {
-            Ok(manifest) => {
-                if let Err(error) =
-                    std::fs::write(self.paths.checksums_txt(), manifest.text.as_bytes())
-                {
-                    eprintln!("benchctl: the last-resort seal could not write checksums: {error}");
-                    return;
-                }
-                let bundle = BundleManifest::from_checksums_bytes(
-                    manifest.text.as_bytes(),
-                    manifest.total_bytes,
-                );
-                if let Ok(bundle) = bundle {
-                    if let Ok(bytes) = bench_schema::pretty_bytes(&bundle) {
-                        drop(std::fs::write(self.paths.bundle_json(), &bytes));
-                    }
-                }
-            }
-            Err(error) => {
-                eprintln!("benchctl: the last-resort seal could not checksum the bundle: {error}");
-            }
-        }
+        write_missing_terminal_files(&self.paths);
     }
 }
+
+/// The panic boundary around the verdict derivation, tested from inside the
+/// module because the fallback it produces is private by design.
+#[cfg(test)]
+#[path = "seal_boundary_test.rs"]
+mod seal_boundary_test;

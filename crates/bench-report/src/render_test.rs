@@ -264,3 +264,26 @@ fn a_missing_bundle_is_an_error_not_an_empty_report() {
 
     assert_eq!(error.kind(), crate::ReportErrorKind::Io);
 }
+
+/// Rewrites both goldens from the fixture above.
+///
+/// Ignored, and never run by the gate: regenerating a golden is a decision, not
+/// a build step. When a deliberate change to the renderers or to the summary
+/// makes the two assertions above fail, run
+///
+/// ```text
+/// cargo test -p bench-report regenerate_the_goldens -- --ignored
+/// ```
+///
+/// and then *read the diff*. That diff is the review — it is the only place a
+/// reader will see that a number they were shown last release is a different
+/// number now. A regeneration whose diff nobody looked at is worse than no
+/// golden at all, because it launders the change through a green build.
+#[test]
+#[ignore = "regeneration is a deliberate act; run it explicitly and review the diff"]
+fn regenerate_the_goldens() {
+    let report = golden_report("render-golden-regen");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("golden");
+    std::fs::write(root.join("suite.md"), report.markdown()).unwrap();
+    std::fs::write(root.join("suite.html"), report.html()).unwrap();
+}

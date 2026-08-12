@@ -19,6 +19,23 @@
 //! syscall per subject per 25 ms — nothing next to a benchmark — and buys a
 //! control plane that can always stop, always kill, and always seal.
 //!
+//! # Why the latch is read twice
+//!
+//! Ctrl-C at a terminal goes to the whole foreground process group, not to this
+//! process alone. The child therefore dies of the same `SIGINT` that raised this
+//! process's latch, and it usually dies first: the very next
+//! [`try_wait`](std::process::Child::try_wait) reaps it and breaks the poll loop
+//! before the loop ever looks at the latch. Reading the latch only inside the
+//! loop makes that ordering look like a child that died on a signal nobody sent
+//! — which is the definition of a crash — so a plain Ctrl-C would seal a
+//! `crashed` bundle.
+//!
+//! The latch is consulted once more after the loop, whichever branch ended it.
+//! A latch that is set means this process was asked to stop, and every ending
+//! that coincides with it is part of stopping. A signal death with the latch
+//! *unset* is still a crash, which is the distinction that matters: it separates
+//! "the operator stopped the run" from "something killed the subject".
+//!
 //! # Why the blocking reap matters
 //!
 //! Killing a child does not mean it is gone; it means a signal was delivered.
@@ -39,6 +56,10 @@ use crate::interrupt::InterruptFlag;
 
 /// How long the supervisor sleeps between `try_wait` polls.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(25);
+
+/// The signal [`kill_and_reap`] sends, and therefore the only signal an ending
+/// this module *caused* can report.
+const SIGKILL: i32 = 9;
 
 /// Where one of a child's output streams goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,9 +142,11 @@ impl ToolSpec {
 pub struct SupervisedRun {
     /// The exit, in the vocabulary the run status records.
     pub exit: ProcessExit,
-    /// Whether the supervisor killed the child because an interrupt was
-    /// latched. Distinguishing this from a signal the child received on its own
-    /// is what keeps a Ctrl-C from being reported as a crash.
+    /// Whether this ending is attributable to an interrupt: either the
+    /// supervisor killed the child because the latch was raised, or the child
+    /// ended while it was raised. Both are the operator stopping the run, and
+    /// distinguishing them from a signal nobody asked for is what keeps a
+    /// Ctrl-C from being reported as a crash.
     pub interrupted: bool,
     /// The child's process id, kept for evidence and for tests that need to
     /// signal it from outside.
@@ -147,7 +170,15 @@ impl SupervisedRun {
             );
         }
         if self.interrupted {
-            return "killed because the run was interrupted".to_owned();
+            // The supervisor's own kill is always `SIGKILL`. Any other signal
+            // means the child took the interrupt directly, which is worth
+            // saying: the phase record should not claim a kill nobody made.
+            return match self.exit.signal {
+                Some(signal) if signal != SIGKILL => {
+                    format!("died on signal {signal} while the run was interrupted")
+                }
+                _ => "killed because the run was interrupted".to_owned(),
+            };
         }
         match (self.exit.exit_code, self.exit.signal) {
             (Some(code), _) => format!("exited with code {code}"),
@@ -203,6 +234,11 @@ pub fn run(spec: &ToolSpec, interrupt: &InterruptFlag) -> CtlResult<SupervisedRu
         std::thread::sleep(POLL_INTERVAL);
     };
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    // The second read of the latch, for the ordering the loop cannot see: the
+    // child died of the interrupt the terminal sent the whole process group, and
+    // `try_wait` reaped it before the loop got as far as the latch check above.
+    // Without this the ending is indistinguishable from a signal nobody sent.
+    let interrupted = interrupted || interrupt.is_set();
     Ok(SupervisedRun {
         exit: ProcessExit {
             exit_code: status.code(),

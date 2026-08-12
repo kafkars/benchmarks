@@ -30,6 +30,18 @@
 //! `[[index, count], …]` with strictly ascending indexes and no zero counts.
 //! Compact serde output of this struct is the byte-exact reference encoding
 //! the C implementation must reproduce.
+//!
+//! # The index range is finite, and validation enforces it
+//!
+//! `u64` is a bounded domain, so the layout is too: the largest index any value
+//! can land in is [`MAX_BUCKET_INDEX`], which is `bucket_index(u64::MAX)`.
+//! Indexes above it are not "rare"; they are impossible to record and can only
+//! arrive from a document somebody wrote by hand. Decoding one would produce
+//! bounds no value could have had, and far enough out it would shift by more
+//! than a `u64` has bits. [`EncodedHistogram::validate`] therefore rejects any
+//! index above [`MAX_BUCKET_INDEX`], and [`bucket_low`]/[`bucket_high`] are
+//! total over every `u32` regardless, so that a caller who skipped validation
+//! still cannot be made to panic by evidence it was handed.
 
 use std::collections::BTreeMap;
 
@@ -46,6 +58,16 @@ pub const SUB_BUCKET_BITS: u32 = 7;
 /// Linear sub-buckets per power of two.
 pub const SUB_BUCKET_COUNT: u64 = 1 << SUB_BUCKET_BITS;
 
+/// The largest index this layout can produce, which is `bucket_index(u64::MAX)`.
+///
+/// Derived from the layout rather than written down as a number: the widest
+/// value has a bit length of 64, so its scale is `64 - 1 - SUB_BUCKET_BITS`, its
+/// bucket number is one more than that, and its sub-bucket is the last of
+/// [`SUB_BUCKET_COUNT`]. A test pins this expression against `bucket_index`
+/// itself, so the two cannot drift.
+pub const MAX_BUCKET_INDEX: u32 =
+    ((64 - SUB_BUCKET_BITS) << SUB_BUCKET_BITS) | ((1 << SUB_BUCKET_BITS) - 1);
+
 /// Returns the bucket index for a value.
 #[must_use]
 pub fn bucket_index(value: u64) -> u32 {
@@ -60,8 +82,16 @@ pub fn bucket_index(value: u64) -> u32 {
 }
 
 /// Returns the smallest value a bucket contains.
+///
+/// Total over every `u32`. An index above [`MAX_BUCKET_INDEX`] names no bucket
+/// this layout can produce, so it saturates to the top bucket rather than
+/// shifting past the width of a `u64`. That is a deliberate choice about who
+/// pays for a malformed document: [`EncodedHistogram::validate`] rejects such an
+/// index with a message, and this function refuses to panic for anyone who
+/// reached it without validating first.
 #[must_use]
 pub fn bucket_low(index: u32) -> u64 {
+    let index = index.min(MAX_BUCKET_INDEX);
     if u64::from(index) < SUB_BUCKET_COUNT {
         u64::from(index)
     } else {
@@ -73,8 +103,11 @@ pub fn bucket_low(index: u32) -> u64 {
 }
 
 /// Returns the largest value a bucket contains.
+///
+/// Total over every `u32`, on the same terms as [`bucket_low`].
 #[must_use]
 pub fn bucket_high(index: u32) -> u64 {
+    let index = index.min(MAX_BUCKET_INDEX);
     if u64::from(index) < SUB_BUCKET_COUNT {
         u64::from(index)
     } else {
@@ -171,7 +204,11 @@ impl Histogram {
         let rank = ((clamped * self.total as f64).ceil() as u64).max(1);
         let mut cumulative = 0u64;
         for (index, count) in &self.counts {
-            cumulative += count;
+            // Saturating, because `validate` sums bucket counts the same way:
+            // two buckets whose counts overflow a `u64` are accepted there, and
+            // a plain `+` here would turn that document into a panic in the
+            // reader rather than a number in the report.
+            cumulative = cumulative.saturating_add(*count);
             if cumulative >= rank {
                 let high = bucket_high(*index);
                 return Some(high.min(self.max.unwrap_or(high)));
@@ -282,6 +319,19 @@ impl EncodedHistogram {
                     &format!("bucket {index} has a zero count"),
                 ));
             }
+            // No `u64` lands above the top bucket, so an index that does was not
+            // recorded from a measurement. Decoding it would invent bounds — and
+            // far enough out, a shift wider than the type — from a document
+            // nothing in this repository could have written.
+            if *index > MAX_BUCKET_INDEX {
+                return Err(SchemaError::invalid_field(
+                    "histogram.counts",
+                    &format!(
+                        "bucket {index} is above {MAX_BUCKET_INDEX}, the highest index any \
+                         u64 can fall in"
+                    ),
+                ));
+            }
             if previous.is_some_and(|p| p >= *index) {
                 return Err(SchemaError::invalid_field(
                     "histogram.counts",
@@ -300,10 +350,28 @@ impl EncodedHistogram {
                 ),
             ));
         }
-        if (self.total == 0) != (self.min.is_none() || self.max.is_none()) {
+        // Each extreme is checked against emptiness on its own. Folding them
+        // together with an `or` let a document claim `total: 0` while carrying a
+        // minimum, which is a recording that both did and did not happen.
+        let empty = self.total == 0;
+        for (field, extreme) in [("histogram.min", self.min), ("histogram.max", self.max)] {
+            if extreme.is_none() != empty {
+                return Err(SchemaError::invalid_field(
+                    field,
+                    if empty {
+                        "an empty histogram has no extreme to report"
+                    } else {
+                        "a histogram with recordings must report this extreme"
+                    },
+                ));
+            }
+        }
+        if let (Some(min), Some(max)) = (self.min, self.max)
+            && min > max
+        {
             return Err(SchemaError::invalid_field(
                 "histogram.min",
-                "min/max presence must match emptiness",
+                &format!("minimum {min} is above maximum {max}"),
             ));
         }
         Ok(())
