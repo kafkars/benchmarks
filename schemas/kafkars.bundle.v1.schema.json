@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.bundle.v1",
+  "title": "Evidence bundle manifest",
+  "description": "The bundle.json written last into a sealed evidence bundle, carrying the second of the two identities: bundle_digest, the sha256 of the checksums.txt bytes. Written by crates/benchctl/src/seal.rs after crates/benchctl/src/checksum.rs walks the bundle; checksums.txt and bundle.json are themselves excluded from the walk, which is what resolves the digest circularity. Documentation mirror of the BundleManifest serde type in crates/bench-schema/src/bundle.rs, which is the source of truth.",
+  "type": "object",
+  "required": ["schema", "bundle_digest", "file_count", "total_bytes"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.bundle.v1"
+    },
+    "bundle_digest": {
+      "type": "string",
+      "description": "sha256 of the exact checksums.txt bytes. Each checksums.txt line is <64 hex><SP><SP><relative path with '/' separators>, byte-order sorted, LF-terminated, with a trailing newline, so `shasum -a 256 -c checksums.txt` verifies a bundle unchanged.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "file_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of checksummed files, excluding checksums.txt and bundle.json."
+    },
+    "total_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total size in bytes of the checksummed files."
+    }
+  }
+}

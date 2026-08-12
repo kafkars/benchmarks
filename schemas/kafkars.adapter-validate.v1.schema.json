@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.adapter-validate.v1",
+  "title": "Adapter experiment validation report",
+  "description": "The document an adapter prints for `<adapter> validate --experiment <resolved.json>`, stating whether it can execute that exact resolved experiment and, if not, why. Authored by each adapter and consumed by benchctl during the probe phase, which seals it into subjects.lock.json and refuses to run unsupported subjects. Documentation mirror of the ValidateReport serde type in crates/bench-schema/src/adapter.rs, which is the source of truth.",
+  "type": "object",
+  "required": ["schema", "supported", "reasons"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.adapter-validate.v1"
+    },
+    "supported": {
+      "type": "boolean",
+      "description": "True only when every field of the resolved experiment maps onto this adapter's surface."
+    },
+    "reasons": {
+      "type": "array",
+      "description": "One entry per unsupported field or unmet precondition; empty when supported is true.",
+      "items": { "type": "string" }
+    }
+  }
+}

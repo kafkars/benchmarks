@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.librdkafka-statistics.v1",
+  "title": "librdkafka statistics snapshot envelope (legacy)",
+  "description": "One line of the client-metrics.jsonl stream: a phase-tagged envelope wrapping librdkafka's own emitted statistics document. Produced by bench_statistics_callback in adapters/librdkafka-c/statistics.c every 100 ms into a bounded in-memory buffer, written after the timed phase. Validated line by line by parseSnapshots in legacy/benchctl/librdkafka-statistics/schema.mjs. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": ["schema", "phase", "captured_ns", "statistics"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.librdkafka-statistics.v1"
+    },
+    "phase": {
+      "enum": ["setup", "warmup", "baseline", "measured", "final"],
+      "description": "Run phase at capture time. Exactly one baseline and exactly one final snapshot are required, final must be last, and captured_ns must increase strictly."
+    },
+    "captured_ns": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "description": "Monotonic capture instant in nanoseconds."
+    },
+    "statistics": {
+      "type": "object",
+      "description": "librdkafka's own statistics document, passed through verbatim. The control plane reads only the fields below; every other field is preserved but unread.",
+      "additionalProperties": true,
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "librdkafka client type; baseline and final snapshots must report \"producer\"."
+        },
+        "txmsgs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Cumulative transmitted records."
+        },
+        "txmsg_bytes": { "type": "integer", "minimum": 0 },
+        "tx": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Cumulative transmitted requests."
+        },
+        "tx_bytes": { "type": "integer", "minimum": 0 },
+        "msg_cnt": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Producer queue gauge in records; sampled for the queue trend and required to be zero in the final snapshot."
+        },
+        "msg_size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Producer queue gauge in bytes; required to be zero in the final snapshot."
+        },
+        "brokers": {
+          "type": "object",
+          "description": "Per-broker objects keyed by broker name. Objects with a non-negative integer nodeid supply req counters, txretries, req_timeouts, waitresp_cnt, outbuf_cnt, int_latency, outbuf_latency, and rtt.",
+          "additionalProperties": true
+        },
+        "topics": {
+          "type": "object",
+          "description": "Per-topic objects keyed by topic name, supplying batchcnt and batchsize windows and per-partition txmsgs counters.",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.benchmark-environment.v2",
+  "title": "Benchmark environment capture",
+  "description": "The environment.json sealed into every evidence bundle: source, toolchain, host, and broker identity at attempt time. Written by crates/benchctl/src/environment.rs, a Rust port of the legacy capture with \"unavailable\" fallbacks. Supersedes kafkars.benchmark-environment.v1 by making source a repo-agnostic map instead of three hardcoded repository keys. Identity is the sha256 of the canonical bytes with captured_at removed, the same rule as v1. Documentation mirror of the EnvironmentDocument serde type in crates/bench-schema/src/environment.rs, which is the source of truth.",
+  "type": "object",
+  "required": ["schema", "captured_at", "source", "toolchain", "host", "broker"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.benchmark-environment.v2"
+    },
+    "captured_at": {
+      "type": "string",
+      "description": "UTC RFC 3339 capture instant. Excluded from the environment identity hash.",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "object",
+      "description": "Git state per repository, keyed by repository name. Repo-agnostic: a benchmark of any client records whichever repositories it depends on. A missing checkout still records an entry so provenance degrades gracefully.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["commit", "dirty"],
+        "additionalProperties": false,
+        "properties": {
+          "commit": {
+            "type": "string",
+            "description": "Commit hash, or \"unavailable\" when the checkout is missing."
+          },
+          "dirty": {
+            "type": "boolean",
+            "description": "True when the worktree has uncommitted changes; a dirty bundle is never claim-eligible."
+          }
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "description": "Compiler and runtime versions. Any unavailable command records the literal string \"unavailable\".",
+      "additionalProperties": { "type": "string" }
+    },
+    "host": {
+      "type": "object",
+      "description": "Host identity, read from sysctl on Darwin and /proc on Linux.",
+      "additionalProperties": true,
+      "properties": {
+        "platform": { "type": "string" },
+        "release": { "type": "string" },
+        "architecture": { "type": "string" },
+        "cpu": { "type": "string" },
+        "logical_cpus": { "type": ["integer", "string"] },
+        "memory_bytes": { "type": ["integer", "string"] },
+        "uname": { "type": "string" }
+      }
+    },
+    "broker": {
+      "type": "object",
+      "description": "Broker identity. The cluster lifecycle is always owned by the caller, never by benchctl.",
+      "required": ["version", "bootstrap"],
+      "additionalProperties": true,
+      "properties": {
+        "version": { "type": "string" },
+        "bootstrap": {
+          "type": "string",
+          "description": "Comma-separated host:port bootstrap list."
+        },
+        "lifecycle": { "type": "string" }
+      }
+    }
+  }
+}

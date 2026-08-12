@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.benchmark-adapter-config.v1",
+  "title": "Normalized adapter configuration (legacy)",
+  "description": "The durability, batching, retry, and queue settings every adapter in a paired run is required to report identically, sealed as adapter-config.json by legacy/benchctl/seal.mjs. The same normalized_settings object is rebuilt by legacy/benchctl/fixed-seal.mjs and compared byte-for-byte against each adapter result.settings. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": ["schema", "normalized_settings", "native_request_concurrency"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.benchmark-adapter-config.v1"
+    },
+    "normalized_settings": {
+      "type": "object",
+      "description": "Expected value of every adapter result.settings object in the run.",
+      "required": [
+        "acks",
+        "idempotence",
+        "compression",
+        "linger_ms",
+        "batch_records",
+        "batch_bytes",
+        "request_bytes",
+        "max_in_flight_requests_per_broker",
+        "queue_bytes",
+        "max_outstanding_records",
+        "retry_max_replacements",
+        "retry_backoff_ms",
+        "explicit_balanced_partitioning",
+        "admission_shape",
+        "completion_shape"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "acks": { "enum": ["all"] },
+        "idempotence": { "type": "boolean" },
+        "compression": { "enum": ["none"] },
+        "linger_ms": { "type": "integer" },
+        "batch_records": { "type": "integer" },
+        "batch_bytes": { "type": "integer" },
+        "request_bytes": { "type": "integer" },
+        "max_in_flight_requests_per_broker": { "type": "integer" },
+        "queue_bytes": { "type": "integer" },
+        "max_outstanding_records": { "type": "integer" },
+        "retry_max_replacements": { "type": "integer" },
+        "retry_backoff_ms": { "type": "integer" },
+        "explicit_balanced_partitioning": { "type": "boolean" },
+        "admission_shape": { "enum": ["public-batch"] },
+        "completion_shape": { "enum": ["aggregate-batch-terminal"] }
+      }
+    },
+    "native_request_concurrency": {
+      "type": "object",
+      "description": "How each adapter's native in-flight request limit was configured to match the normalized bound.",
+      "required": ["status", "kafkars", "librdkafka_c"],
+      "additionalProperties": true,
+      "properties": {
+        "status": { "enum": ["matched-configured"] },
+        "kafkars": { "type": "string" },
+        "librdkafka_c": { "type": "string" }
+      }
+    }
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.producer-fixed-comparison.v2",
+  "title": "Scheduled fixed-load paired comparison (legacy)",
+  "description": "Sealed summary.json for one API-matched scheduled open-loop fixed-rate pair, emitted by legacy/benchctl/fixed-seal.mjs after fixed-load result, latency CSV, verification, native-metric, and process-resource gates pass. Consumed by legacy/benchctl/fixed-suite.mjs. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "run_id",
+    "valid",
+    "claim_eligible",
+    "exclusion_reasons",
+    "execution_order",
+    "environment_identity_sha256",
+    "workload",
+    "diagnostic_ratios",
+    "native_shape",
+    "process_resources",
+    "results",
+    "verification"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.producer-fixed-comparison.v2"
+    },
+    "run_id": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "valid": { "type": "boolean" },
+    "claim_eligible": { "const": false },
+    "exclusion_reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "execution_order": {
+      "type": "array",
+      "items": { "enum": ["kafkars", "librdkafka-c"] },
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true
+    },
+    "environment_identity_sha256": {
+      "type": "string",
+      "description": "sha256 of the sealed kafkars.benchmark-environment.v1 document with captured_at removed. Must be identical across every pair in a suite.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "workload": {
+      "type": "object",
+      "description": "Resolved fixed-load point; compared by exact JSON identity across the pairs of a suite.",
+      "required": [
+        "mode",
+        "records",
+        "warmup_records",
+        "payload_bytes",
+        "partitions",
+        "max_outstanding_records",
+        "offered_records_per_second",
+        "callers_per_producer"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "mode": { "const": "scheduled-open-loop-fixed-rate" },
+        "records": { "type": "integer", "exclusiveMinimum": 0 },
+        "warmup_records": { "type": "integer", "minimum": 0 },
+        "payload_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "partitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "max_outstanding_records": { "type": "integer", "exclusiveMinimum": 0 },
+        "offered_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "callers_per_producer": {
+          "type": "integer",
+          "const": 4,
+          "description": "The fixed-load headline requires exactly four callers."
+        }
+      }
+    },
+    "diagnostic_ratios": {
+      "type": "object",
+      "required": [
+        "uncorrected_p99_kafkars_over_librdkafka",
+        "corrected_p99_kafkars_over_librdkafka",
+        "schedule_delay_p99_kafkars_over_librdkafka"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "uncorrected_p99_kafkars_over_librdkafka": { "type": "number", "exclusiveMinimum": 0 },
+        "corrected_p99_kafkars_over_librdkafka": { "type": "number", "exclusiveMinimum": 0 },
+        "schedule_delay_p99_kafkars_over_librdkafka": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "native_shape": {
+      "type": "object",
+      "description": "kafkars carries its producer_requests counters verbatim; librdkafka_c carries the normalized native-metrics summary.",
+      "required": ["kafkars", "librdkafka_c"],
+      "additionalProperties": true,
+      "properties": {
+        "kafkars": {
+          "type": "object",
+          "required": ["requests", "partition_batches", "records"],
+          "additionalProperties": true,
+          "properties": {
+            "requests": { "type": "integer", "exclusiveMinimum": 0 },
+            "partition_batches": { "type": "integer", "exclusiveMinimum": 0 },
+            "records": { "type": "integer", "exclusiveMinimum": 0 },
+            "encoded_record_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+            "peak_in_flight_requests": { "type": "integer", "exclusiveMinimum": 0 },
+            "peak_in_flight_requests_per_broker": { "type": "integer", "exclusiveMinimum": 0 }
+          }
+        },
+        "librdkafka_c": {
+          "type": "object",
+          "description": "Embedded kafkars.librdkafka-native-metrics.v1 document; requests.produce is the paired request count.",
+          "additionalProperties": true,
+          "properties": {
+            "schema": { "const": "kafkars.librdkafka-native-metrics.v1" }
+          }
+        }
+      }
+    },
+    "process_resources": {
+      "type": "object",
+      "description": "Embedded kafkars.process-resources.v2 documents. Both adapters must report the same peak_memory_method.",
+      "required": ["kafkars", "librdkafka_c"],
+      "additionalProperties": true,
+      "properties": {
+        "kafkars": { "$ref": "#/$defs/processResources" },
+        "librdkafka_c": { "$ref": "#/$defs/processResources" }
+      }
+    },
+    "results": {
+      "type": "object",
+      "description": "Embedded kafkars.producer-fixed-load.v1 adapter results keyed by adapter name.",
+      "required": ["kafkars", "librdkafka-c"],
+      "additionalProperties": true,
+      "properties": {
+        "kafkars": { "$ref": "#/$defs/fixedResult" },
+        "librdkafka-c": { "$ref": "#/$defs/fixedResult" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": ["kafkars", "librdkafka-c"],
+      "additionalProperties": true,
+      "properties": {
+        "kafkars": { "$ref": "#/$defs/verificationPair" },
+        "librdkafka-c": { "$ref": "#/$defs/verificationPair" }
+      }
+    }
+  },
+  "$defs": {
+    "fixedResult": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "kafkars.producer-fixed-load.v1" }
+      }
+    },
+    "processResources": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "kafkars.process-resources.v2" }
+      }
+    },
+    "verificationPair": {
+      "type": "object",
+      "required": ["measured", "warmup"],
+      "additionalProperties": true,
+      "properties": {
+        "measured": { "$ref": "#/$defs/verificationReport" },
+        "warmup": { "$ref": "#/$defs/verificationReport" }
+      }
+    },
+    "verificationReport": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "kafkars.producer-verification.v1" }
+      }
+    }
+  }
+}

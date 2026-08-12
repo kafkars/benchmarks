@@ -1,0 +1,209 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.producer-fixed-matrix.v2",
+  "title": "Derived fixed-load comparison matrix (legacy)",
+  "description": "Sealed matrix-summary.json for the four fixed-load points derived from a sealed kafkars.librdkafka-capacity-curve.v2, emitted by legacy/benchctl/fixed-matrix-runner.mjs; the assessment block comes from assessFixedMatrix in legacy/benchctl/fixed-matrix.mjs. Each point embeds the paired ratios of one kafkars.producer-fixed-comparison-suite.v2. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "valid",
+    "claim_eligible",
+    "capacity_reference",
+    "workload",
+    "assessment",
+    "exclusion_reasons",
+    "points"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.producer-fixed-matrix.v2"
+    },
+    "valid": { "type": "boolean" },
+    "claim_eligible": { "const": false },
+    "capacity_reference": {
+      "type": "object",
+      "description": "Hash and headline numbers of the capacity summary this matrix derived its rates from; the summary itself is copied into the matrix root.",
+      "required": [
+        "sha256",
+        "sustainable_records_per_second",
+        "first_failing_records_per_second",
+        "copied_summary"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "sustainable_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "first_failing_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+        "copied_summary": { "const": "reference-capacity-summary.json" }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "required": [
+        "window_seconds",
+        "warmup_seconds",
+        "payload_bytes",
+        "partitions",
+        "callers_per_producer",
+        "max_outstanding_records",
+        "repetitions_per_point"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "window_seconds": { "type": "integer", "exclusiveMinimum": 0 },
+        "warmup_seconds": { "type": "integer", "exclusiveMinimum": 0 },
+        "payload_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "partitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "callers_per_producer": { "type": "integer", "exclusiveMinimum": 0 },
+        "max_outstanding_records": { "type": "integer", "exclusiveMinimum": 0 },
+        "repetitions_per_point": { "type": "integer", "exclusiveMinimum": 0 }
+      }
+    },
+    "assessment": {
+      "type": "object",
+      "description": "Credibility is reported separately from the latency and CPU gates; every gate is forced false when the evidence is not credible.",
+      "required": [
+        "evidence_credible",
+        "reference_capacity_credible",
+        "every_fixed_point_credible",
+        "every_resource_point_credible",
+        "across_point_geometric_means",
+        "gates"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "evidence_credible": { "type": "boolean" },
+        "reference_capacity_credible": { "type": "boolean" },
+        "every_fixed_point_credible": { "type": "boolean" },
+        "every_resource_point_credible": { "type": "boolean" },
+        "across_point_geometric_means": {
+          "type": "object",
+          "required": [
+            "corrected_p99_kafkars_over_librdkafka",
+            "uncorrected_p99_kafkars_over_librdkafka",
+            "produce_requests_librdkafka_over_kafkars",
+            "cpu_core_seconds_kafkars_over_librdkafka",
+            "peak_memory_kafkars_over_librdkafka",
+            "peak_rss_kafkars_over_librdkafka"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "corrected_p99_kafkars_over_librdkafka": { "$ref": "#/$defs/acrossPoints" },
+            "uncorrected_p99_kafkars_over_librdkafka": { "$ref": "#/$defs/acrossPoints" },
+            "produce_requests_librdkafka_over_kafkars": { "$ref": "#/$defs/acrossPoints" },
+            "cpu_core_seconds_kafkars_over_librdkafka": { "$ref": "#/$defs/acrossPoints" },
+            "peak_memory_kafkars_over_librdkafka": { "$ref": "#/$defs/acrossPoints" },
+            "peak_rss_kafkars_over_librdkafka": { "$ref": "#/$defs/acrossPoints" }
+          }
+        },
+        "gates": {
+          "type": "object",
+          "description": "Parity requires geometric mean and interval upper bound at or below 1.1 at every point; leadership requires both strictly below 1.",
+          "required": [
+            "corrected_p99_parity_within_ten_percent",
+            "corrected_p99_leadership_at_every_point",
+            "cpu_parity_within_ten_percent",
+            "cpu_leadership_at_every_point"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "corrected_p99_parity_within_ten_percent": { "type": "boolean" },
+            "corrected_p99_leadership_at_every_point": { "type": "boolean" },
+            "cpu_parity_within_ten_percent": { "type": "boolean" },
+            "cpu_leadership_at_every_point": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "exclusion_reasons": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "points": {
+      "type": "array",
+      "description": "Exactly the four predeclared load percentages, in ascending order.",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": [
+          "percentage",
+          "offered_records_per_second",
+          "directory",
+          "statistical_credibility",
+          "corrected_p99",
+          "uncorrected_p99",
+          "request_efficiency",
+          "resource_credibility",
+          "cpu_core_seconds",
+          "peak_memory",
+          "peak_rss"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "percentage": { "enum": [25, 50, 75, 90] },
+          "offered_records_per_second": { "type": "integer", "exclusiveMinimum": 0 },
+          "directory": {
+            "type": "string",
+            "description": "Load-point directory relative to the matrix root, for example load-25."
+          },
+          "statistical_credibility": { "type": "boolean" },
+          "corrected_p99": { "$ref": "#/$defs/ratioSummary" },
+          "uncorrected_p99": { "$ref": "#/$defs/ratioSummary" },
+          "request_efficiency": { "$ref": "#/$defs/ratioSummary" },
+          "resource_credibility": { "type": "boolean" },
+          "cpu_core_seconds": { "$ref": "#/$defs/ratioSummary" },
+          "peak_memory": { "$ref": "#/$defs/ratioSummary" },
+          "peak_rss": { "$ref": "#/$defs/ratioSummary" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "acrossPoints": {
+      "type": "object",
+      "required": ["points", "geometric_mean", "minimum", "maximum"],
+      "additionalProperties": true,
+      "properties": {
+        "points": { "type": "integer", "exclusiveMinimum": 0 },
+        "geometric_mean": { "type": "number", "exclusiveMinimum": 0 },
+        "minimum": { "type": "number", "exclusiveMinimum": 0 },
+        "maximum": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "ratioSummary": {
+      "type": "object",
+      "description": "One suite's paired ratio summary, carried forward verbatim.",
+      "required": ["geometric_mean", "confidence_interval_95"],
+      "additionalProperties": true,
+      "properties": {
+        "repetitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "geometric_mean": { "type": "number", "exclusiveMinimum": 0 },
+        "arithmetic_mean": { "type": "number", "exclusiveMinimum": 0 },
+        "median": { "type": "number", "exclusiveMinimum": 0 },
+        "minimum": { "type": "number", "exclusiveMinimum": 0 },
+        "maximum": { "type": "number", "exclusiveMinimum": 0 },
+        "coefficient_of_variation": { "type": ["number", "null"] },
+        "confidence_interval_95": {
+          "type": "object",
+          "required": ["method", "resamples", "seed", "lower", "upper"],
+          "additionalProperties": true,
+          "properties": {
+            "method": {
+              "enum": [
+                "paired-block-percentile-bootstrap",
+                "repetition-percentile-bootstrap"
+              ]
+            },
+            "resamples": { "type": "integer", "exclusiveMinimum": 0 },
+            "seed": { "type": "integer" },
+            "lower": { "type": "number", "exclusiveMinimum": 0 },
+            "upper": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

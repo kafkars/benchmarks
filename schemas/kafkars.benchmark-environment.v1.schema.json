@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.benchmark-environment.v1",
+  "title": "Benchmark environment capture (legacy)",
+  "description": "Source, toolchain, host, and broker identity sealed as environment.json by the legacy Node control plane. Produced by captureBenchmarkEnvironment in legacy/benchctl/environment.mjs and by the inline duplicate in legacy/benchctl/seal.mjs; consumed by benchmarkEnvironmentIdentity, which hashes the document with captured_at removed. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": ["schema", "captured_at", "source", "toolchain", "host", "broker"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.benchmark-environment.v1"
+    },
+    "captured_at": {
+      "type": "string",
+      "description": "ISO 8601 capture instant. Excluded from the environment identity hash.",
+      "format": "date-time"
+    },
+    "source": {
+      "type": "object",
+      "description": "Git state of the client repository and its siblings, plus the pinned librdkafka anchor.",
+      "required": ["kafka_client", "kafka_driver", "kafka_protocol", "librdkafka"],
+      "additionalProperties": true,
+      "properties": {
+        "kafka_client": { "$ref": "#/$defs/gitState" },
+        "kafka_driver": { "$ref": "#/$defs/gitState" },
+        "kafka_protocol": { "$ref": "#/$defs/gitState" },
+        "librdkafka": {
+          "type": "object",
+          "required": ["version", "release", "archive_sha256", "build_features"],
+          "additionalProperties": true,
+          "properties": {
+            "version": {
+              "type": "string",
+              "description": "Runtime rd_kafka_version string reported by the C adapter."
+            },
+            "release": { "const": "v2.15.0" },
+            "archive_sha256": {
+              "const": "259015220cdca708afe838b5aa79ebf1a5fb710fb4179cf918d390aed85d5dbc"
+            },
+            "build_features": {
+              "type": "object",
+              "required": ["ssl", "gssapi", "curl", "external_zstd", "external_lz4"],
+              "additionalProperties": true,
+              "properties": {
+                "ssl": { "type": "boolean" },
+                "gssapi": { "type": "boolean" },
+                "curl": { "type": "boolean" },
+                "external_zstd": { "type": "boolean" },
+                "external_lz4": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "description": "Compiler and runtime versions. Any unavailable command records the literal string \"unavailable\". The seal.mjs duplicate omits node.",
+      "required": ["rustc", "cargo", "cc"],
+      "additionalProperties": true,
+      "properties": {
+        "rustc": { "type": "string" },
+        "cargo": { "type": "string" },
+        "cc": { "type": "string" },
+        "node": { "type": "string" }
+      }
+    },
+    "host": {
+      "type": "object",
+      "description": "Host identity. environment.mjs uses node:os and reports logical_cpus and memory_bytes as integers; the seal.mjs duplicate shells out to sysctl and records the same fields as strings.",
+      "required": ["cpu", "logical_cpus", "memory_bytes", "uname"],
+      "additionalProperties": true,
+      "properties": {
+        "platform": { "type": "string" },
+        "release": { "type": "string" },
+        "architecture": { "type": "string" },
+        "cpu": { "type": "string" },
+        "logical_cpus": { "type": ["integer", "string"] },
+        "memory_bytes": { "type": ["integer", "string"] },
+        "uname": { "type": "string" }
+      }
+    },
+    "broker": {
+      "type": "object",
+      "required": ["version", "bootstrap", "lifecycle"],
+      "additionalProperties": true,
+      "properties": {
+        "version": { "type": "string" },
+        "bootstrap": {
+          "type": "string",
+          "description": "Comma-separated host:port bootstrap list."
+        },
+        "lifecycle": { "const": "externally managed by the caller" }
+      }
+    }
+  },
+  "$defs": {
+    "gitState": {
+      "type": "object",
+      "description": "Repository commit and dirty flag; commit is \"unavailable\" when the checkout is missing.",
+      "required": ["commit", "dirty"],
+      "additionalProperties": true,
+      "properties": {
+        "commit": { "type": "string" },
+        "dirty": { "type": "boolean" }
+      }
+    }
+  }
+}

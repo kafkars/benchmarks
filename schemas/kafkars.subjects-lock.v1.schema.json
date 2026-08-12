@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.subjects-lock.v1",
+  "title": "Sealed subject probe lock",
+  "description": "The subjects.lock.json sealed during the probe phase: exactly which binary each subject resolved to and what it claimed about itself, captured before any subject runs. Written by crates/benchctl (probe.rs, seal.rs) from `<adapter> describe --json` and `<adapter> validate --experiment`. Documentation mirror of the SubjectsLock serde type in crates/bench-schema/src/lock.rs, which is the source of truth.",
+  "type": "object",
+  "required": ["schema", "subjects"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.subjects-lock.v1"
+    },
+    "subjects": {
+      "type": "array",
+      "description": "One entry per subject, in declaration order.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "command", "binary_sha256", "describe", "validate"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "command": {
+            "type": ["array", "string"],
+            "description": "Exact adapter argv prefix used for this subject. Excluded from the experiment identity but pinned here as evidence.",
+            "items": { "type": "string" }
+          },
+          "binary_sha256": {
+            "type": ["string", "null"],
+            "description": "sha256 of the adapter binary. Null when the binary could not be hashed.",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "describe": {
+            "type": "object",
+            "description": "Embedded kafkars.adapter.v1 document as printed by this binary.",
+            "additionalProperties": true,
+            "properties": {
+              "schema": { "const": "kafkars.adapter.v1" }
+            }
+          },
+          "validate": {
+            "type": "object",
+            "description": "Embedded kafkars.adapter-validate.v1 report for this attempt's resolved experiment.",
+            "additionalProperties": true,
+            "properties": {
+              "schema": { "const": "kafkars.adapter-validate.v1" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

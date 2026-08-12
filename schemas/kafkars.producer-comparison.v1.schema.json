@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.producer-comparison.v1",
+  "title": "Closed-loop paired producer comparison (legacy)",
+  "description": "Sealed summary.json for one closed-loop diagnostic pair of kafkars against raw librdkafka C, emitted by legacy/benchctl/seal.mjs after every adapter result, verification, latency CSV, and native-metric gate has passed. Consumed by legacy/benchctl/suite.mjs when aggregating balanced repetitions. Descriptive documentation of migrated behavior, not a gate.",
+  "type": "object",
+  "required": [
+    "schema",
+    "run_id",
+    "valid",
+    "claim_eligible",
+    "exclusion_reasons",
+    "execution_order",
+    "workload",
+    "diagnostic_ratios",
+    "diagnostics",
+    "native_shape",
+    "results",
+    "verification"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "const": "kafkars.producer-comparison.v1"
+    },
+    "run_id": {
+      "type": "string",
+      "description": "16-character lowercase hex run identity; unique within a suite.",
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "valid": { "type": "boolean" },
+    "claim_eligible": {
+      "const": false,
+      "description": "Every bundle from the legacy diagnostic runner is deliberately claim-ineligible."
+    },
+    "exclusion_reasons": {
+      "type": "array",
+      "description": "Why this evidence cannot support a performance claim.",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "execution_order": {
+      "type": "array",
+      "description": "Adapter run order for this pair; exactly the two adapter names, each once. Suites require alternation across repetitions.",
+      "items": { "enum": ["kafkars", "librdkafka-c"] },
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true
+    },
+    "workload": {
+      "type": "object",
+      "description": "Resolved workload, also rendered to workload.toml by legacy/benchctl/workload.mjs. Identical across every pair in a suite.",
+      "required": [
+        "records",
+        "warmup_records",
+        "payload_bytes",
+        "partitions",
+        "replication_factor",
+        "min_in_sync_replicas",
+        "max_outstanding_records",
+        "acks",
+        "idempotence",
+        "compression",
+        "linger_ms",
+        "batch_records",
+        "batch_bytes",
+        "request_bytes",
+        "max_in_flight_requests_per_broker",
+        "retry_max_replacements",
+        "retry_backoff_ms",
+        "partitioning",
+        "warmup_serialized_partition_primer_records",
+        "native_request_concurrency"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "records": { "type": "integer", "exclusiveMinimum": 0 },
+        "warmup_records": { "type": "integer", "minimum": 0 },
+        "payload_bytes": { "type": "integer", "exclusiveMinimum": 0 },
+        "partitions": { "type": "integer", "exclusiveMinimum": 0 },
+        "replication_factor": { "type": "integer", "exclusiveMinimum": 0 },
+        "min_in_sync_replicas": { "type": "integer", "exclusiveMinimum": 0 },
+        "max_outstanding_records": { "type": "integer", "exclusiveMinimum": 0 },
+        "acks": { "enum": ["all"] },
+        "idempotence": { "type": "boolean" },
+        "compression": { "enum": ["none"] },
+        "linger_ms": { "type": "integer" },
+        "batch_records": { "type": "integer" },
+        "batch_bytes": { "type": "integer" },
+        "request_bytes": { "type": "integer" },
+        "max_in_flight_requests_per_broker": { "type": "integer" },
+        "retry_max_replacements": { "type": "integer" },
+        "retry_backoff_ms": { "type": "integer" },
+        "partitioning": { "enum": ["explicit round-robin"] },
+        "warmup_serialized_partition_primer_records": { "type": "integer", "minimum": 0 },
+        "native_request_concurrency": {
+          "type": "object",
+          "required": ["status", "kafkars", "librdkafka_c"],
+          "additionalProperties": true,
+          "properties": {
+            "status": { "enum": ["matched-configured"] },
+            "kafkars": { "type": "string" },
+            "librdkafka_c": { "type": "string" }
+          }
+        }
+      }
+    },
+    "diagnostic_ratios": {
+      "type": "object",
+      "description": "Single-pair ratios; diagnostic only, never a claim.",
+      "required": [
+        "acknowledged_goodput_kafkars_over_librdkafka",
+        "p99_latency_kafkars_over_librdkafka"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "acknowledged_goodput_kafkars_over_librdkafka": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "p99_latency_kafkars_over_librdkafka": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "description": "kafkars request-shape derivations from its native producer_requests counters.",
+      "required": [
+        "kafkars_records_per_produce_request",
+        "kafkars_partition_batches_per_produce_request",
+        "kafkars_records_per_partition_batch"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "kafkars_records_per_produce_request": { "type": "number", "exclusiveMinimum": 0 },
+        "kafkars_partition_batches_per_produce_request": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "kafkars_records_per_partition_batch": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "native_shape": {
+      "type": "object",
+      "description": "Achieved native request shape per adapter. Suites require status \"captured\".",
+      "required": ["status", "kafkars", "librdkafka_c"],
+      "additionalProperties": true,
+      "properties": {
+        "status": { "enum": ["captured"] },
+        "kafkars": {
+          "type": "object",
+          "required": [
+            "produce_requests",
+            "partition_batches",
+            "records_per_produce_request",
+            "partition_batches_per_produce_request",
+            "records_per_partition_batch",
+            "peak_in_flight_requests",
+            "peak_in_flight_requests_per_broker"
+          ],
+          "additionalProperties": true,
+          "properties": {
+            "produce_requests": { "type": "integer", "exclusiveMinimum": 0 },
+            "partition_batches": { "type": "integer", "exclusiveMinimum": 0 },
+            "records_per_produce_request": { "type": "number", "exclusiveMinimum": 0 },
+            "partition_batches_per_produce_request": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "records_per_partition_batch": { "type": "number", "exclusiveMinimum": 0 },
+            "peak_in_flight_requests": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "Exact observed peak; rejected when it exceeds the configured bound."
+            },
+            "peak_in_flight_requests_per_broker": { "type": "integer", "exclusiveMinimum": 0 }
+          }
+        },
+        "librdkafka_c": {
+          "type": "object",
+          "description": "Embedded kafkars.librdkafka-native-metrics.v1 document.",
+          "additionalProperties": true,
+          "properties": {
+            "schema": { "const": "kafkars.librdkafka-native-metrics.v1" }
+          }
+        }
+      }
+    },
+    "results": {
+      "type": "object",
+      "description": "Embedded kafkars.producer-benchmark.v1 adapter results keyed by adapter name.",
+      "required": ["kafkars", "librdkafka-c"],
+      "additionalProperties": true,
+      "properties": {
+        "kafkars": { "$ref": "#/$defs/producerResult" },
+        "librdkafka-c": { "$ref": "#/$defs/producerResult" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "description": "Embedded kafkars.producer-verification.v1 reports for the measured and warmup topics of each adapter.",
+      "required": ["kafkars", "librdkafka-c"],
+      "additionalProperties": true,
+      "properties": {
+        "kafkars": { "$ref": "#/$defs/verificationPair" },
+        "librdkafka-c": { "$ref": "#/$defs/verificationPair" }
+      }
+    }
+  },
+  "$defs": {
+    "producerResult": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "kafkars.producer-benchmark.v1" }
+      }
+    },
+    "verificationPair": {
+      "type": "object",
+      "required": ["measured", "warmup"],
+      "additionalProperties": true,
+      "properties": {
+        "measured": { "$ref": "#/$defs/verificationReport" },
+        "warmup": { "$ref": "#/$defs/verificationReport" }
+      }
+    },
+    "verificationReport": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "schema": { "const": "kafkars.producer-verification.v1" }
+      }
+    }
+  }
+}
