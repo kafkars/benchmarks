@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.analysis-packet.v1",
+  "title": "Deterministic analysis packet",
+  "description": "The analysis-packet.json that is everything a reader - human or model - is allowed to reason from. Upstream of this document numbers are derived by code that can be re-run; downstream of it prose is written about numbers that can no longer change. Every quantity lives in metrics under a short stable key with its own name and unit, and findings cite keys rather than restating values, so a finding cannot drift from the number it rests on. The verdict is computed here and nowhere else: kafkars.llm-summary.v1 must copy it verbatim. Documentation mirror of the AnalysisPacket serde type in crates/bench-schema/src/packet.rs, which is the source of truth.",
+  "type": "object",
+  "required": [
+    "schema",
+    "source",
+    "verdict",
+    "scenario_name",
+    "subjects",
+    "validity",
+    "metrics",
+    "deterministic_findings",
+    "anomalies",
+    "evidence_refs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.analysis-packet.v1"
+    },
+    "source": {
+      "type": "object",
+      "description": "Where the numbers came from.",
+      "required": ["bundle_digests"],
+      "additionalProperties": false,
+      "properties": {
+        "suite": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Experiment id of the suite behind the packet, when a suite is the source."
+        },
+        "bundle_digests": {
+          "type": "array",
+          "description": "Digest of every sealed bundle behind the numbers, in attempt order.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "verdict": {
+      "enum": ["improved", "regressed", "mixed", "inconclusive", "invalid"],
+      "description": "What the evidence says, decided by code from the suite's intervals and gates. improved and regressed are about the gated metrics; mixed means the gated metrics disagree; inconclusive means the evidence does not separate the subjects; invalid means it may not be reasoned from at all."
+    },
+    "scenario_name": {
+      "type": "string",
+      "description": "Scenario name, carried for readers who do not resolve ids."
+    },
+    "subjects": {
+      "type": "array",
+      "description": "The subjects the packet is about, in comparison order.",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "role": {
+            "enum": ["base", "head", "anchor"],
+            "description": "Absent when the subject list is unlabeled."
+          }
+        }
+      }
+    },
+    "validity": {
+      "type": "object",
+      "description": "How much of the underlying evidence may be believed.",
+      "required": ["runs_valid", "runs_total", "claim_eligible"],
+      "additionalProperties": false,
+      "properties": {
+        "runs_valid": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Attempts whose evidence passed every performed check; never above runs_total."
+        },
+        "runs_total": { "type": "integer", "minimum": 0 },
+        "claim_eligible": {
+          "const": false,
+          "description": "Always false in this milestone, as it is for every document here."
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Every quantity a reader may cite, keyed by a short stable id such as M001. A metric nobody can cite by key is a metric nobody can cite.",
+      "propertyNames": { "minLength": 1 },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["name", "value", "unit"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human name, for example 'p99 offer-to-terminal, head'."
+          },
+          "value": { "type": "number" },
+          "unit": {
+            "type": "string",
+            "description": "For example ns, records/s, bytes, ratio."
+          }
+        }
+      }
+    },
+    "deterministic_findings": {
+      "type": "array",
+      "description": "Statements the deterministic layer is willing to make, each citing the metrics it rests on. Every metric_refs entry must name a key this packet defines.",
+      "items": {
+        "type": "object",
+        "required": ["text", "metric_refs"],
+        "additionalProperties": false,
+        "properties": {
+          "text": { "type": "string" },
+          "metric_refs": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "anomalies": {
+      "type": "array",
+      "description": "Anything unexplained a reader must weigh before concluding. An explicit recorded gap beats an implied guarantee.",
+      "items": { "type": "string" }
+    },
+    "evidence_refs": {
+      "type": "object",
+      "description": "Short key to bundle-relative path or bundle digest, so a claim can point at the file it came from without embedding a path in prose.",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}

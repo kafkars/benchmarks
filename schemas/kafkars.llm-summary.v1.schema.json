@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.llm-summary.v1",
+  "title": "Model-written summary of an analysis packet",
+  "description": "The llm-summary.json holding prose written over one kafkars.analysis-packet.v1, and bound to it. A language model is useful here for saying in readable English what a packet of numbers means; it is not useful for deciding what the numbers are, and this document is shaped so that it cannot. Every quantitative claim is a reference into the packet's metrics, every citation is a reference into the packet's evidence_refs, and the verdict is copied rather than concluded. LlmSummary::validate_against enforces all three mechanically, and rejecting a summary costs nothing because the numbers never depended on the prose. Documentation mirror of the LlmSummary serde type in crates/bench-schema/src/llm.rs, which is the source of truth.",
+  "type": "object",
+  "required": [
+    "schema",
+    "verdict",
+    "executive_summary",
+    "findings",
+    "hypotheses",
+    "next_experiments",
+    "caveats"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "kafkars.llm-summary.v1"
+    },
+    "verdict": {
+      "enum": ["improved", "regressed", "mixed", "inconclusive", "invalid"],
+      "description": "The packet's verdict, copied verbatim. A summary whose verdict differs from its packet's is rejected: prose may elaborate on the deterministic layer, never overrule it."
+    },
+    "executive_summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "What happened, in a paragraph a reader can act on. A summary that says nothing is not a summary."
+    },
+    "findings": {
+      "type": "array",
+      "description": "Statements about the evidence, each citing the packet. Every metric_refs entry must name a key the packet's metrics defines, and every evidence_refs entry a key its evidence_refs defines.",
+      "items": {
+        "type": "object",
+        "required": ["text", "metric_refs", "evidence_refs"],
+        "additionalProperties": false,
+        "properties": {
+          "text": { "type": "string" },
+          "metric_refs": { "type": "array", "items": { "type": "string" } },
+          "evidence_refs": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "hypotheses": {
+      "type": "array",
+      "description": "Proposed explanations, each labeled with how much weight it carries so that speculation cannot be mistaken for a finding.",
+      "items": {
+        "type": "object",
+        "required": ["text", "confidence", "evidence_refs"],
+        "additionalProperties": false,
+        "properties": {
+          "text": { "type": "string" },
+          "confidence": {
+            "enum": ["low", "medium", "high"],
+            "description": "low: a guess worth writing down. medium: consistent with the evidence, not established by it. high: strongly indicated, still not something the packet asserts."
+          },
+          "evidence_refs": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "next_experiments": {
+      "type": "array",
+      "description": "Experiments that would settle what this one did not.",
+      "items": { "type": "string" }
+    },
+    "caveats": {
+      "type": "array",
+      "description": "What a reader must not conclude from this summary.",
+      "items": { "type": "string" }
+    }
+  }
+}

@@ -40,6 +40,31 @@ pub const MAX_TOPIC_NAME_LENGTH: usize = 249;
 /// suffix.
 pub const MAX_SUBJECT_NAME_LENGTH: usize = 48;
 
+/// The role label meaning "the subject a comparison divides by".
+pub const SUBJECT_ROLE_BASE: &str = "base";
+
+/// The role label meaning "the subject a comparison is about".
+pub const SUBJECT_ROLE_HEAD: &str = "head";
+
+/// The role label meaning "a third subject held fixed across attempts".
+///
+/// An anchor is not compared against; it is the known quantity that says
+/// whether the machine itself moved between two attempts.
+pub const SUBJECT_ROLE_ANCHOR: &str = "anchor";
+
+/// Every role label a subject may carry, in comparison order.
+///
+/// A subject with no role is unlabeled, which is the only shape this
+/// repository's scenarios produced before roles existed. Absence is therefore
+/// never an error, and a labeled subject list is strictly more informative than
+/// an unlabeled one rather than a different kind of document.
+pub const SUBJECT_ROLES: [&str; 3] = [SUBJECT_ROLE_BASE, SUBJECT_ROLE_HEAD, SUBJECT_ROLE_ANCHOR];
+
+/// Reports whether `role` is one of the three labels a subject may carry.
+pub fn is_subject_role(role: &str) -> bool {
+    SUBJECT_ROLES.contains(&role)
+}
+
 /// Reports whether `name` uses only characters Kafka accepts in a topic name.
 ///
 /// The legal set is ASCII alphanumerics plus `.`, `_`, and `-`. The two names
@@ -280,6 +305,12 @@ impl SloSpec {
 /// different directory, or invoked through an absolute rather than a relative
 /// path, is the same subject; what it actually was at run time is recorded in
 /// the subjects lock instead.
+///
+/// `role` is *not* excluded. It says what the subject is for — which side of a
+/// comparison it is, or that it is the anchor held fixed across attempts — and
+/// two experiments that disagree about that are asking different questions even
+/// when every other field matches. It is absent by default and omitted from the
+/// bytes when absent, so an unlabeled subject list keeps the id it always had.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectSpec {
@@ -291,6 +322,9 @@ pub struct SubjectSpec {
     pub adapter_version: String,
     /// Argument vector that runs the adapter, program first.
     pub command: Vec<String>,
+    /// One of [`SUBJECT_ROLES`], or absent for an unlabeled subject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 /// The measured and warmup topics one subject owns for one attempt.
@@ -563,6 +597,14 @@ impl ResolvedExperiment {
                 return Err(SchemaError::invalid_field(
                     &format!("subjects[{index}].command"),
                     "must name the program to run",
+                ));
+            }
+            if let Some(role) = &subject.role
+                && !is_subject_role(role)
+            {
+                return Err(SchemaError::invalid_field(
+                    &format!("subjects[{index}].role"),
+                    &format!("{role:?} is not one of {SUBJECT_ROLES:?}"),
                 ));
             }
         }
