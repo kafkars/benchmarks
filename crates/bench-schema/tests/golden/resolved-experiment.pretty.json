@@ -1,0 +1,97 @@
+{
+  "application": {
+    "admission_shape": "public-batch",
+    "backpressure": "block-within-original-offer",
+    "batch_records": 256,
+    "callers_per_producer": 1,
+    "completion_shape": "aggregate-batch-terminal",
+    "max_outstanding_records": 8192,
+    "producer_instances": 1,
+    "queue_bytes": 67108864
+  },
+  "budget": {
+    "max_captured_output_bytes": 1048576,
+    "probe_timeout_seconds": 10,
+    "run_timeout_seconds": 600,
+    "tool_timeout_seconds": 120
+  },
+  "claim_eligible": false,
+  "cluster": {
+    "brokers": 3,
+    "min_in_sync_replicas": 2,
+    "partitions": 12,
+    "replication_factor": 3,
+    "security": "plaintext",
+    "unclean_leader_election": false
+  },
+  "kind": "producer",
+  "load_mode": "closed-loop",
+  "name": "producer-balanced-1k-diagnostic",
+  "payload": {
+    "bytes": 1024,
+    "identity": "KFB1 plus 16-byte run ID plus 64-bit sequence",
+    "profile": "deterministic-ascii-envelope"
+  },
+  "producer": {
+    "acks": "all",
+    "batch_bytes": 65536,
+    "batch_records": 256,
+    "compression": "none",
+    "delivery_timeout_ms": 60000,
+    "idempotence": true,
+    "linger_ms": 5,
+    "max_in_flight_requests_per_broker": 5,
+    "partitioning": "explicit-round-robin",
+    "request_bytes": 1048576,
+    "retry_backoff_ms": 100,
+    "retry_max_replacements": 600,
+    "warmup_partitioning": "explicit-round-robin",
+    "warmup_serialized_partition_primer_records": 12
+  },
+  "profile": "diagnostic",
+  "records": 10000,
+  "runtime": {
+    "bootstrap": "127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094",
+    "execution_order": [
+      "kafkars",
+      "librdkafka-c"
+    ],
+    "run_id": "0123456789abcdef",
+    "topic_prefix": "kfb-0123456789abcdef",
+    "topics": {
+      "kafkars": {
+        "measured": "kfb-0123456789abcdef-kafkars",
+        "warmup": "kfb-0123456789abcdef-kafkars-warmup"
+      },
+      "librdkafka-c": {
+        "measured": "kfb-0123456789abcdef-librdkafka-c",
+        "warmup": "kfb-0123456789abcdef-librdkafka-c-warmup"
+      }
+    }
+  },
+  "schema": "kafkars.experiment.v1",
+  "seed": 44,
+  "slo": {},
+  "subjects": [
+    {
+      "adapter_name": "kafkars",
+      "adapter_version": "0.1.0",
+      "command": [
+        "target/release/kafkars-benchmark-adapter",
+        "--adapter-protocol"
+      ],
+      "name": "kafkars"
+    },
+    {
+      "adapter_name": "librdkafka-c",
+      "adapter_version": "2.15.0",
+      "command": [
+        "target/release/bench-adapter-librdkafka",
+        "--binary",
+        "target/librdkafka/librdkafka-producer-benchmark"
+      ],
+      "name": "librdkafka-c"
+    }
+  ],
+  "warmup_records": 1000
+}
