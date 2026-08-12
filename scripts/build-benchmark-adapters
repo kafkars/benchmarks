@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+librdkafka_root=$("$repo_root/scripts/bootstrap-librdkafka")
+rust_manifest="$repo_root/adapters/kafkars/Cargo.toml"
+rust_target="$repo_root/target/benchmarks/kafkars"
+binary_root="$repo_root/target/benchmarks/bin"
+c_root="$repo_root/adapters/librdkafka-c"
+compiler=${CC:-cc}
+
+mkdir -p "$binary_root"
+CARGO_TARGET_DIR="$rust_target" \
+  cargo build \
+    --manifest-path "$rust_manifest" \
+    --locked \
+    --offline \
+    --release
+install -m 755 \
+  "$rust_target/release/kafkars-benchmark-adapter" \
+  "$binary_root/kafkars-benchmark-adapter"
+
+common_c_flags=(
+  -std=c11
+  -D_POSIX_C_SOURCE=200809L
+  -O3
+  -DNDEBUG
+  -Wall
+  -Wextra
+  -Werror
+  -pedantic
+  -isystem "$librdkafka_root/src"
+)
+"$compiler" "${common_c_flags[@]}" \
+  "$c_root/closed_phase.c" \
+  "$c_root/config.c" \
+  "$c_root/fixed_phase.c" \
+  "$c_root/fixed_report.c" \
+  "$c_root/fixed_state.c" \
+  "$c_root/lifecycle.c" \
+  "$c_root/metadata.c" \
+  "$c_root/payload.c" \
+  "$c_root/report.c" \
+  "$c_root/schedule.c" \
+  "$c_root/statistics.c" \
+  "$c_root/producer.c" \
+  "$c_root/record.c" \
+  "$librdkafka_root/src/librdkafka.a" \
+  -lm -lz -ldl -lpthread \
+  -o "$binary_root/librdkafka-producer-benchmark"
+"$compiler" "${common_c_flags[@]}" \
+  "$c_root/payload.c" \
+  "$c_root/payload_vector.c" \
+  -o "$binary_root/librdkafka-payload-vector"
+"$compiler" "${common_c_flags[@]}" \
+  "$c_root/schedule.c" \
+  "$c_root/schedule_vector.c" \
+  -o "$binary_root/librdkafka-schedule-vector"
+"$compiler" "${common_c_flags[@]}" \
+  "$c_root/payload.c" \
+  "$c_root/verifier_client.c" \
+  "$c_root/verifier.c" \
+  "$librdkafka_root/src/librdkafka.a" \
+  -lm -lz -ldl -lpthread \
+  -o "$binary_root/librdkafka-benchmark-verifier"
+
+printf '%s\n' "$binary_root"
