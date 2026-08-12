@@ -12,7 +12,7 @@
 
 mod common;
 
-use bench_schema::{AdapterOutcome, ExecutionStatus, PhaseOutcome};
+use bench_schema::{AdapterOutcome, ExecutionStatus, LoadMode, PhaseOutcome};
 use benchctl::seal::run_attempt;
 
 use common::{
@@ -109,17 +109,33 @@ fn a_successful_attempt_seals_a_complete_and_valid_bundle() {
 }
 
 #[test]
-fn the_sealed_result_carries_the_topic_the_runtime_binding_named() {
-    let (results_root, paths) = workspace("topics");
+fn the_sealed_result_is_a_v2_measurement_bound_to_this_attempts_run_id() {
+    let (results_root, paths) = workspace("v2-result");
     let resolved = experiment(&[("kafkars", "ok")]);
     run_attempt(request(&paths, resolved, tools("ok"))).unwrap();
     let bytes = std::fs::read(paths.adapter_result_json("kafkars")).unwrap();
-    let result = bench_schema::KnownProducerResult::from_slice(&bytes).unwrap();
+    // `from_slice` checks the accounting invariants, so parsing at all is the
+    // assertion that every offer this attempt made is accounted for.
+    let result = bench_schema::ProducerBenchmarkV2::from_slice(&bytes).unwrap();
+    assert_eq!(result.schema, bench_schema::PRODUCER_BENCHMARK_V2);
+    assert_eq!(result.run_id, RUN_ID);
+    assert_eq!(result.load_mode, LoadMode::ClosedLoop);
     assert_eq!(
-        result.topic.as_deref(),
-        Some(format!("kfb-{RUN_ID}-kafkars").as_str())
+        result.timing.intended_to_call_start, None,
+        "a closed-loop measurement has no schedule to be late against"
     );
-    assert_eq!(result.run_id.as_deref(), Some(RUN_ID));
+    assert_eq!(result.outcomes.unknown, 0);
+    assert_eq!(result.queue.final_outstanding, 0, "the run drained");
+    assert!(result.valid);
+
+    // The topic the runtime binding named is what the verifier was pointed at,
+    // which is where a v2 document leaves that fact.
+    let verification =
+        std::fs::read_to_string(paths.verification_json("kafkars", "measured")).unwrap();
+    assert!(
+        verification.contains(&format!("kfb-{RUN_ID}-kafkars")),
+        "{verification}"
+    );
     cleanup(&results_root);
 }
 

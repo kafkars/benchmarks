@@ -16,6 +16,7 @@
 //! - `time` — hand-rolled UTC formatting for names and document fields.
 //! - `attempt` — [`AttemptId`] and [`AttemptPaths`], the bundle layout.
 //! - `cli` — argv parsing and the verb dispatch (resolver workstream).
+//! - `pipeline` — one attempt, from three TOML files to a sealed bundle.
 //! - `resolve` — source TOML → canonical resolved experiment (resolver).
 //! - `probe` — adapter `describe`/`validate` spawning (resolver).
 //! - `environment` — machine capture, `benchmark-environment.v2` (resolver).
@@ -26,18 +27,25 @@
 //! - `checksum` — deterministic bundle checksums (supervisor).
 //! - `seal` — the single always-seal funnel (supervisor).
 //! - `interrupt` — SIGINT/SIGTERM latch (supervisor).
+//! - `suite` — N attempts of one experiment, then one summary.
+//! - `capacity` — the rate ladder, and where it stopped.
+//! - `report` — rendering sealed evidence, and binding prose to it.
 #![forbid(unsafe_code)]
 
 mod attempt;
+pub mod capacity;
 pub mod checksum;
 pub mod cli;
 pub mod environment;
 mod error;
 pub mod interrupt;
+pub mod pipeline;
 pub mod probe;
+pub mod report;
 pub mod resolve;
 pub mod results;
 pub mod seal;
+pub mod suite;
 pub mod supervise;
 mod time;
 pub mod topics;
@@ -71,6 +79,8 @@ mod resolve_test;
 mod results_test;
 #[cfg(test)]
 mod seal_test;
+#[cfg(test)]
+mod suite_test;
 #[cfg(test)]
 mod supervise_test;
 #[cfg(test)]

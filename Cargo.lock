@@ -13,6 +13,7 @@ dependencies = [
 name = "bench-report"
 version = "0.1.0"
 dependencies = [
+ "bench-schema",
  "serde",
  "serde_json",
 ]
@@ -39,6 +40,7 @@ dependencies = [
 name = "benchctl"
 version = "0.1.0"
 dependencies = [
+ "bench-report",
  "bench-schema",
  "serde_json",
  "sha2",

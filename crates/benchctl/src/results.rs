@@ -1,5 +1,5 @@
-//! Reading subject evidence after execution: adapter status, lenient views of
-//! result documents, and presence checks, feeding classification without ever
+//! Reading subject evidence after execution: adapter status, the v2 measurement
+//! document, and presence checks, feeding classification without ever
 //! re-serializing adapter-owned bytes.
 //!
 //! This module answers the second of the two questions a sealed bundle must
@@ -9,31 +9,57 @@
 //! phase and be invalid, and a partial run can still hold one subject's perfectly
 //! good evidence.
 //!
+//! # Why v2 and only v2
+//!
+//! The protocol path reads `adapters/<subject>/result.json` as
+//! [`ProducerBenchmarkV2`]. That document carries the four-timestamp offer model
+//! and the accounting invariants that make "the run drained" a checkable
+//! statement rather than a hope, so parsing it *is* half the verdict: a document
+//! whose offers do not add up cannot be read at all. The lenient v1 view
+//! ([`KnownProducerResult`](bench_schema::KnownProducerResult)) is no longer part
+//! of classification; it survives in the schema crate for the legacy stdout
+//! flows, which keep emitting v1 forever.
+//!
 //! Nothing here rewrites what an adapter wrote. A result document is captured as
-//! bytes and sealed as those exact bytes; the lenient views extract the handful
-//! of facts the gate needs and leave every other key untouched. Re-serializing
-//! would drop the fields the view does not name and round-trip the adapter's
-//! floating-point numbers through a second formatter, which is a way of altering
-//! evidence while believing you are reading it.
+//! bytes and sealed as those exact bytes; the parse extracts the facts the gate
+//! needs and the sealed file keeps every byte the adapter chose. Re-serializing
+//! would round-trip the adapter's floating-point numbers through a second
+//! formatter, which is a way of altering evidence while believing you are reading
+//! it.
+//!
+//! # The three gates a subject passes
+//!
+//! 1. **The process.** It ran, it was not killed, it exited zero.
+//! 2. **The documents.** A readable status saying `succeeded`, and a readable v2
+//!    result the adapter itself declared valid.
+//! 3. **The accounting.** Complete drain — no unknown offers, nothing left
+//!    outstanding — and, when the experiment declares objectives, a failure count
+//!    within [`max_failed_records`].
 //!
 //! [`DEFERRED_CHECKS`] is the honest half of the verdict. Every check the legacy
-//! Node harness performs that this milestone does not is named in the
-//! classification document, so that a reader knows exactly what "valid" does not
-//! cover here.
+//! Node harness performs that a single attempt's classification does not is named
+//! in the classification document, so that a reader knows exactly what "valid"
+//! does not cover here.
 
 use bench_schema::{
-    AdapterOutcome, AdapterStatus, Classification, Comparison, ComparisonPair, KnownProducerResult,
-    PRODUCER_BENCHMARK_V1, ProcessExit, SubjectExecution, SubjectValidity, SubjectVerification,
+    AdapterOutcome, AdapterStatus, Classification, Comparison, ComparisonPair, Histogram,
+    PRODUCER_BENCHMARK_V2, ProcessExit, ProducerBenchmarkV2, SloSpec, SubjectExecution,
+    SubjectValidity, SubjectVerification,
 };
 
 use crate::attempt::AttemptPaths;
 
-/// Checks this milestone does not perform, named in every classification.
+/// The quantile every headline latency in this crate is taken at.
+pub const HEADLINE_QUANTILE: f64 = 0.99;
+
+/// Checks a single attempt's classification does not perform, named in every
+/// classification.
 ///
-/// These are the gates the legacy Node control plane still owns. Listing them by
-/// name is the alternative to a footnote nobody reads: a bundle from this
-/// milestone states what it did not check, in the same document that states what
-/// it did.
+/// These are the gates the legacy Node control plane still owns, or that only a
+/// repetition suite can answer. Listing them by name is the alternative to a
+/// footnote nobody reads: a bundle states what it did not check, in the same
+/// document that states what it did. `benchctl suite` answers the first two
+/// across attempts; one attempt still cannot.
 pub const DEFERRED_CHECKS: [&str; 7] = [
     "bootstrap-confidence-intervals",
     "paired-repetition-suites",
@@ -44,15 +70,34 @@ pub const DEFERRED_CHECKS: [&str; 7] = [
     "process-resource-capture",
 ];
 
+/// The most failed-or-timed-out records an experiment with objectives tolerates.
+///
+/// The schema's [`SloSpec`] states ceilings on latency, schedule delay, drain,
+/// and native client counters, and says nothing about delivery failures, because
+/// an experiment that declares objectives at all is one where a lost record is
+/// not a measurement — it is a different run.
+///
+/// The number is [`bench_report::MAX_FAILED_RECORDS`] rather than a second
+/// constant with the same value. Classification and the capacity search's
+/// objective gate must agree about what "lost a record" costs; two constants
+/// would be two chances to disagree, and the disagreement would show up as a
+/// probe that satisfied its objectives inside a bundle classified invalid.
+#[must_use]
+pub const fn max_failed_records(_slo: &SloSpec) -> u64 {
+    bench_report::MAX_FAILED_RECORDS
+}
+
 /// What one subject's own evidence says once it has run.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SubjectEvidence {
     /// The adapter's terminal status, when it wrote a readable one.
     pub adapter_status: Option<AdapterStatus>,
-    /// The known fields of the adapter's result document, when it wrote one.
-    pub result: Option<KnownProducerResult>,
+    /// The adapter's v2 measurement document, when it wrote a readable one.
+    pub result: Option<ProducerBenchmarkV2>,
     /// Whether a result document was found where one was expected.
     pub result_present: bool,
+    /// Why the result document present on disk could not be used.
+    pub result_error: Option<String>,
     /// Problems noticed while reading, in the order they were noticed.
     pub notes: Vec<String>,
 }
@@ -62,6 +107,26 @@ impl SubjectEvidence {
     #[must_use]
     pub fn adapter_outcome(&self) -> Option<AdapterOutcome> {
         self.adapter_status.as_ref().map(|status| status.outcome)
+    }
+
+    /// Acknowledged records per second over the measured interval.
+    #[must_use]
+    pub fn goodput(&self) -> Option<f64> {
+        self.result
+            .as_ref()
+            .map(|result| result.throughput.acknowledged_records_per_second)
+    }
+
+    /// The 99th percentile of `terminal - intended`, derived from the histogram.
+    ///
+    /// This is the latency a reader should quote: it includes admission wait and
+    /// scheduler lateness, so a client that absorbed backpressure by making the
+    /// application wait cannot hide that wait outside the measurement.
+    #[must_use]
+    pub fn intended_to_terminal_p99_ns(&self) -> Option<u64> {
+        let result = self.result.as_ref()?;
+        let histogram = Histogram::decode(&result.timing.intended_to_terminal).ok()?;
+        histogram.value_at_quantile(HEADLINE_QUANTILE)
     }
 }
 
@@ -90,15 +155,21 @@ pub fn read_subject(paths: &AttemptPaths, subject: &str) -> SubjectEvidence {
     if result_path.exists() {
         evidence.result_present = true;
         match std::fs::read(&result_path) {
-            Ok(bytes) => match KnownProducerResult::from_slice(&bytes) {
+            Ok(bytes) => match ProducerBenchmarkV2::from_slice(&bytes) {
                 Ok(result) => evidence.result = Some(result),
-                Err(error) => evidence
-                    .notes
-                    .push(format!("the result document is unreadable: {error}")),
+                Err(error) => {
+                    evidence.result_error = Some(error.to_string());
+                    evidence
+                        .notes
+                        .push(format!("the result document is unreadable: {error}"));
+                }
             },
-            Err(error) => evidence
-                .notes
-                .push(format!("the result document could not be read: {error}")),
+            Err(error) => {
+                evidence.result_error = Some(error.to_string());
+                evidence
+                    .notes
+                    .push(format!("the result document could not be read: {error}"));
+            }
         }
     }
     evidence
@@ -142,6 +213,8 @@ pub struct SubjectOutcome {
     pub measured: VerificationVerdict,
     /// Whether the warmup topic satisfied its contract.
     pub warmup: VerificationVerdict,
+    /// The objectives the experiment declared, empty when it declared none.
+    pub slo: SloSpec,
 }
 
 impl SubjectOutcome {
@@ -156,6 +229,7 @@ impl SubjectOutcome {
             verification: SubjectVerification::default(),
             measured: VerificationVerdict::NotRun,
             warmup: VerificationVerdict::NotRun,
+            slo: SloSpec::default(),
         }
     }
 
@@ -177,6 +251,7 @@ impl SubjectOutcome {
     pub fn validity(&self) -> SubjectValidity {
         let mut reasons = self.process_reasons();
         reasons.extend(self.document_reasons());
+        reasons.extend(self.accounting_reasons());
         reasons.extend(self.verification_reasons());
         SubjectValidity {
             name: self.name.clone(),
@@ -240,19 +315,61 @@ impl SubjectOutcome {
         }
         match &self.evidence.result {
             None if self.evidence.result_present => {
-                reasons.push("the result document could not be read".to_owned());
+                let detail = self
+                    .evidence
+                    .result_error
+                    .as_deref()
+                    .unwrap_or("no reason recorded");
+                reasons.push(format!(
+                    "the result document is not a readable {PRODUCER_BENCHMARK_V2}: {detail}"
+                ));
             }
             None => reasons.push("the adapter wrote no result document".to_owned()),
             Some(result) => {
-                if !result.has_known_schema() {
+                if !result.valid {
+                    let detail = result
+                        .invalid_reason
+                        .as_deref()
+                        .unwrap_or("no reason given");
                     reasons.push(format!(
-                        "the result document declares {}, which is not a producer result",
-                        result.schema.as_deref().unwrap_or("no schema")
+                        "the adapter did not declare its result valid: {detail}"
                     ));
                 }
-                if !result.adapter_declared_valid() {
-                    reasons.push("the adapter did not declare its result valid".to_owned());
-                }
+            }
+        }
+        reasons
+    }
+
+    /// Reasons drawn from the v2 offer accounting: drain, and the failure
+    /// ceiling an experiment with objectives implies.
+    fn accounting_reasons(&self) -> Vec<String> {
+        let Some(result) = &self.evidence.result else {
+            return Vec::new();
+        };
+        let mut reasons = Vec::new();
+        if result.outcomes.unknown != 0 {
+            reasons.push(format!(
+                "the run did not drain: {} accepted offers reached no terminal state",
+                result.outcomes.unknown
+            ));
+        }
+        if result.queue.final_outstanding != 0 {
+            reasons.push(format!(
+                "the run did not drain: {} offers were still outstanding when it ended",
+                result.queue.final_outstanding
+            ));
+        }
+        if !self.slo.is_empty() {
+            let lost = result
+                .outcomes
+                .failed
+                .saturating_add(result.outcomes.timed_out);
+            let ceiling = max_failed_records(&self.slo);
+            if lost > ceiling {
+                reasons.push(format!(
+                    "{lost} records failed or timed out, above the {ceiling} this \
+                     experiment's objectives allow"
+                ));
             }
         }
         reasons
@@ -298,8 +415,8 @@ pub fn classify(subjects: &[SubjectOutcome], extra_reasons: &[String]) -> Classi
     Classification {
         schema: Classification::SCHEMA.to_owned(),
         run_valid: reasons.is_empty(),
-        // Never true in this milestone: the deferred checks below are exactly
-        // the evidence a published claim would need.
+        // Never true from one attempt: the deferred checks below are exactly the
+        // evidence a published claim would need, and most of them need a suite.
         claim_eligible: false,
         subjects: verdicts,
         deferred_checks: DEFERRED_CHECKS
@@ -312,12 +429,18 @@ pub fn classify(subjects: &[SubjectOutcome], extra_reasons: &[String]) -> Classi
 
 /// Builds the attempt's comparison document.
 ///
-/// Subjects are comparable only when every one of them produced a
-/// `kafkars.producer-benchmark.v1` result: ratios between documents of different
+/// Subjects are comparable only when every one of them produced a readable
+/// `kafkars.producer-benchmark.v2` result: ratios between documents of different
 /// shapes would be comparing different measurements. The baseline is the first
 /// subject in execution order, and every later subject is a candidate against
 /// it, so a ratio above one on goodput and below one on latency both favour the
 /// candidate.
+///
+/// Both ratios come from the v2 document itself. Goodput is
+/// `throughput.acknowledged_records_per_second`; latency is the 99th percentile
+/// of `timing.intended_to_terminal`, decoded from the histogram here rather than
+/// read from a percentile the adapter computed, because the adapter never
+/// computes one.
 #[must_use]
 #[expect(
     clippy::cast_precision_loss,
@@ -334,16 +457,15 @@ pub fn compare(order: &[String], subjects: &[SubjectOutcome]) -> Comparison {
         reasons.push("a comparison needs at least two subjects that ran".to_owned());
     }
     for subject in &ordered {
-        let schema = subject
-            .evidence
-            .result
-            .as_ref()
-            .and_then(|result| result.schema.clone());
-        if schema.as_deref() != Some(PRODUCER_BENCHMARK_V1) {
+        if subject.evidence.result.is_none() {
+            let what = if subject.evidence.result_present {
+                "an unreadable result"
+            } else {
+                "no result"
+            };
             reasons.push(format!(
-                "{} produced {} rather than {PRODUCER_BENCHMARK_V1}",
-                subject.name,
-                schema.unwrap_or_else(|| "no result".to_owned())
+                "{} produced {what} rather than {PRODUCER_BENCHMARK_V2}",
+                subject.name
             ));
         }
     }
@@ -355,10 +477,19 @@ pub fn compare(order: &[String], subjects: &[SubjectOutcome]) -> Comparison {
                 pairs.push(ComparisonPair {
                     baseline: baseline.name.clone(),
                     candidate: candidate.name.clone(),
-                    acknowledged_goodput_ratio: ratio(goodput(candidate), goodput(baseline)),
+                    acknowledged_goodput_ratio: ratio(
+                        candidate.evidence.goodput(),
+                        baseline.evidence.goodput(),
+                    ),
                     p99_latency_ratio: ratio(
-                        p99(candidate).map(|value| value as f64),
-                        p99(baseline).map(|value| value as f64),
+                        candidate
+                            .evidence
+                            .intended_to_terminal_p99_ns()
+                            .map(|value| value as f64),
+                        baseline
+                            .evidence
+                            .intended_to_terminal_p99_ns()
+                            .map(|value| value as f64),
                     ),
                 });
             }
@@ -370,24 +501,6 @@ pub fn compare(order: &[String], subjects: &[SubjectOutcome]) -> Comparison {
         pairs,
         reasons,
     }
-}
-
-/// The acknowledged goodput a subject reported, when it reported one.
-fn goodput(subject: &SubjectOutcome) -> Option<f64> {
-    subject
-        .evidence
-        .result
-        .as_ref()
-        .and_then(|result| result.acknowledged_records_per_second)
-}
-
-/// The headline 99th percentile a subject reported, when it reported one.
-fn p99(subject: &SubjectOutcome) -> Option<u64> {
-    subject
-        .evidence
-        .result
-        .as_ref()
-        .and_then(KnownProducerResult::headline_p99_ns)
 }
 
 /// Divides two measurements, refusing anything that would not be a number.

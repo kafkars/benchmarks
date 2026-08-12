@@ -12,6 +12,7 @@ publish = false
 workspace = true
 
 [dependencies]
+bench-report.workspace = true
 bench-schema.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

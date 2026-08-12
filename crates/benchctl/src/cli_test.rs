@@ -13,6 +13,7 @@ use bench_schema::BudgetSpec;
 
 use crate::cli::{Command, DEFAULT_RESULTS_ROOT, parse};
 use crate::error::CtlErrorKind;
+use crate::suite::DEFAULT_REPORTS_ROOT;
 
 fn arguments(line: &str) -> Vec<String> {
     line.split_whitespace().map(str::to_owned).collect()
@@ -32,6 +33,20 @@ fn run_of(line: &str) -> crate::cli::RunCommand {
     }
 }
 
+fn suite_of(line: &str) -> crate::suite::SuiteCommand {
+    match parse(&arguments(line)).unwrap() {
+        Command::Suite(command) => command,
+        other => panic!("expected a suite command, got {other:?}"),
+    }
+}
+
+fn capacity_of(line: &str) -> crate::capacity::CapacityCommand {
+    match parse(&arguments(line)).unwrap() {
+        Command::Capacity(command) => command,
+        other => panic!("expected a capacity command, got {other:?}"),
+    }
+}
+
 fn usage_kind(line: &str) -> CtlErrorKind {
     parse(&arguments(line)).unwrap_err().kind()
 }
@@ -39,6 +54,10 @@ fn usage_kind(line: &str) -> CtlErrorKind {
 const MINIMAL_RESOLVE: &str = "resolve --experiment scenario.toml --subjects subjects.toml \
      --cluster cluster.toml --bootstrap localhost:9092";
 const MINIMAL_RUN: &str = "run --experiment scenario.toml --subjects subjects.toml \
+     --cluster cluster.toml --bootstrap localhost:9092";
+const MINIMAL_SUITE: &str = "suite --experiment scenario.toml --subjects subjects.toml \
+     --cluster cluster.toml --bootstrap localhost:9092 --repetitions 3";
+const MINIMAL_CAPACITY: &str = "capacity --experiment scenario.toml --subjects subjects.toml \
      --cluster cluster.toml --bootstrap localhost:9092";
 
 #[test]
@@ -219,4 +238,103 @@ fn an_order_is_recorded_in_the_order_it_was_given() {
         command.common.order,
         Some(vec!["librdkafka-c".to_owned(), "kafkars".to_owned()])
     );
+}
+
+#[test]
+fn suite_takes_the_run_flags_plus_repetitions_and_a_reports_root() {
+    let command = suite_of(&format!(
+        "{MINIMAL_SUITE} --results /tmp/evidence --reports /tmp/reports --run-timeout-secs 900"
+    ));
+
+    assert_eq!(command.repetitions, 3);
+    assert_eq!(command.results_root, PathBuf::from("/tmp/evidence"));
+    assert_eq!(command.reports_root, PathBuf::from("/tmp/reports"));
+    assert_eq!(command.budget.run_timeout_seconds, 900);
+    assert_eq!(command.common.bootstrap, "localhost:9092");
+}
+
+#[test]
+fn suite_defaults_its_reports_root() {
+    assert_eq!(
+        suite_of(MINIMAL_SUITE).reports_root,
+        PathBuf::from(DEFAULT_REPORTS_ROOT)
+    );
+}
+
+#[test]
+fn a_suite_of_fewer_than_two_repetitions_is_a_usage_error() {
+    for count in ["0", "1"] {
+        let line = MINIMAL_SUITE.replace("--repetitions 3", &format!("--repetitions {count}"));
+        assert_eq!(usage_kind(&line), CtlErrorKind::Usage, "accepted {count}");
+    }
+}
+
+#[test]
+fn a_suite_without_a_repetition_count_is_a_usage_error() {
+    let error = parse(&without(MINIMAL_SUITE, "--repetitions")).unwrap_err();
+
+    assert_eq!(error.kind(), CtlErrorKind::Usage);
+    assert!(
+        error.message().contains("--repetitions"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn capacity_takes_the_run_flags_and_a_reports_root_but_no_repetitions() {
+    let command = capacity_of(&format!("{MINIMAL_CAPACITY} --reports /tmp/reports"));
+
+    assert_eq!(command.reports_root, PathBuf::from("/tmp/reports"));
+    assert_eq!(command.results_root, PathBuf::from(DEFAULT_RESULTS_ROOT));
+    assert_eq!(
+        usage_kind(&format!("{MINIMAL_CAPACITY} --repetitions 3")),
+        CtlErrorKind::Usage,
+        "the scenario's repetitions_per_rate is the confirmation count"
+    );
+}
+
+#[test]
+fn report_names_a_bundle_and_optionally_a_destination() {
+    match parse(&arguments(
+        "report --bundle /tmp/bundle --out /tmp/report.md",
+    ))
+    .unwrap()
+    {
+        Command::Report(command) => {
+            assert_eq!(command.bundle, PathBuf::from("/tmp/bundle"));
+            assert_eq!(command.out, Some(PathBuf::from("/tmp/report.md")));
+        }
+        other => panic!("expected a report command, got {other:?}"),
+    }
+    assert_eq!(usage_kind("report"), CtlErrorKind::Usage);
+}
+
+#[test]
+fn packet_names_both_documents_and_requires_both() {
+    match parse(&arguments(
+        "packet --suite /tmp/suite-summary.json --llm-summary /tmp/written.json",
+    ))
+    .unwrap()
+    {
+        Command::Packet(command) => {
+            assert_eq!(command.suite, PathBuf::from("/tmp/suite-summary.json"));
+            assert_eq!(command.llm_summary, PathBuf::from("/tmp/written.json"));
+        }
+        other => panic!("expected a packet command, got {other:?}"),
+    }
+    assert_eq!(
+        usage_kind("packet --suite /tmp/suite-summary.json"),
+        CtlErrorKind::Usage
+    );
+}
+
+#[test]
+fn the_usage_text_names_every_verb() {
+    for verb in ["resolve", "run", "suite", "capacity", "report", "packet"] {
+        assert!(
+            crate::cli::USAGE.contains(verb),
+            "the usage text does not mention {verb}"
+        );
+    }
 }

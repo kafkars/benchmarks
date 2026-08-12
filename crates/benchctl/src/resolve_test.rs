@@ -100,6 +100,7 @@ fn probe(name: &str, version: &str) -> SubjectProbe {
         subject: SubjectEntry {
             name: name.to_owned(),
             command: vec![format!("target/release/{name}-adapter")],
+            role: None,
         },
         describe: description(name, version),
         validate: Some(ValidateReport::supported()),
