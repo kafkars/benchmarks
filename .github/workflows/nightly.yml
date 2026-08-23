@@ -102,8 +102,6 @@ jobs:
           package-manager-cache: false
       - name: Check out reviewed sibling dependencies
         uses: ./kafka-benchmarks/.github/actions/checkout-siblings
-        with:
-          read-token: ${{ secrets.KAFKA_SIBLING_REPOS_READ_TOKEN }}
       # The same key CI uses, for the same reason: the librdkafka version plus
       # the first bytes of the reviewed source checksum fully determine the
       # cached bytes, so there are deliberately no restore-keys. A miss is never

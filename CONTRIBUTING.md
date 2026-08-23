@@ -19,14 +19,21 @@ For each patch:
 6. Run `scripts/check` and inspect the complete diff.
 
 `scripts/check` runs on a clean clone of this repository alone. It needs the
-pinned Rust and Node toolchains and nothing else: the workspace, schema,
+pinned Rust and Node toolchains plus zrail 0.0.1 (`cargo +1.96.0 install zrail
+--version 0.0.1 --locked`): the workspace, architecture, schema,
 librdkafka-pin, control-plane, and model-summary lanes all work without the
 sibling checkouts, and the provenance lane reports absent siblings as an
 advisory and exits 0 rather than failing. Nothing in this workspace depends on
 them.
 
-Work that builds or runs a real subject does need them, cloned beside this
-repository as `../kafka-client`, `../kafka-driver`, and `../kafka-protocol`.
+The architecture authority is `zrail.toml` plus `zrail.lock`. Run
+`zrail diff --base HEAD --deny-grants` when either moves. `zrail update
+--accept-grants` is a human-reviewed authority change and must never appear in
+CI or a routine implementation script.
+
+Work that builds or runs a real subject does need the public siblings, cloned
+beside this repository as `../kafkars`, `../kafka-driver`, and
+`../kafka-protocol` (the checkout of `kafkars/kafka-wire`).
 Adapter work runs `scripts/check-benchmarks`, which builds the adapters against
 the pinned siblings and checks the conformance vectors three ways: the Rust
 adapter, the C adapter, and the committed goldens must agree. The acceptance

@@ -13,9 +13,10 @@
 #
 #   workspace             Proves the Rust control plane compiles at the MSRV,
 #                         is formatted, is clippy-clean under -D warnings, its
-#                         unit tests pass, the source tree still matches
-#                         `guardrails.toml` — file budgets, declarative facades,
-#                         module contracts, test siblings, and no async runtime
+#                         unit tests pass, the source tree still matches the
+#                         content-bound zrail policy — file-size ratchets,
+#                         package layers, declarative facades, module contracts,
+#                         test siblings, and no async runtime
 #                         in the harness's own lock file — every schema file
 #                         parses and is registered, and the librdkafka pin reads
 #                         the same in all seven places it is written down —
@@ -61,12 +62,10 @@
 #                         the whole argument: its numbers are shared-runner
 #                         numbers, useful for "did it run" and inadmissible as a
 #                         performance claim, so it must be able to fail without
-#                         blocking a merge. A fork has no
-#                         KAFKA_SIBLING_REPOS_READ_TOKEN, so the sibling
-#                         checkout step fails there and the whole job fails
-#                         harmlessly — that is the expected outcome on a fork,
-#                         not a misconfiguration. Never a PR gate; never
-#                         required by branch protection.
+#                         blocking a merge. The sibling repositories are public,
+#                         so forks can run the same pinned checkout without a
+#                         repository secret. Never a PR gate; never required by
+#                         branch protection.
 #
 # Branch protection: require `quality-gate` only.
 #
@@ -102,7 +101,7 @@ jobs:
   workspace:
     name: workspace
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out benchmarks
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,6 +109,13 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust toolchain
         uses: ./.github/actions/setup-rust
+      # zrail 0.0.1 has its own Rust 1.96 source floor. Installing it with an
+      # explicit secondary toolchain keeps the benchmark workspace on its
+      # reviewed Rust 1.88 compiler.
+      - name: Install the zrail toolchain
+        run: rustup toolchain install 1.96.0 --profile minimal
+      - name: Install pinned zrail
+        run: cargo +1.96.0 install zrail --version 0.0.1 --locked
       # Fetch once, up front, so the check scripts can stay offline-friendly
       # and a network blip reads as a fetch failure rather than a lint failure.
       - name: Fetch reviewed dependencies
@@ -181,8 +187,6 @@ jobs:
           package-manager-cache: false
       - name: Check out reviewed sibling dependencies
         uses: ./kafka-benchmarks/.github/actions/checkout-siblings
-        with:
-          read-token: ${{ secrets.KAFKA_SIBLING_REPOS_READ_TOKEN }}
       # The cache key is the librdkafka version plus the first bytes of the
       # reviewed source checksum, and nothing else: that pair fully determines
       # the cached bytes, so there are deliberately no restore-keys — a partial
@@ -264,13 +268,11 @@ jobs:
         with:
           node-version: "24.19.0"
           package-manager-cache: false
-      # A fork cannot read this secret, so this step fails there and the job
-      # ends red under continue-on-error. That is deliberate: the alternative is
-      # a lane that silently measures nothing and reports success.
+      # The reviewed sibling repositories are public, so this exact pinned
+      # stack is available to pull requests from forks without a repository
+      # secret.
       - name: Check out reviewed sibling dependencies
         uses: ./kafka-benchmarks/.github/actions/checkout-siblings
-        with:
-          read-token: ${{ secrets.KAFKA_SIBLING_REPOS_READ_TOKEN }}
       # The same key the conformance lane uses, guarded by the same
       # scripts/check-librdkafka-pin: the librdkafka version plus the first
       # bytes of the reviewed source checksum fully determine the cached bytes,

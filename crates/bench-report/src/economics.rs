@@ -33,11 +33,10 @@
 //! Unlike the legacy module, which fails closed on any deviation from the
 //! pinned schema, this one reads what is there: snapshots are parsed as generic
 //! JSON, unknown keys are ignored, and a counter that is missing yields `None`
-//! rather than a zero. A subject whose client has no native statistics at all —
-//! `kafkars` today, whose client-side counters are blocked on the client
-//! repository — therefore reports `None` for every field here, and nothing
-//! downstream may turn that absence into a number. An absent measurement and a
-//! measurement of zero are different claims.
+//! rather than a zero. Kafkars' versioned sidecar supplies exact Produce request,
+//! partition-batch, record, and encoded-record-byte deltas. It does not expose
+//! total wire bytes, retries, or request timeouts, so those fields remain absent.
+//! An absent measurement and a measurement of zero are different claims.
 //!
 //! # Layout
 //!
@@ -47,6 +46,7 @@
 //! - `totals` — one subject's costs, and how attempts of it add up.
 //! - `normalize` — the two quotients that make runs comparable.
 
+mod kafkars;
 mod normalize;
 mod snapshot;
 mod stream;

@@ -14,8 +14,8 @@
 //! # Faithful to v1, without inheriting its assumptions
 //!
 //! The legacy Node capture (`legacy/benchctl/environment.mjs`) is the reference
-//! for the field set: the same sibling repository names (`kafka_client`,
-//! `kafka_driver`, `kafka_protocol`), the same `rustc`/`cargo`/`cc` toolchain
+//! for the field set. v2 uses current public repository names (`kafkars`,
+//! `kafka_driver`, `kafka_wire`), plus the same `rustc`/`cargo`/`cc` toolchain
 //! probes, the same `uname -a`, and the same broker prose — the cluster is
 //! "externally managed by the caller", because a harness that starts its own
 //! broker is measuring its own startup.
@@ -56,7 +56,7 @@ pub const BROKER_LIFECYCLE: &str = "externally managed by the caller";
 /// Broker version recorded when the operator did not state one.
 pub const BROKER_VERSION_UNKNOWN: &str = "unknown";
 
-/// Environment variable that relocates the `kafka-client` checkout.
+/// Environment variable that relocates the Kafkars checkout.
 pub const CLIENT_ROOT_VARIABLE: &str = "KAFKA_BENCH_CLIENT_ROOT";
 
 /// Captures the environment an attempt is about to run in.
@@ -90,19 +90,20 @@ pub fn capture(
 /// Returns the repository list a real attempt captures: this repository, plus
 /// the three sibling checkouts the measured clients are built from.
 ///
-/// The sibling layout `~/code/{kafka-client,kafka-driver,kafka-protocol}` is
-/// the house convention; [`CLIENT_ROOT_VARIABLE`] relocates the client alone,
-/// which is what CI needs when the checkouts are not peers.
+/// The sibling layout uses `kafkars`, `kafka-driver`, and `kafka-protocol`; the
+/// last path is the public `kafkars/kafka-wire` repository because that is the
+/// path Kafkars' reviewed workspace dependency declares. [`CLIENT_ROOT_VARIABLE`]
+/// relocates Kafkars alone for compatibility with existing automation.
 #[must_use]
 pub fn default_repositories(repository_root: &Path) -> Vec<(String, PathBuf)> {
     let sibling = |name: &str| repository_root.join("..").join(name);
-    let client = std::env::var_os(CLIENT_ROOT_VARIABLE)
-        .map_or_else(|| sibling("kafka-client"), PathBuf::from);
+    let client =
+        std::env::var_os(CLIENT_ROOT_VARIABLE).map_or_else(|| sibling("kafkars"), PathBuf::from);
     vec![
         ("kafka_benchmarks".to_owned(), repository_root.to_path_buf()),
-        ("kafka_client".to_owned(), client),
+        ("kafkars".to_owned(), client),
         ("kafka_driver".to_owned(), sibling("kafka-driver")),
-        ("kafka_protocol".to_owned(), sibling("kafka-protocol")),
+        ("kafka_wire".to_owned(), sibling("kafka-protocol")),
     ]
 }
 

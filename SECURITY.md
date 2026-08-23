@@ -38,6 +38,8 @@ crafted adapter response.
 
 Out of scope for this repository, and better reported to their own maintainers:
 Apache Kafka broker vulnerabilities, librdkafka, third-party dependencies, and
-the sibling `kafka-client`, `kafka-driver`, and `kafka-protocol` repositories.
-Benchmark results themselves are not confidential, and a bundle sealed on a
-developer machine is expected to record that machine's hostname and toolchain.
+the public [`kafkars`](https://github.com/kafkars/kafkars),
+[`kafka-driver`](https://github.com/kafkars/kafka-driver), and
+[`kafka-wire`](https://github.com/kafkars/kafka-wire) repositories. Benchmark
+results themselves are not confidential, and a bundle sealed on a developer
+machine is expected to record that machine's hostname and toolchain.

@@ -12,6 +12,16 @@ not permitted and appears instead as a new schema id.
 
 ### Added
 
+- `kafkars.kafkars-native-metrics.v1`, a versioned v2 sidecar containing the
+  public Kafkars producer snapshots immediately before and after measurement
+  plus validated deltas for Produce requests, partition batches, records, and
+  encoded record bytes. Request economics consumes only those exact counters;
+  wire bytes, payload bytes, retries, and timeouts remain absent because the
+  public surface does not report them;
+- public sibling provenance for `kafkars/kafkars`,
+  `kafkars/kafka-driver`, and `kafkars/kafka-wire`, including the Kafkars
+  public-pair attestation and secret-free CI checkouts;
+
 - extracted the benchmark harness out of the private `zsumz/kafka-client-private`
   repository into a standalone lab, so that measuring a client is no longer a
   subdirectory of the client being measured;
@@ -29,22 +39,16 @@ not permitted and appears instead as a new schema id.
   control plane;
 - `scripts/check` as the single gate, composing the workspace, guardrails,
   schema, control-plane, and dependency-provenance lanes;
-- `bench-guardrails` and `guardrails.toml`, which turn the source-shape rules in
-  `AGENTS.md` from review conventions into a test. The crate classifies every
-  Rust file under `crates/` and `adapters/kafkars/src` as facade,
-  implementation, test, or auxiliary and measures it against that category's
-  advisory target and failing gate (80/120, 240/300, 300/500, 300/500), and it
-  checks that every file opens with a `//!` contract, that `lib.rs` and `mod.rs`
-  carry declarations and re-exports only, that each `*_test.rs` has a subject
-  beside it and a `#[cfg(test)]` declaration somewhere in its crate, and that no
-  banned async runtime appears in the root `Cargo.lock` — the kafkars adapter's
-  lock stays exempt, because the client under test brings its own graph. A file
-  over its gate is admissible only through a `[budgets].baseline` entry carrying
-  its exact length and a justification; because the length is exact, such a file
-  may neither grow nor silently shrink, and an entry whose file now fits, or has
-  gone, is itself an error, so the exception list is a queue that empties rather
-  than a ceiling that fills. This closes the guardrails deferral recorded in
-  `AGENTS.md` at bootstrap;
+- zrail 0.0.1 as the content-bound architecture authority for the harness
+  workspace. `zrail.toml` and `zrail.lock` replace the custom
+  `bench-guardrails` crate with package layers, locked dependency declarations,
+  module contracts, declarative facades, sibling-test reachability, source
+  hygiene, and tightening per-file size ratchets. A narrow companion check
+  retains the two repository-specific policies outside zrail's declared-edge
+  model: the transitive async-runtime ban over the root `Cargo.lock`, and source
+  shape for the detached Kafkars adapter whose reviewed path dependencies live
+  in sibling repositories. The adapter's own lock remains exempt because the
+  client under test owns that graph;
 - `kafkars.producer-benchmark.v2`, the measurement document of the
   four-timestamp offer model: every offer carries one immutable identity and its
   intended, call-start, accepted, and terminal instants, none of which is reset
@@ -209,6 +213,10 @@ not permitted and appears instead as a new schema id.
 
 ### Changed
 
+- suite reports now lead with the comparison result, use plain-language
+  checks and run-stability labels, show the practical threshold as a
+  percentage, and replace raw metric field names with reader-facing names. The
+  README keeps the same quickstarts and boundaries in a shorter front door;
 - **the `bench-report` render goldens were regenerated.** `crates/bench-report/golden/suite.md`
   and `suite.html` gained three scorecard columns (lateness p99,
   accepted-to-terminal p99, CPU per million acknowledged), one gate row

@@ -1,5 +1,4 @@
-//! Pins the log-linear bucket function, the conservative percentile rule, and
-//! the byte-exact serialized form the C implementation must reproduce.
+//! Pins log-linear buckets, conservative percentiles, and the cross-language bytes.
 #![expect(clippy::unwrap_used, reason = "test assertions may unwrap")]
 
 use crate::histogram::{
@@ -176,8 +175,6 @@ fn decode_rejects_broken_invariants() {
     assert_eq!(SUB_BUCKET_BITS, 7);
 }
 
-/// The stated ceiling has to be the one the bucket function actually produces,
-/// or the validation below is guarding a number nobody derived.
 #[test]
 fn the_index_ceiling_is_the_index_of_the_largest_value() {
     assert_eq!(MAX_BUCKET_INDEX, bucket_index(u64::MAX));
@@ -189,8 +186,6 @@ fn the_index_ceiling_is_the_index_of_the_largest_value() {
     );
 }
 
-/// The two bound functions are total: no `u32` may make either of them panic,
-/// because a hostile document reaches them before anything has been believed.
 #[test]
 fn bucket_bounds_are_total_over_every_index() {
     for index in [
@@ -213,7 +208,6 @@ fn bucket_bounds_are_total_over_every_index() {
     }
 }
 
-/// Builds a valid single-recording histogram to mutate one field of.
 fn one_recording() -> EncodedHistogram {
     let mut histogram = Histogram::new();
     histogram.record(42);
@@ -244,7 +238,6 @@ fn decode_rejects_an_index_no_value_can_reach() {
 
 #[test]
 fn decode_rejects_an_extreme_that_disagrees_with_emptiness() {
-    // The hole the old `or`-folded check left open: empty, but with a minimum.
     let mut empty_with_only_min = one_recording();
     empty_with_only_min.counts = Vec::new();
     empty_with_only_min.total = 0;
@@ -281,9 +274,6 @@ fn decode_rejects_an_extreme_that_disagrees_with_emptiness() {
 
 #[test]
 fn a_percentile_of_counts_that_overflow_a_u64_is_a_number_not_a_panic() {
-    // `validate` sums bucket counts saturatingly, so this document is legal:
-    // two buckets whose counts add past `u64::MAX` against a saturated total.
-    // Reading a percentile out of it must use the same arithmetic.
     let half = u64::MAX / 2 + 1;
     let hostile = EncodedHistogram {
         layout: HISTOGRAM_LAYOUT_V1.to_owned(),

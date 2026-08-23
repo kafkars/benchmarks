@@ -1,12 +1,12 @@
-# Materialize the reviewed client, driver, and protocol commits beside this
+# Materialize the reviewed Kafkars, driver, and wire commits beside this
 # repository, exactly as dependencies/sibling-revisions.env names them.
 #
 # The runner layout this produces mirrors a developer machine:
 #
 #   $GITHUB_WORKSPACE/kafka-benchmarks   (the caller checks itself out here)
-#   $GITHUB_WORKSPACE/kafka-client
+#   $GITHUB_WORKSPACE/kafkars
 #   $GITHUB_WORKSPACE/kafka-driver
-#   $GITHUB_WORKSPACE/kafka-protocol
+#   $GITHUB_WORKSPACE/kafka-protocol  (the kafkars/kafka-wire repository)
 #
 # so the adapter path deps, the environment capture, and scripts/check-
 # dependency-provenance all resolve `../<sibling>` without a CI-only special
@@ -18,12 +18,7 @@
 # source of truth. Provenance runs last and runs STRICT: in CI a stale sibling
 # is a build error, not a warning.
 name: Check out sibling dependencies
-description: Materialize the reviewed kafka-client, kafka-driver, and kafka-protocol commits.
-
-inputs:
-  read-token:
-    description: Read-only token scoped to the three private sibling repositories.
-    required: true
+description: Materialize the reviewed public Kafkars, Kafka Driver, and Kafka Wire commits.
 
 runs:
   using: composite
@@ -45,8 +40,8 @@ runs:
           echo "revision file must contain exactly three assignments" >&2
           exit 1
         fi
-        if [[ ! "${revision_lines[0]}" =~ ^KAFKA_CLIENT_REVISION=([0-9a-f]{40})$ ]]; then
-          echo "invalid kafka-client revision assignment" >&2
+        if [[ ! "${revision_lines[0]}" =~ ^KAFKARS_REVISION=([0-9a-f]{40})$ ]]; then
+          echo "invalid Kafkars revision assignment" >&2
           exit 1
         fi
         client_revision="${BASH_REMATCH[1]}"
@@ -56,7 +51,7 @@ runs:
         fi
         driver_revision="${BASH_REMATCH[1]}"
         if [[ ! "${revision_lines[2]}" =~ ^KAFKA_PROTOCOL_REVISION=([0-9a-f]{40})$ ]]; then
-          echo "invalid kafka-protocol revision assignment" >&2
+          echo "invalid Kafka Wire revision assignment" >&2
           exit 1
         fi
         protocol_revision="${BASH_REMATCH[1]}"
@@ -65,29 +60,26 @@ runs:
           echo "driver=$driver_revision"
           echo "protocol=$protocol_revision"
         } >> "$GITHUB_OUTPUT"
-    - name: Check out kafka-client
+    - name: Check out Kafkars
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        repository: zsumz/kafka-client-private
+        repository: kafkars/kafkars
         ref: ${{ steps.revisions.outputs.client }}
-        path: kafka-client
-        token: ${{ inputs.read-token }}
+        path: kafkars
         persist-credentials: false
     - name: Check out kafka-driver
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        repository: zsumz/kafka-driver-private
+        repository: kafkars/kafka-driver
         ref: ${{ steps.revisions.outputs.driver }}
         path: kafka-driver
-        token: ${{ inputs.read-token }}
         persist-credentials: false
-    - name: Check out kafka-protocol
+    - name: Check out Kafka Wire
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
-        repository: zsumz/kafka-protocol-private
+        repository: kafkars/kafka-wire
         ref: ${{ steps.revisions.outputs.protocol }}
         path: kafka-protocol
-        token: ${{ inputs.read-token }}
         persist-credentials: false
     # The script derives its repository root from its own location, so this
     # attests the kafka-benchmarks checkout that owns this action regardless of

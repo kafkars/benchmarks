@@ -89,20 +89,23 @@ and it is not a place to make a client look good.
   that genuinely want a panic on a bad fixture opt in with an explicit
   `#![expect(clippy::unwrap_used, reason = "...")]`.
 - **These rules are enforced, not merely written down.**
-  [`crates/bench-guardrails`](crates/bench-guardrails) reads the hand-authored
-  [`guardrails.toml`](guardrails.toml) and fails `scripts/check-guardrails` when
-  the tree stops matching it: module contracts, facade purity, unit tests that
-  name a subject and live behind `#[cfg(test)]`, per-category line budgets, and
-  the absence of every banned async runtime from the root `Cargo.lock` — the
-  adapter's own lock stays exempt, because the client under test brings its own
-  graph. The budgets are a target/gate pair per role — facade 80/120,
-  implementation 240/300, test and auxiliary 300/500 — where the target only
-  prints an advisory and the gate fails. A file over its gate needs a
-  `[budgets].baseline` entry naming it, its exact current length, and a reason a
-  reviewer can weigh; because the length is exact, a baselined file may neither
-  grow nor silently shrink, and an entry whose file now fits, or no longer
-  exists, is itself an error. The ratchet has to be released as the work lands
-  rather than accumulated.
+  [`zrail.toml`](zrail.toml) and [`zrail.lock`](zrail.lock) are the reviewed
+  architecture authority for the harness workspace. zrail enforces module
+  contracts, facade purity, sibling-test reachability, package layers, exact
+  dependency declarations, reviewed macro expansion, evidence runtime
+  boundaries, and per-role file-size ratchets. The target/hard
+  pairs remain facade 80/194, implementation 240/300, test and auxiliary
+  300/500; every existing file above its design target is content-bound in the
+  lock and may neither grow nor silently shrink. `scripts/check-detached-policy`
+  keeps the deliberate exceptions explicit: it scans the root `Cargo.lock`
+  for forbidden runtimes transitively, checks both locks for forbidden
+  benchmarking frameworks, and checks the Kafkars adapter source and lint
+  floor while exempting that subject's own lock from the runtime ban. The
+  adapter cannot be a zrail Cargo
+  root because its reviewed path dependencies intentionally live in sibling
+  repositories outside this one. Review policy and lock movement with
+  `zrail diff --base HEAD --deny-grants`; never use `--accept-grants` in an
+  automated gate.
 - Run `scripts/check` before requesting review.
 
 ## Deferred decisions

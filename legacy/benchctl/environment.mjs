@@ -12,7 +12,7 @@ export function captureBenchmarkEnvironment(
   const sibling = (name) => resolve(repository, "..", name);
   const clientRoot =
     process.env.KAFKA_BENCH_CLIENT_ROOT ??
-    resolve(repository, "..", "kafka-client");
+    resolve(repository, "..", "kafkars");
   return {
     schema: "kafkars.benchmark-environment.v1",
     captured_at: new Date().toISOString(),

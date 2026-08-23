@@ -7,15 +7,15 @@
 
 use serde_json::{Value, json};
 
+use bench_schema::{KafkarsNativeMetrics, KafkarsProducerMetricsSnapshot};
+
 use crate::economics::{
     STATISTICS_FILE_NAME, read_request_economics, request_economics_from_snapshots,
 };
 use crate::error::ReportErrorKind;
 
-/// Tolerance for comparing computed statistics against hand-checked values.
 const TOLERANCE: f64 = 1e-9;
 
-/// Builds one envelope snapshot with the counters a producer reports.
 fn snapshot(phase: &str, produce: u64, records: u64, payload: u64, wire: u64) -> Value {
     json!({
         "schema": "kafkars.librdkafka-statistics.v1",
@@ -58,7 +58,31 @@ fn snapshot(phase: &str, produce: u64, records: u64, payload: u64, wire: u64) ->
     })
 }
 
-/// A three-snapshot stream: warmup traffic, then the measured window.
+fn kafkars_snapshot(
+    requests: u64,
+    batches: u64,
+    records: u64,
+    bytes: u64,
+) -> KafkarsProducerMetricsSnapshot {
+    KafkarsProducerMetricsSnapshot {
+        active_records: 0,
+        active_bytes: 0,
+        waiting_records: 0,
+        waiting_bytes: 0,
+        prepared_batches: 0,
+        prepared_batch_bytes: 0,
+        terminal_backlog: 0,
+        produce_requests: requests,
+        partition_batches: batches,
+        records,
+        encoded_record_bytes: bytes,
+        peak_in_flight_requests: 5,
+        peak_in_flight_requests_per_broker: 2,
+        accepting: true,
+        healthy: true,
+    }
+}
+
 fn stream() -> Vec<Value> {
     vec![
         snapshot("warmup", 100, 1_000, 100_000, 120_000),
@@ -74,10 +98,35 @@ fn the_statistics_file_name_matches_the_adapter_contract() {
 }
 
 #[test]
+fn a_kafkars_sidecar_reports_only_its_public_exact_counters() {
+    let baseline = kafkars_snapshot(10, 20, 100, 1_000);
+    let terminal = kafkars_snapshot(14, 26, 112, 1_900);
+    let document = KafkarsNativeMetrics::between(baseline, terminal).unwrap();
+    let directory = std::env::temp_dir().join(format!(
+        "bench-report-kafkars-economics-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("kafkars-native-metrics.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+
+    let economics = read_request_economics(&path, 12, None).unwrap();
+
+    assert_eq!(economics.produce_requests, Some(4));
+    assert_eq!(economics.transmitted_records, Some(12));
+    assert_eq!(economics.batch_records.unwrap().samples, 6);
+    assert_eq!(economics.batch_bytes.unwrap().total, 900);
+    assert_eq!(economics.transmitted_payload_bytes, None);
+    assert_eq!(economics.transmitted_request_bytes, None);
+    assert_eq!(economics.retries, None);
+    assert_eq!(economics.timeouts, None);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn counters_are_differenced_across_the_measured_window_only() {
     let economics = request_economics_from_snapshots(&stream(), 10_000, Some("measured")).unwrap();
 
-    // baseline 200 produce requests, final 1200: the 100 from warmup are gone.
     assert_eq!(economics.produce_requests, Some(1_000));
     assert_eq!(economics.transmitted_records, Some(10_000));
     assert_eq!(economics.transmitted_payload_bytes, Some(1_000_000));
@@ -91,7 +140,6 @@ fn counters_are_differenced_across_the_measured_window_only() {
 fn per_broker_counters_exclude_the_bootstrap_pseudo_broker() {
     let economics = request_economics_from_snapshots(&stream(), 10_000, Some("measured")).unwrap();
 
-    // Two real brokers at 2 and 3 retries each, differenced across the window.
     assert_eq!(economics.retries, Some(0));
     assert_eq!(economics.timeouts, Some(0));
     assert_eq!(economics.all_requests, Some(1_000));

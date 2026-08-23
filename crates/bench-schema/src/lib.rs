@@ -39,7 +39,7 @@
 //! # Layout
 //!
 //! - `error` — the single failure type, a kind plus context.
-//! - `schema_id` — the 31 schema ids and [`require_schema`].
+//! - `schema_id` — the 32 schema ids and [`require_schema`].
 //! - `canon` — canonical and pretty JSON bytes; float rejection.
 //! - `identity` — [`ExperimentId`], the two-key exclusion, sha-256 helpers.
 //! - `experiment` — `kafkars.experiment.v1` and its cross-field rules.
@@ -54,6 +54,7 @@
 //! - `histogram` — the log-linear layout every latency is carried in.
 //! - `result_v2` — `kafkars.producer-benchmark.v2`, the four-timestamp offer
 //!   model and its accounting invariants.
+//! - `kafkars_metrics` — public Kafkars counter deltas and boundary gauges.
 //! - `suite` — medians, paired ratios, dispersion, and gates over repetitions.
 //! - `capacity` — the rate ladder a capacity search walked.
 //! - `packet` — the deterministic analysis input, and the [`Verdict`].
@@ -70,6 +71,7 @@ mod error;
 mod experiment;
 mod histogram;
 mod identity;
+mod kafkars_metrics;
 mod legacy;
 mod llm;
 mod lock;
@@ -109,6 +111,9 @@ pub use identity::{
     DIGEST_HEX_LENGTH, ExperimentId, SHORT_ID_LENGTH, experiment_id, identity_bytes,
     identity_document, is_digest_hex, sha256_hex,
 };
+pub use kafkars_metrics::{
+    KafkarsNativeMetrics, KafkarsProducerMetricsDelta, KafkarsProducerMetricsSnapshot,
+};
 pub use legacy::{KnownProducerResult, LegacyLatency, LegacyPercentiles, VerifierReport};
 pub use llm::{Confidence, LlmFinding, LlmHypothesis, LlmProvenance, LlmSummary};
 pub use lock::{SubjectLockEntry, SubjectsLock};
@@ -124,13 +129,14 @@ pub use schema_id::{
     ADAPTER_STATUS_V1, ADAPTER_V1, ADAPTER_VALIDATE_V1, ANALYSIS_PACKET_V1,
     BENCHMARK_ADAPTER_CONFIG_V1, BENCHMARK_ENVIRONMENT_V1, BENCHMARK_ENVIRONMENT_V2, BUNDLE_V1,
     CAPACITY_SEARCH_V1, CLASSIFICATION_V1, COMPARISON_V1, ENGINE_SCHEMA_IDS, EXECUTION_ORDER_V1,
-    EXPERIMENT_V1, LEGACY_SCHEMA_IDS, LIBRDKAFKA_CAPACITY_CURVE_V2, LIBRDKAFKA_CAPACITY_PROBE_V2,
-    LIBRDKAFKA_NATIVE_METRICS_V1, LIBRDKAFKA_STATISTICS_V1, LLM_SUMMARY_V1, PROCESS_RESOURCES_V2,
-    PRODUCER_BENCHMARK_V1, PRODUCER_BENCHMARK_V2, PRODUCER_COMPARISON_SUITE_V1,
-    PRODUCER_COMPARISON_V1, PRODUCER_FIXED_COMPARISON_SUITE_V2, PRODUCER_FIXED_COMPARISON_V2,
-    PRODUCER_FIXED_LOAD_V1, PRODUCER_FIXED_MATRIX_V2, PRODUCER_VERIFICATION_V1, RUN_STATUS_V1,
-    SCHEMA_FILE_SUFFIX, SUBJECTS_LOCK_V1, SUITE_SUMMARY_V1, is_registered, registered_schema_ids,
-    require_schema, schema_file_name, schema_id_from_file_name,
+    EXPERIMENT_V1, KAFKARS_NATIVE_METRICS_V1, LEGACY_SCHEMA_IDS, LIBRDKAFKA_CAPACITY_CURVE_V2,
+    LIBRDKAFKA_CAPACITY_PROBE_V2, LIBRDKAFKA_NATIVE_METRICS_V1, LIBRDKAFKA_STATISTICS_V1,
+    LLM_SUMMARY_V1, PROCESS_RESOURCES_V2, PRODUCER_BENCHMARK_V1, PRODUCER_BENCHMARK_V2,
+    PRODUCER_COMPARISON_SUITE_V1, PRODUCER_COMPARISON_V1, PRODUCER_FIXED_COMPARISON_SUITE_V2,
+    PRODUCER_FIXED_COMPARISON_V2, PRODUCER_FIXED_LOAD_V1, PRODUCER_FIXED_MATRIX_V2,
+    PRODUCER_VERIFICATION_V1, RUN_STATUS_V1, SCHEMA_FILE_SUFFIX, SUBJECTS_LOCK_V1,
+    SUITE_SUMMARY_V1, is_registered, registered_schema_ids, require_schema, schema_file_name,
+    schema_id_from_file_name,
 };
 pub use source::{
     ClusterProfile, ClusterTools, SourceApplication, SourceApplicationApi, SourceCluster,
@@ -166,6 +172,8 @@ mod experiment_test;
 mod histogram_test;
 #[cfg(test)]
 mod identity_test;
+#[cfg(test)]
+mod kafkars_metrics_test;
 #[cfg(test)]
 mod legacy_test;
 #[cfg(test)]

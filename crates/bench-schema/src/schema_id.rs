@@ -47,6 +47,8 @@ pub const EXECUTION_ORDER_V1: &str = "kafkars.execution-order.v1";
 /// Producer measurement written by the adapter protocol's `run` verb, under the
 /// four-timestamp offer model.
 pub const PRODUCER_BENCHMARK_V2: &str = "kafkars.producer-benchmark.v2";
+/// Public Kafkars producer counters and boundary gauges for one measured phase.
+pub const KAFKARS_NATIVE_METRICS_V1: &str = "kafkars.kafkars-native-metrics.v1";
 /// Repeated-attempt summary: medians, paired ratios, dispersion, and gates.
 pub const SUITE_SUMMARY_V1: &str = "kafkars.suite-summary.v1";
 /// The rate ladder a capacity search walked, and where it stopped.
@@ -94,7 +96,7 @@ pub const LIBRDKAFKA_STATISTICS_V1: &str = "kafkars.librdkafka-statistics.v1";
 pub const LIBRDKAFKA_NATIVE_METRICS_V1: &str = "kafkars.librdkafka-native-metrics.v1";
 
 /// Every schema id minted by the Rust engine.
-pub const ENGINE_SCHEMA_IDS: [&str; 16] = [
+pub const ENGINE_SCHEMA_IDS: [&str; 17] = [
     EXPERIMENT_V1,
     ADAPTER_V1,
     ADAPTER_STATUS_V1,
@@ -107,6 +109,7 @@ pub const ENGINE_SCHEMA_IDS: [&str; 16] = [
     COMPARISON_V1,
     EXECUTION_ORDER_V1,
     PRODUCER_BENCHMARK_V2,
+    KAFKARS_NATIVE_METRICS_V1,
     SUITE_SUMMARY_V1,
     CAPACITY_SEARCH_V1,
     ANALYSIS_PACKET_V1,

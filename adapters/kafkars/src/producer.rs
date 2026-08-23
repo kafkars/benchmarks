@@ -53,7 +53,7 @@ use self::{
 };
 
 pub(crate) use self::v2::{
-    V2_COMPLETION_MODE, V2_OWNERSHIP, run_closed_loop_v2, run_fixed_rate_v2,
+    V2_COMPLETION_MODE, V2_OWNERSHIP, V2RunOutcome, run_closed_loop_v2, run_fixed_rate_v2,
 };
 
 /// Client id the closed-loop phases identify themselves to the broker with.

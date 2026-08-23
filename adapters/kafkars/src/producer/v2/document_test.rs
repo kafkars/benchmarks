@@ -171,7 +171,7 @@ fn the_declared_execution_says_what_the_measured_path_actually_did() {
     assert_eq!(document.timing.clock, "monotonic-ns");
     assert_eq!(
         document.native_metrics_path, None,
-        "this adapter emits no statistics file to point at"
+        "the protocol write site assigns the subject-relative sidecar path"
     );
     assert_eq!(document.resources, None, "process resources are deferred");
 }

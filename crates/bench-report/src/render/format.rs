@@ -70,6 +70,16 @@ pub(super) fn valid_count(summary: &SuiteSummary) -> usize {
         .count()
 }
 
+/// Formats a ratio as a percentage for reader-facing thresholds.
+pub(super) fn format_percent(value: f64) -> String {
+    format!("{:.1}%", value * 100.0)
+}
+
+/// The reader-facing word for a boolean fact.
+pub(super) fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
 /// The word for a boolean gate or validity outcome.
 pub(super) fn pass_word(passed: bool) -> &'static str {
     if passed { "pass" } else { "fail" }
@@ -91,9 +101,9 @@ pub(super) fn verdict_word(
     threshold: f64,
 ) -> &'static str {
     if pair_passes(pair, metric, threshold) {
-        "yes"
+        "favorable"
     } else if pair_regresses(pair, metric, threshold) {
-        "no, worse"
+        "worse"
     } else {
         "unresolved"
     }

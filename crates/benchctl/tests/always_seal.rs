@@ -1,10 +1,6 @@
-//! The always-seal guarantee, exercised against every way an attempt can end
-//! badly: an adapter killed from outside, one that aborts, one that ignores its
-//! deadline, a topic tool that fails, and a failure before the attempt began.
-//!
-//! Each case asserts the same two things — a bundle exists, and it says the
-//! right thing — because a harness whose failure paths produce silence is a
-//! harness that reports only its successes.
+//! The always-seal guarantee across crashes, deadlines, tool failures, and
+//! failures before an attempt begins. Every case requires both a bundle and an
+//! honest recorded outcome.
 #![expect(
     clippy::unwrap_used,
     reason = "an integration fixture that misbehaves must fail the test immediately"

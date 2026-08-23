@@ -1,0 +1,422 @@
+schema = 1
+adapters = ["rust"]
+
+[[gate]]
+name = "guardrails"
+kind = "local"
+path = "scripts/check-guardrails"
+inputs = ["scripts/check-detached-policy", "scripts/check-detached-policy-test", "Cargo.lock", "Cargo.toml", "docs/ZRAIL_GAPS.md"]
+reason = "The canonical architecture lane runs zrail and the two explicitly detached repository checks."
+
+[[gate]]
+name = "ci"
+kind = "ci"
+path = ".github/workflows/ci.yml"
+inputs = [".github/actions/setup-rust/action.yml"]
+requires = ["guardrails"]
+reason = "Hosted qualification installs the pinned zrail release and runs the architecture lane."
+
+[[gate]]
+name = "architecture-review"
+kind = "ci"
+path = ".github/workflows/architecture-authority.yml"
+requires = ["guardrails"]
+reason = "Trusted-base automation analyzes proposal source as data without executing proposal-controlled code."
+
+[[invariant]]
+id = "ADAPTER-01"
+title = "Subjects remain process-spawned protocol adapters"
+status = "enforced"
+document = "ARCHITECTURE.md#the-four-roles"
+evidence = [
+  "rust-test:crates/benchctl/src/probe_test.rs::describe_reads_the_capability_document_a_subject_prints",
+  "gate:guardrails",
+  "gate:ci",
+]
+
+[[invariant]]
+id = "AUTHORITY-01"
+title = "A proposal cannot authorize its own architecture grants"
+status = "enforced"
+document = "ARCHITECTURE.md#repository-guardrails"
+evidence = [
+  "rust-test:crates/benchctl/tests/architecture_authority.rs::proposal_architecture_review_runs_from_trusted_base_without_grant_flags",
+  "gate:architecture-review",
+]
+
+[repository]
+# The Kafkars adapter is intentionally a detached subject workspace with path
+# dependencies into reviewed sibling checkouts. zrail fails closed on paths
+# outside its repository root, so the adapter keeps its narrow source-shape
+# check in scripts/check-detached-adapter while zrail owns the harness workspace.
+roots = ["crates"]
+exclude = ["adapters/kafkars"]
+workspace_members = "exact"
+nested_git = "deny"
+submodules = "deny"
+symlinks = "inside"
+
+[dependencies]
+mode = "locked"
+unassigned_packages = "deny"
+cycles = "deny"
+
+[[dependencies.crate_root]]
+package = "serde"
+root = "serde"
+reason = "The published serde library exposes the serde crate root used by reviewed derives."
+[dependencies.crate_root.source]
+kind = "registry"
+requirement = "1.0"
+
+[[dependencies.crate_root]]
+package = "serde_json"
+root = "serde_json"
+reason = "The published serde_json library exposes the serde_json crate root used by reviewed fixtures."
+[dependencies.crate_root.source]
+kind = "registry"
+requirement = "1.0"
+
+[[dependency]]
+name = "schema-rejects-async-runtimes"
+from = "bench-schema"
+deny = ["tokio", "async-std", "smol", "glommio", "monoio", "compio", "futures-executor", "criterion", "divan"]
+reason = "Evidence types remain synchronous and free of scheduler authority."
+
+[[dependency]]
+name = "verifier-rejects-async-runtimes"
+from = "bench-verifier"
+deny = ["tokio", "async-std", "smol", "glommio", "monoio", "compio", "futures-executor", "criterion", "divan"]
+reason = "Verification views remain synchronous and deterministic."
+
+[[dependency]]
+name = "report-rejects-async-runtimes"
+from = "bench-report"
+deny = ["tokio", "async-std", "smol", "glommio", "monoio", "compio", "futures-executor", "criterion", "divan"]
+reason = "Evidence aggregation must not borrow a scheduler."
+
+[[dependency]]
+name = "control-plane-rejects-async-runtimes"
+from = "benchctl"
+deny = ["tokio", "async-std", "smol", "glommio", "monoio", "compio", "futures-executor", "criterion", "divan"]
+reason = "The benchmark control plane owns process scheduling directly."
+
+[[dependency]]
+name = "librdkafka-adapter-rejects-async-runtimes"
+from = "bench-adapter-librdkafka"
+deny = ["tokio", "async-std", "smol", "glommio", "monoio", "compio", "futures-executor", "criterion", "divan"]
+reason = "The adapter shim stays synchronous and does not introduce a scheduler."
+
+[source.rust]
+module_docs = "required"
+facades = "declarative"
+entrypoints = "allow"
+tests = "sibling"
+
+[source.rust.macros]
+mode = "deny-unreviewed"
+
+[[source.rust.macros.allow]]
+name = "Clone"
+reason = "Built-in Clone derives define owned evidence and control-plane data models."
+
+[[source.rust.macros.allow]]
+name = "Copy"
+reason = "Built-in Copy derives mark small value types with explicit copy semantics."
+
+[[source.rust.macros.allow]]
+name = "Debug"
+reason = "Built-in Debug derives support diagnostics for internal and evidence types."
+
+[[source.rust.macros.allow]]
+name = "Default"
+reason = "Built-in Default derives provide reviewed zero and empty model states."
+
+[[source.rust.macros.allow]]
+name = "Eq"
+reason = "Built-in Eq derives express exact identity and classification semantics."
+
+[[source.rust.macros.allow]]
+name = "Hash"
+reason = "Built-in Hash derives support exact lookup keys in control-plane models."
+
+[[source.rust.macros.allow]]
+name = "Ord"
+reason = "Built-in Ord derives provide deterministic ordering for evidence values."
+
+[[source.rust.macros.allow]]
+name = "PartialEq"
+reason = "Built-in PartialEq derives support exact model and test comparisons."
+
+[[source.rust.macros.allow]]
+name = "PartialOrd"
+reason = "Built-in PartialOrd derives support ordered evidence value comparisons."
+
+[[source.rust.macros.allow]]
+name = "assert"
+reason = "Tests and internal invariant checks use Rust's standard assertion expansion."
+
+[[source.rust.macros.allow]]
+name = "assert_eq"
+reason = "Tests use Rust's standard equality assertion expansion."
+
+[[source.rust.macros.allow]]
+name = "assert_ne"
+reason = "Tests use Rust's standard inequality assertion expansion."
+
+[[source.rust.macros.allow]]
+name = "eprintln"
+reason = "Command-line adapters emit human diagnostics through Rust's standard stderr expansion."
+
+[[source.rust.macros.allow]]
+name = "format"
+reason = "Diagnostics, identifiers, and fixtures use Rust's standard formatting expansion."
+
+[[source.rust.macros.allow]]
+name = "matches"
+reason = "Predicates and tests use Rust's standard pattern-matching expansion."
+
+[[source.rust.macros.allow]]
+name = "panic"
+reason = "Explicitly panic-oriented test and fixture branches use Rust's standard expansion."
+
+[[source.rust.macros.allow]]
+name = "print"
+reason = "Command-line entrypoints emit protocol and report output through Rust's standard stdout expansion."
+
+[[source.rust.macros.allow]]
+name = "println"
+reason = "Command-line entrypoints emit line-oriented protocol output through Rust's standard stdout expansion."
+
+[[source.rust.macros.allow]]
+name = "serde"
+reason = "Serde helper attributes configure the reviewed serde derive expansions."
+[source.rust.macros.allow.source]
+kind = "registry"
+requirement = "1.0"
+
+[[source.rust.macros.allow]]
+name = "serde::Deserialize"
+reason = "Versioned input and evidence models use the reviewed serde Deserialize derive expansion."
+[source.rust.macros.allow.source]
+kind = "registry"
+requirement = "1.0"
+
+[[source.rust.macros.allow]]
+name = "serde::Serialize"
+reason = "Versioned evidence models use the reviewed serde Serialize derive expansion."
+[source.rust.macros.allow.source]
+kind = "registry"
+requirement = "1.0"
+
+[[source.rust.macros.allow]]
+name = "serde_json::json"
+inputs = "opaque"
+reason = "Schema and report tests construct reviewed JSON fixtures with serde_json."
+[source.rust.macros.allow.source]
+kind = "registry"
+requirement = "1.0"
+
+[[source.rust.macros.allow]]
+name = "vec"
+reason = "Bounded models and fixtures use Rust's standard vector construction expansion."
+
+[[source.rust.macros.allow]]
+name = "write"
+reason = "Deterministic renderers use Rust's standard formatting writer expansion."
+
+[[source.rust.macros.allow]]
+name = "writeln"
+reason = "Line-oriented reports and test adapters use Rust's standard writer expansion."
+
+[source.rust.hygiene]
+unsafe = "deny"
+lint_suppressions = "reasoned"
+deny_methods = ["unwrap", "expect"]
+deny_macros = ["todo", "unimplemented", "dbg"]
+
+[source.rust.size.facade]
+target = 80
+hard = 194
+
+[source.rust.size.implementation]
+target = 240
+hard = 300
+
+[source.rust.size.test]
+target = 300
+hard = 500
+
+[source.rust.size.auxiliary]
+target = 300
+hard = 500
+
+[[layer]]
+name = "evidence"
+packages = ["bench-schema", "bench-verifier", "bench-report"]
+may_depend_on = []
+reason = "Versioned documents, verification views, and reporting remain pure evidence code."
+
+[layer.dependencies]
+external = "locked"
+
+[[layer]]
+name = "adapter"
+packages = ["bench-adapter-librdkafka"]
+may_depend_on = ["evidence"]
+reason = "The librdkafka shim speaks the public adapter protocol without importing the control plane."
+
+[layer.dependencies]
+external = "locked"
+
+[[layer]]
+name = "control-plane"
+packages = ["benchctl"]
+may_depend_on = ["evidence"]
+reason = "The process-spawning control plane may consume evidence types but no adapter implementation."
+
+[layer.dependencies]
+external = "locked"
+
+[[scope]]
+name = "evidence-runtime-boundary"
+include = [
+  "crates/bench-schema/src/**",
+  "crates/bench-verifier/src/**",
+  "crates/bench-report/src/**",
+]
+exclude = [
+  "crates/bench-schema/src/**/*_test.rs",
+  "crates/bench-verifier/src/**/*_test.rs",
+  "crates/bench-report/src/**/*_test.rs",
+]
+reason = "Production evidence code may read sealed files but never spawns processes, opens network paths, or reads a clock."
+
+[scope.symbols]
+deny = ["std::process", "std::net", "std::time::Instant", "std::time::SystemTime"]
+
+[[owner]]
+name = "control-plane-process-capability"
+kind = "capability"
+within = ["crates/benchctl/src/**"]
+match = "std::process::Command"
+allow = [
+  "crates/benchctl/src/environment.rs",
+  "crates/benchctl/src/probe.rs",
+  "crates/benchctl/src/supervise.rs",
+  "crates/benchctl/src/supervise_test.rs",
+]
+reason = "Only environment capture, protocol probing, supervision, and their focused tests may spawn operating-system processes."
+
+[[owner]]
+name = "librdkafka-shim-process-capability"
+kind = "capability"
+within = ["crates/bench-adapter-librdkafka/src/**"]
+match = "std::process::Command"
+allow = ["crates/bench-adapter-librdkafka/src/run.rs"]
+reason = "The detached C shim is the sole process boundary for the librdkafka adapter package."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-schema/src/lib.rs"
+reason = "The declarative crate facade names and re-exports the complete versioned evidence vocabulary."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-adapter-librdkafka/src/validate.rs"
+reason = "Existing adapter validation debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-report/src/bootstrap.rs"
+reason = "Existing bootstrap analysis debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-report/src/fixture.rs"
+reason = "The shared report fixture is existing auxiliary debt and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-report/src/lib.rs"
+reason = "The declarative report facade is existing size debt and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-report/src/packet_test.rs"
+reason = "Existing packet test debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-report/src/render_test.rs"
+reason = "Existing renderer test debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-report/src/suite/attempt.rs"
+reason = "Existing suite attempt analysis debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-report/src/suite/medians.rs"
+reason = "Existing suite median analysis debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-schema/src/llm.rs"
+reason = "Existing LLM evidence model debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/bench-schema/tests/golden_experiment.rs"
+reason = "Existing golden experiment test debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/benchctl/src/cli/parse.rs"
+reason = "Existing CLI parsing debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/benchctl/src/cli_test.rs"
+reason = "Existing CLI test debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/benchctl/src/environment.rs"
+reason = "Existing environment capture debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/benchctl/src/lib.rs"
+reason = "The declarative control-plane facade is existing size debt and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/benchctl/src/probe.rs"
+reason = "Existing subject probe debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/benchctl/src/seal_test.rs"
+reason = "Existing sealing test debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/benchctl/src/suite.rs"
+reason = "Existing suite orchestration debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/benchctl/src/supervise.rs"
+reason = "Existing process supervision debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/benchctl/tests/cli_binary.rs"
+reason = "Existing CLI binary integration test debt is locked at migration and must only tighten."
+
+[[ratchet]]
+rule = "rust.file-size"
+target = "crates/benchctl/tests/common/mod.rs"
+reason = "Cargo-mandated shared integration support is existing auxiliary debt and must only tighten."

@@ -9,7 +9,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bench_schema::{AdapterStatus, ProducerBenchmarkV2, ResolvedExperiment, pretty_bytes};
+use bench_schema::{
+    AdapterStatus, KafkarsNativeMetrics, ProducerBenchmarkV2, ResolvedExperiment, pretty_bytes,
+};
 
 /// Per-record latency evidence the legacy verbs write next to their result.
 ///
@@ -19,6 +21,9 @@ pub(crate) const LATENCY_FILE: &str = "latency.csv";
 
 /// The measurement document the control plane seals.
 pub(crate) const RESULT_FILE: &str = "result.json";
+
+/// The versioned public Kafkars metrics captured around the measured phase.
+pub(crate) const NATIVE_METRICS_FILE: &str = "kafkars-native-metrics.json";
 
 /// This adapter's own terminal status.
 pub(crate) const STATUS_FILE: &str = "status.json";
@@ -42,6 +47,16 @@ pub(super) fn write_result(
     document.validate()?;
     let line = serde_json::to_string(document)?;
     std::fs::write(output.join(RESULT_FILE), format!("{line}\n"))?;
+    Ok(())
+}
+
+/// Writes the validated native-metrics sidecar as pretty JSON.
+pub(super) fn write_native_metrics(
+    output: &Path,
+    document: &KafkarsNativeMetrics,
+) -> Result<(), Box<dyn Error>> {
+    document.validate()?;
+    std::fs::write(output.join(NATIVE_METRICS_FILE), pretty_bytes(document)?)?;
     Ok(())
 }
 

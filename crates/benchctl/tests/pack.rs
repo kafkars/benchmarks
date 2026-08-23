@@ -1,17 +1,6 @@
-//! `benchctl pack`, offline: a two-entry manifest that dispatches one entry to
-//! the suite path and one to a single run, and leaves exactly the evidence
-//! those two verbs would have left on their own.
-//!
-//! The property this file exists for is that a pack adds nothing. Running the
-//! manifest must produce the same tree as typing `benchctl suite` and then
-//! `benchctl run` by hand — one suite report set, two sealed bundles for the
-//! suite entry, one for the run entry — because a runner that aggregated,
-//! reordered, or retried would make "what the nightly ran" a question only the
-//! runner can answer.
-//!
-//! Everything runs against the `fake-adapter` fixture playing every subject and
-//! all three cluster tools, so there is no Kafka, no network, and no clock
-//! dependence.
+//! Offline `benchctl pack` coverage. A two-entry manifest must leave exactly
+//! the evidence produced by one suite and one run, with no runner aggregation,
+//! retry, or reordering. The fake adapter keeps the test broker-free.
 #![expect(
     clippy::unwrap_used,
     reason = "a fixture that cannot be built must fail the test immediately"
@@ -25,13 +14,10 @@ use std::process::Command;
 
 use bench_schema::SuiteSummary;
 
-/// The control-plane binary under test.
 const BENCHCTL: &str = env!("CARGO_BIN_EXE_benchctl");
 
-/// The bootstrap every offline fixture binds to.
 const BOOTSTRAP: &str = "127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094";
 
-/// Repository root, two levels above this crate's manifest.
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -39,7 +25,6 @@ fn repo_root() -> PathBuf {
         .unwrap()
 }
 
-/// One scratch directory per test, removed on success.
 fn scratch(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
         "benchctl-pack-{label}-{}-{}",
@@ -53,7 +38,6 @@ fn scratch(label: &str) -> PathBuf {
     dir
 }
 
-/// Renders an argv as a TOML array of strings.
 fn command_toml(argv: &[String]) -> String {
     let quoted: Vec<String> = argv.iter().map(|part| format!("{part:?}")).collect();
     format!("[{}]", quoted.join(", "))

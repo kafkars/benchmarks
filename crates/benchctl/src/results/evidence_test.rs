@@ -1,11 +1,6 @@
-//! Reading subject evidence: what a bundle holds, and what it means when a
-//! document is missing, unreadable, or self-contradicting.
-//!
-//! Every result fixture here is a real `kafkars.producer-benchmark.v2` document
-//! built through the schema types, because the parse is half the gate: a
-//! document whose offers do not add up is unreadable by construction. This
-//! module also hosts those fixtures for the sibling test modules, because every
-//! one of them needs the same shape and a second copy would drift.
+//! Subject-evidence fixtures and failure cases. Every result is built through
+//! the v2 schema types so parsing and accounting remain part of the gate; the
+//! shared fixtures live here to keep sibling tests from drifting.
 #![expect(
     clippy::unwrap_used,
     reason = "an evidence fixture that cannot be written must fail the test immediately"

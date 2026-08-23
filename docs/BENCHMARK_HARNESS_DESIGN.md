@@ -2,13 +2,15 @@
 
 Status: accepted; first diagnostic producer comparison implemented
 
-Provenance: extracted from zsumz/kafka-client-private @ cf2b4a59.
+Provenance: extracted from zsumz/kafka-client-private @ cf2b4a59; the current
+subject stack is pinned from the public `kafkars/{kafkars,kafka-driver,kafka-wire}`
+repositories.
 
 This document defines how the repository will produce reproducible performance
 evidence for the native Rust client and later language bindings. It turns the
 claim thresholds in [`PERFORMANCE_CONTRACT.md`](PERFORMANCE_CONTRACT.md) and the
-benchmark levels in `API_ABI_PERFORMANCE_RFC.md` (which stays in the
-`kafka-client` repository) into an executable measurement design.
+benchmark levels in `API_ABI_PERFORMANCE_RFC.md` (owned by the Kafkars
+repository) into an executable measurement design.
 
 The performance contract owns release and marketing thresholds. This document
 owns workload execution, comparison fairness, result validity, and evidence
@@ -74,7 +76,7 @@ results.
 
 ## Comparison lanes
 
-| Lane | kafka-client surface | Baseline | Question |
+| Lane | Kafkars surface | Baseline | Question |
 | --- | --- | --- | --- |
 | Native Rust product | `kafkars` public producer and operation terminal | Raw librdkafka C and rust-rdkafka `BaseProducer` | Is the shipped Rust producer competitive, and what is wrapper overhead? |
 | Rust ergonomic path | Public future-based producer observation | rust-rdkafka `FutureProducer` | What does an idiomatic Rust application pay? |
@@ -468,11 +470,18 @@ than assumed equivalent across Rust, C, and managed runtimes.
 ### Client-native metrics
 
 Adapters preserve native metrics in addition to the normalized view. The
-`kafkars` adapter records the existing call, failure, mailbox, latency,
-and producer ownership snapshots. The librdkafka adapter records its queue,
-in-flight request, internal latency, RTT, batch, retry, timeout, and
-per-partition statistics. Java runs include producer metrics, GC, and safepause
-data.
+`kafkars` v2 adapter seals post-warmup baseline and post-drain producer
+ownership snapshots plus exact deltas for public Produce request,
+partition-batch, record, and encoded-record-byte counters. The legacy Kafkars
+path additionally retains its historical call and latency summary. The
+librdkafka adapter records its queue, in-flight request, internal latency, RTT,
+batch, retry, timeout, and per-partition statistics. Java runs include producer
+metrics, GC, and safepause data.
+
+Kafkars does not currently expose total request wire bytes, retry and timeout
+counters, allocations, wakeups, or per-batch distributions. The normalized
+view leaves those facts absent; it never derives them from the counters that do
+exist.
 
 Normalized values never discard raw native snapshots.
 

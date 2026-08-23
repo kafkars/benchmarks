@@ -4,15 +4,15 @@
 # stack under the harness is not the stack named in dependencies/sibling-
 # revisions.env, the number is anecdote, not evidence.
 #
-# Three checks per sibling, all inherited from kafka-client's original:
+# Three checks per sibling, all inherited from Kafkars' original:
 #   1. HEAD equals the pin (the obvious one),
 #   2. the worktree is clean modulo a per-repo ignore allowance (a dirty tree
 #      means the measured bytes are not the reviewed bytes),
 #   3. no noncanonical index flags — assume-unchanged / skip-worktree /
 #      fsmonitor-valid entries make check 2 lie, so they are rejected outright.
-# Plus two cross-checks this repository adds: the pinned CLIENT revision's own
-# committed sibling env must agree with our driver/protocol pins, and (when
-# present) kafka-driver's guardrails.toml must declare our protocol pin.
+# Plus cross-checks this repository adds: the pinned Kafkars revision's own
+# committed sibling env and public-pair attestation must agree with our
+# driver/wire pins, and kafka-driver's guardrails.toml must declare our wire pin.
 #
 # MODES. Strict when CI=true or KAFKA_BENCH_PROVENANCE=strict: any mismatch
 # exits 1. Otherwise advisory: mismatches print `provenance advisory: ...` and
@@ -40,9 +40,9 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-client_root="$repo_root/../kafka-client"
-driver_root="$repo_root/../kafka-driver"
-protocol_root="$repo_root/../kafka-protocol"
+client_root="${KAFKA_BENCH_CLIENT_ROOT:-$repo_root/../kafkars}"
+driver_root="${KAFKA_BENCH_DRIVER_ROOT:-$repo_root/../kafka-driver}"
+protocol_root="${KAFKA_BENCH_PROTOCOL_ROOT:-$repo_root/../kafka-protocol}"
 revision_file="$repo_root/dependencies/sibling-revisions.env"
 
 mode=advisory
@@ -96,18 +96,18 @@ if [[ "${#revision_lines[@]}" -ne 3 ]]; then
   echo "provenance failure: revision file must contain exactly three assignments" >&2
   exit 1
 fi
-if [[ ! "${revision_lines[0]}" =~ ^KAFKA_CLIENT_REVISION=([0-9a-f]{40})$ ]]; then
-  echo "provenance failure: invalid kafka-client revision assignment" >&2
+if [[ ! "${revision_lines[0]}" =~ ^KAFKARS_REVISION=([0-9a-f]{40})$ ]]; then
+  echo "provenance failure: invalid Kafkars revision assignment" >&2
   exit 1
 fi
-KAFKA_CLIENT_REVISION="${BASH_REMATCH[1]}"
+KAFKARS_REVISION="${BASH_REMATCH[1]}"
 if [[ ! "${revision_lines[1]}" =~ ^KAFKA_DRIVER_REVISION=([0-9a-f]{40})$ ]]; then
   echo "provenance failure: invalid kafka-driver revision assignment" >&2
   exit 1
 fi
 KAFKA_DRIVER_REVISION="${BASH_REMATCH[1]}"
 if [[ ! "${revision_lines[2]}" =~ ^KAFKA_PROTOCOL_REVISION=([0-9a-f]{40})$ ]]; then
-  echo "provenance failure: invalid kafka-protocol revision assignment" >&2
+  echo "provenance failure: invalid Kafka Wire revision assignment" >&2
   exit 1
 fi
 KAFKA_PROTOCOL_REVISION="${BASH_REMATCH[1]}"
@@ -160,10 +160,9 @@ check_revision() {
       "$entry" == *"/.DS_Store" ]]; then
       continue
     fi
-    # kafka-client vendors its own copy of this repository's adapter under
-    # benchmarks/adapters/kafkars, so it carries a second, nested target/ that
-    # the global allowance above does not match.
-    if [[ "$name" == "kafka-client" ]] &&
+    # Historical Kafkars checkouts may carry generated benchmark output outside
+    # their root target directory; neither changes the reviewed source tree.
+    if [[ "$name" == "kafkars" ]] &&
       { [[ "$entry" == "!! node_modules/"* ]] ||
         [[ "$entry" == "!! benchmarks/adapters/kafkars/target/"* ]]; }; then
       continue
@@ -173,7 +172,7 @@ check_revision() {
         [[ "$entry" == "!! kafka-driver-review-"*.zip ]]; }; then
       continue
     fi
-    if [[ "$name" == "kafka-protocol" ]] &&
+    if [[ "$name" == "kafka-wire" ]] &&
       { [[ "$entry" == "!! fuzz/corpus/"* ]] ||
         [[ "$entry" == "!! kafka-wire-review-"*.zip ]] ||
         [[ "$entry" == "!! fuzz/target/"* ]]; }; then
@@ -192,10 +191,9 @@ check_revision() {
   echo "$name commit=$actual tree=$tree"
 }
 
-# The pin rule made executable: whatever the client revision itself declared is
-# the only legal driver/protocol pair for that client. Reading it out of the
-# pinned commit (not the client worktree) means a dirty or checked-out-elsewhere
-# client cannot launder a wrong pin into this repository.
+# The pin rule made executable: whatever the Kafkars revision itself declared
+# is the only legal driver/wire pair for that client. Reading it out of the
+# pinned commit means another checkout cannot launder a wrong pin here.
 check_client_declared_siblings() {
   local declared
   local declared_driver
@@ -203,10 +201,10 @@ check_client_declared_siblings() {
 
   declared=$(
     git -C "$client_root" show \
-      "$KAFKA_CLIENT_REVISION:dependencies/sibling-revisions.env" 2>/dev/null
+      "$KAFKARS_REVISION:dependencies/sibling-revisions.env" 2>/dev/null
   ) || {
     report unreadable \
-      "could not read dependencies/sibling-revisions.env from kafka-client revision $KAFKA_CLIENT_REVISION; nothing was compared"
+      "could not read dependencies/sibling-revisions.env from Kafkars revision $KAFKARS_REVISION; nothing was compared"
     return 0
   }
   declared_driver=$(
@@ -217,25 +215,65 @@ check_client_declared_siblings() {
   )
   if [[ "$(wc -l <<< "$declared_driver")" -ne 1 || -z "$declared_driver" ]]; then
     report soft \
-      "kafka-client revision $KAFKA_CLIENT_REVISION must declare exactly one canonical KAFKA_DRIVER_REVISION"
+      "Kafkars revision $KAFKARS_REVISION must declare exactly one canonical KAFKA_DRIVER_REVISION"
     return 0
   fi
   if [[ "$(wc -l <<< "$declared_protocol")" -ne 1 || -z "$declared_protocol" ]]; then
     report soft \
-      "kafka-client revision $KAFKA_CLIENT_REVISION must declare exactly one canonical KAFKA_PROTOCOL_REVISION"
+      "Kafkars revision $KAFKARS_REVISION must declare exactly one canonical KAFKA_PROTOCOL_REVISION"
     return 0
   fi
   declared_driver="${declared_driver#KAFKA_DRIVER_REVISION=}"
   declared_protocol="${declared_protocol#KAFKA_PROTOCOL_REVISION=}"
   if [[ "$declared_driver" != "$KAFKA_DRIVER_REVISION" ]]; then
     report soft \
-      "kafka-client revision $KAFKA_CLIENT_REVISION declares kafka-driver $declared_driver but this repository pins $KAFKA_DRIVER_REVISION"
+      "Kafkars revision $KAFKARS_REVISION declares kafka-driver $declared_driver but this repository pins $KAFKA_DRIVER_REVISION"
   fi
   if [[ "$declared_protocol" != "$KAFKA_PROTOCOL_REVISION" ]]; then
     report soft \
-      "kafka-client revision $KAFKA_CLIENT_REVISION declares kafka-protocol $declared_protocol but this repository pins $KAFKA_PROTOCOL_REVISION"
+      "Kafkars revision $KAFKARS_REVISION declares kafka-wire $declared_protocol but this repository pins $KAFKA_PROTOCOL_REVISION"
   fi
-  echo "kafka-client declared driver=$declared_driver protocol=$declared_protocol"
+  echo "Kafkars declared driver=$declared_driver wire=$declared_protocol"
+}
+
+# The public cutover added a reviewed attestation binding the same pair to
+# runtime-surface fingerprints. This repository does not reinterpret those
+# fingerprints; it verifies that the pinned Kafkars commit publicly attested
+# the exact driver/wire revisions the benchmark names.
+check_kafkars_public_attestation() {
+  local attestation
+  local header
+  local row
+  local tab=$'\t'
+  local attested_driver
+  local attested_wire
+  local declared_wire
+
+  attestation=$(
+    git -C "$client_root" show \
+      "$KAFKARS_REVISION:dependencies/public-sibling-pair.tsv" 2>/dev/null
+  ) || {
+    report unreadable \
+      "could not read the public sibling-pair attestation from Kafkars revision $KAFKARS_REVISION"
+    return 0
+  }
+  header=$(sed -n '1p' <<< "$attestation")
+  row=$(sed -n '2p' <<< "$attestation")
+  if [[ "$header" != $'driver_revision\twire_revision\tdriver_runtime_fingerprint\twire_runtime_fingerprint\tdriver_declared_wire_revision' ]] ||
+    [[ ! "$row" =~ ^([0-9a-f]{40})${tab}([0-9a-f]{40})${tab}[0-9a-f]{40}${tab}[0-9a-f]{40}${tab}([0-9a-f]{40})$ ]]; then
+    report soft "Kafkars public sibling-pair attestation is not canonical"
+    return 0
+  fi
+  attested_driver="${BASH_REMATCH[1]}"
+  attested_wire="${BASH_REMATCH[2]}"
+  declared_wire="${BASH_REMATCH[3]}"
+  if [[ "$attested_driver" != "$KAFKA_DRIVER_REVISION" ]] ||
+    [[ "$attested_wire" != "$KAFKA_PROTOCOL_REVISION" ]] ||
+    [[ "$declared_wire" != "$KAFKA_PROTOCOL_REVISION" ]]; then
+    report soft "Kafkars public sibling-pair attestation does not bind the pinned driver/wire pair"
+    return 0
+  fi
+  echo "Kafkars public pair attests driver=$KAFKA_DRIVER_REVISION wire=$KAFKA_PROTOCOL_REVISION"
 }
 
 check_driver_protocol_revision() {
@@ -270,10 +308,11 @@ check_driver_protocol_revision() {
   echo "kafka-driver protocol-revision=$declared"
 }
 
-check_revision kafka-client "$client_root" "$KAFKA_CLIENT_REVISION"
+check_revision kafkars "$client_root" "$KAFKARS_REVISION"
 check_revision kafka-driver "$driver_root" "$KAFKA_DRIVER_REVISION"
-check_revision kafka-protocol "$protocol_root" "$KAFKA_PROTOCOL_REVISION"
+check_revision kafka-wire "$protocol_root" "$KAFKA_PROTOCOL_REVISION"
 check_client_declared_siblings
+check_kafkars_public_attestation
 check_driver_protocol_revision
 
 if [[ "$mode" == strict ]] &&

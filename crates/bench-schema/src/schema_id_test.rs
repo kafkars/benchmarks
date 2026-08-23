@@ -22,7 +22,7 @@ use crate::{
 /// copies of a list look like duplication, and are: the point is that a change
 /// to the vocabulary has to be made in both places, by a person, in a diff a
 /// reviewer sees.
-const CANONICAL_SCHEMA_IDS: [&str; 31] = [
+const CANONICAL_SCHEMA_IDS: [&str; 32] = [
     "kafkars.adapter-status.v1",
     "kafkars.adapter-validate.v1",
     "kafkars.adapter.v1",
@@ -36,6 +36,7 @@ const CANONICAL_SCHEMA_IDS: [&str; 31] = [
     "kafkars.comparison.v1",
     "kafkars.execution-order.v1",
     "kafkars.experiment.v1",
+    "kafkars.kafkars-native-metrics.v1",
     "kafkars.librdkafka-capacity-curve.v2",
     "kafkars.librdkafka-capacity-probe.v2",
     "kafkars.librdkafka-native-metrics.v1",
@@ -69,10 +70,10 @@ fn the_registry_is_exactly_the_canonical_vocabulary() {
 
 #[test]
 fn the_registry_has_no_duplicates_and_two_families() {
-    assert_eq!(ENGINE_SCHEMA_IDS.len(), 16);
+    assert_eq!(ENGINE_SCHEMA_IDS.len(), 17);
     assert_eq!(LEGACY_SCHEMA_IDS.len(), 15);
-    assert_eq!(registered_schema_ids().len(), 31);
-    assert_eq!(registry().len(), 31);
+    assert_eq!(registered_schema_ids().len(), 32);
+    assert_eq!(registry().len(), 32);
 }
 
 #[test]

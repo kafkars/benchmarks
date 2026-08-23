@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Schema registry gate.
 #
-# The list below is the complete evidence vocabulary: 16 identifiers minted by
+# The list below is the complete evidence vocabulary: 17 identifiers minted by
 # the Rust engine and 15 inherited from the legacy Node harness. It is written
 # out by hand on purpose. Deriving it from the directory listing would make the
 # check tautological — the point is that adding, renaming, or deleting a schema
@@ -30,6 +30,7 @@ schema_ids=(
   kafkars.comparison.v1
   kafkars.execution-order.v1
   kafkars.experiment.v1
+  kafkars.kafkars-native-metrics.v1
   kafkars.librdkafka-capacity-curve.v2
   kafkars.librdkafka-capacity-probe.v2
   kafkars.librdkafka-native-metrics.v1

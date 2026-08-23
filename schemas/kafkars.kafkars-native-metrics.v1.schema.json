@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "kafkars.kafkars-native-metrics.v1",
+  "title": "Kafkars native producer metrics window",
+  "description": "Public Kafkars producer metrics captured immediately before and after one measured v2 phase. delta is exactly final minus baseline for cumulative counters. Boundary gauges say what ownership remained at those two instants; process-lifetime peaks may include warmup. The document does not claim total wire bytes, payload bytes, retries, request timeouts, allocations, wakeups, or continuously sampled gauge maxima because the pinned public API does not expose them. Documentation mirror of the serde types in crates/bench-schema/src/kafkars_metrics.rs, which are the source of truth.",
+  "type": "object",
+  "required": ["schema", "baseline", "final", "delta"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "kafkars.kafkars-native-metrics.v1" },
+    "baseline": { "$ref": "#/$defs/snapshot" },
+    "final": { "$ref": "#/$defs/snapshot" },
+    "delta": {
+      "type": "object",
+      "description": "Exact movement of the four cumulative public producer counters across the measured phase.",
+      "required": [
+        "produce_requests",
+        "partition_batches",
+        "records",
+        "encoded_record_bytes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "produce_requests": { "type": "integer", "minimum": 0 },
+        "partition_batches": { "type": "integer", "minimum": 0 },
+        "records": { "type": "integer", "minimum": 0 },
+        "encoded_record_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Encoded Kafka record bytes, not application payload bytes and not complete request wire bytes."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "snapshot": {
+      "type": "object",
+      "required": [
+        "active_records",
+        "active_bytes",
+        "waiting_records",
+        "waiting_bytes",
+        "prepared_batches",
+        "prepared_batch_bytes",
+        "terminal_backlog",
+        "produce_requests",
+        "partition_batches",
+        "records",
+        "encoded_record_bytes",
+        "peak_in_flight_requests",
+        "peak_in_flight_requests_per_broker",
+        "accepting",
+        "healthy"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "active_records": { "type": "integer", "minimum": 0 },
+        "active_bytes": { "type": "integer", "minimum": 0 },
+        "waiting_records": { "type": "integer", "minimum": 0 },
+        "waiting_bytes": { "type": "integer", "minimum": 0 },
+        "prepared_batches": { "type": "integer", "minimum": 0 },
+        "prepared_batch_bytes": { "type": "integer", "minimum": 0 },
+        "terminal_backlog": { "type": "integer", "minimum": 0 },
+        "produce_requests": { "type": "integer", "minimum": 0 },
+        "partition_batches": { "type": "integer", "minimum": 0 },
+        "records": { "type": "integer", "minimum": 0 },
+        "encoded_record_bytes": { "type": "integer", "minimum": 0 },
+        "peak_in_flight_requests": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Process-lifetime peak at this boundary; it may include warmup."
+        },
+        "peak_in_flight_requests_per_broker": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Process-lifetime per-broker peak at this boundary; it may include warmup."
+        },
+        "accepting": { "type": "boolean" },
+        "healthy": { "type": "boolean" }
+      }
+    }
+  }
+}

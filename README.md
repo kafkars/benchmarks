@@ -45,29 +45,13 @@
 kafka-benchmarks answers one question for every change worth arguing about: did
 it improve the client, against which baseline, and how do we know?
 
-The design follows from taking that question literally.
+The rules are simple:
 
-- **Subjects are processes, not libraries.** Every client under measurement runs
-  as its own operating-system process behind a small adapter protocol. Two
-  clients linked into one binary share an allocator, a thread scheduler, and a
-  page cache, and a harness that links its subjects ends up measuring itself.
-  The process boundary is also what lets a client written in another language be
-  compared at all.
-- **Nobody grades their own homework.** An adapter reports what it believes it
-  produced. A separate verifier reads the topic back and reports what the broker
-  retained. Cross-client validity is decided from the verifier's report.
-- **Every attempt seals.** Crashes, timeouts, and interrupts produce a sealed
-  bundle recording exactly that. The runs worth studying most are the ones that
-  went wrong, and a harness that only writes evidence on success is a harness
-  that quietly deletes its own bad news.
-- **Evidence is versioned and immutable.** Schemas are append-only: a new field
-  or a new schema id, never a changed meaning under an old id. A sealed bundle
-  carries two identities — one for the intent that was run, one for the bytes
-  that resulted — so a bundle can be re-verified long after the machine that
-  produced it is gone.
-- **Validity is a separate axis from success.** A run can complete cleanly and
-  still be too noisy, too short, or too unverified to support a claim. Those are
-  different fields, and the harness never collapses them into one.
+- **Subjects are processes.** The control plane never links a Kafka client.
+- **Verification is independent.** An adapter cannot decide its own validity.
+- **Every attempt seals.** Crashes, timeouts, and interrupts remain evidence.
+- **Evidence is immutable.** Schemas are versioned and sealed bundles are never rewritten.
+- **Success is not validity.** A clean run may still be too noisy or incomplete to support a claim.
 
 ## Layout
 
@@ -89,27 +73,20 @@ scripts/                 the gate and the harness entry points
 docs/                    the performance contract, harness design, and roadmap
 ```
 
-The adapters are deliberately not workspace members. A subject must be built
-against its own pinned dependency graph, not against whatever this workspace
-happens to resolve.
+Adapters are separate workspaces, so each subject keeps its pinned dependency graph.
 
 ## First run, no cluster
 
-Before anything else, and before any of the setup below: the whole pipeline
-runs offline. `fake-adapter` is a subject that speaks the entire adapter
-protocol and invents a measurement, and it also plays all three cluster tools,
-so a complete attempt — resolve, spawn, "verify", seal — takes under a second
-against no broker at all. It is how you see what a sealed bundle *is* before
-deciding whether you want a cluster.
+The full pipeline can run without Kafka. `fake-adapter` invents measurements so
+you can inspect a real sealed bundle in under a second. Its numbers are not
+Kafka performance evidence.
 
 ```sh
 git clone https://github.com/zsumz/kafka-benchmarks && cd kafka-benchmarks
 cargo build --release --locked -p benchctl   # builds fake-adapter too
 ```
 
-Two input files. They are per-machine and are never committed, so write them
-yourself — that is the same thing `scripts/generate-subject-config` does for a
-real run:
+Create two local input files:
 
 ```toml
 # subjects.toml — both subjects are the fake adapter.
@@ -156,37 +133,28 @@ bundle=$(target/release/benchctl run \
 target/release/benchctl report --bundle "$bundle" --out reports/attempt.md
 ```
 
-Read `$bundle` rather than the report first. `status.json` says how far the
-machinery got, `classification.json` says whether the evidence may be believed
-and names every check this attempt did *not* perform, `comparison.json` divides
-by the declared `base`, `adapters/<subject>/result.json` is the measurement
-itself, and `checksums.txt` with `bundle.json` are what make the whole thing
-re-verifiable. Every file in a sealed bundle, and who is entitled to have
-written it, is in [`docs/EVIDENCE.md`](./docs/EVIDENCE.md).
+Start with the bundle:
 
-The numbers are invented. Nothing about this run is evidence about a Kafka
-client — the point is that the shape of the evidence is real.
+- `status.json`: how far the attempt got.
+- `classification.json`: whether it is valid and which checks were deferred.
+- `comparison.json`: ratios against the declared base subject.
+- `adapters/<subject>/result.json`: each subject's measurement.
+- `bundle.json` and `checksums.txt`: the sealed identity and byte checks.
+
+[`docs/EVIDENCE.md`](./docs/EVIDENCE.md) defines every file and its owner.
 
 ## The engine
 
-`benchctl` is the control plane. It resolves a scenario into an experiment,
-spawns every subject, supervises them against declared deadlines, invokes the
-verifier, and seals a bundle — on every path out, including the ones that
-failed.
+`benchctl` resolves experiments, runs subjects, invokes verification, and seals
+evidence. It uses three inputs:
 
-Three inputs are separate files on purpose: a scenario is reviewed and stable, a
-subject list says which binaries exist on this machine today, and a cluster
-profile says where the brokers are and which tools reach them. The subject list
-and the profile are per-machine and are not committed;
-`scripts/generate-subject-config <dir> <bootstrap>` writes a working pair, and
-`scripts/bench-m0-acceptance` writes its own under `target/m0-acceptance`.
+| Input | Purpose |
+| --- | --- |
+| scenario | reviewed workload and validity rules |
+| subject list | binaries available on this machine |
+| cluster profile | brokers and external tools |
 
-Every example below is one command against those inputs. Build the binary and
-set the two variables first — note that
-`scripts/generate-subject-config` builds the **real** adapters, so unlike the
-offline path above it needs the three sibling checkouts and a bootstrapped
-librdkafka (which it downloads and builds on first use). On a bare clone it
-will fail, and the offline path above is the one that works:
+Generate real-client inputs after checking out the three sibling repositories:
 
 ```sh
 cargo build --release --locked -p benchctl
@@ -197,40 +165,17 @@ inputs=target/quickstart
 scripts/generate-subject-config "$inputs" "$bootstrap"
 ```
 
-**`resolve`** prints the resolved experiment on stdout and its `experiment_id`
-on stderr, without touching the cluster. It is how you ask what would run, and
-under what identity, before spending a cluster on it. The id goes to stderr so
-that stdout stays exactly one JSON document for a pipeline to read, and it is
-printed with `--out` too.
+| Command | Purpose |
+| --- | --- |
+| `resolve` | show the exact experiment without touching Kafka |
+| `run` | execute one attempt and print its sealed bundle path |
+| `suite` | run paired, alternating repetitions and write a comparison report |
+| `capacity` | search an open-loop rate against declared objectives |
+| `pack` | run a reviewed scenario manifest |
+| `report` | render one sealed attempt without rewriting it |
+| `packet` | verify that generated prose matches a suite's analysis packet |
 
-```sh
-benchctl resolve \
-  --experiment scenarios/producer/headline/balanced-1k-12p.toml \
-  --subjects "$inputs/subjects.toml" \
-  --cluster "$inputs/cluster.toml" \
-  --bootstrap "$bootstrap"
-```
-
-**`run`** is one attempt: every subject, in the subject list's order or the one
-`--order` gives, ending in exactly one sealed bundle under
-`results/<experiment-id>/<attempt-id>/`. A subject that fails records its
-failure and the others still run, because "A crashed and B did not" is evidence.
-
-Its last line of stdout is the bundle it sealed, on every exit code — a crashed
-attempt is exactly when you most want the directory.
-
-```sh
-bundle=$(benchctl run \
-  --experiment scenarios/producer/headline/payload-16k-12p.toml \
-  --subjects "$inputs/subjects.toml" \
-  --cluster "$inputs/cluster.toml" \
-  --bootstrap "$bootstrap" \
-  --results results | tail -n 1)
-```
-
-**`suite`** repeats one scenario as paired blocks, alternating which subject
-goes first, so that a drift in the machine falls on both subjects rather than on
-the one that always ran second.
+Run a paired suite:
 
 ```sh
 benchctl suite \
@@ -241,164 +186,75 @@ benchctl suite \
   --repetitions 5
 ```
 
-**`capacity`** runs the scheduled open-loop search: it raises the offered rate
-until a declared objective breaks, then refines the bracket. Reaching the
-ceiling without a failure is reported as inconclusive rather than as a capacity
-nobody observed.
-
-```sh
-benchctl capacity \
-  --experiment scenarios/producer/headline/capacity-balanced-1k-12p.toml \
-  --subjects "$inputs/subjects.toml" \
-  --cluster "$inputs/cluster.toml" \
-  --bootstrap "$bootstrap"
-```
-
-**`pack`** runs every entry of one reviewed manifest, in the order it states.
-It takes no `--experiment` — the manifest names the scenarios — and dispatches
-each entry to the verb its repetition count implies: two or more is a `suite`,
-one is a `run`, and one over a scenario carrying a `[search]` section is a
-`capacity` ladder. It contributes no statistic of its own, so the evidence it
-leaves is exactly what typing those verbs by hand would have left.
-
-```sh
-benchctl pack \
-  --manifest scenarios/packs/nightly.toml \
-  --subjects "$inputs/subjects.toml" \
-  --cluster "$inputs/cluster.toml" \
-  --bootstrap "$bootstrap"
-```
-
-**`report`** reads one sealed bundle and renders it. `suite` and `capacity`
-write their own reports as they go; this is how you read a single attempt after
-the fact. It reaches no broker and rewrites no bundle, so a reporting bug cannot
-move a measurement.
-
-A bundle is `results/<experiment-id>/<attempt-id>/`, and `run` printed the one
-it sealed:
+Render a single attempt:
 
 ```sh
 benchctl report --bundle "$bundle" --out reports/attempt.md
 ```
 
-**`packet`** checks prose against the analysis packet a suite derived, and is
-the only thing that makes a model-written summary evidence. It exits 0 when the
-summary's verdict is the packet's and every citation resolves, and 65 when it is
-not — see [CI and the nightly](#ci-and-the-nightly) below.
-
-```sh
-suite_dir=$(dirname "$(ls -t reports/*/*-suite/suite-summary.json | head -n 1)")
-
-benchctl packet \
-  --suite "$suite_dir/suite-summary.json" \
-  --llm-summary "$suite_dir/llm-summary.json"
-```
-
-The `llm-summary.json` is what `scripts/benchmark-openai-summary` writes; a
-suite that was never narrated has a packet and no summary to check against it.
+Use `benchctl <command> --help` for the full option list. The offline first run
+above works on a bare clone; real subjects need the sibling checkouts.
 
 ## CI and the nightly
 
-`.github/workflows/ci.yml` proves the harness is correct, buildable, and
-deterministic on every pull request. No job in it measures performance: hosted
-runners are shared and throttled, and a number produced on one is not evidence
-about a client. Branch protection requires exactly one check, `quality-gate`.
-
-`.github/workflows/nightly.yml` runs `benchctl pack` over
-`scenarios/packs/nightly.toml` against the dev compose cluster at 08:00 UTC,
-uploads the sealed `results/` and `reports/` trees for 30 days, and then asks a
-model to narrate each suite's analysis packet with
-`scripts/benchmark-openai-summary` — reading `OPENAI_API_KEY` from repository
-secrets and `OPENAI_MODEL` / `OPENAI_REASONING_EFFORT` from repository variables
-(defaulting to `gpt-5.5` and `high`), skipping the narration with a printed line
-when the key is unset. Its numbers are shared-runner diagnostics and are never a
-comparison between clients; what it proves is that the whole path still runs.
-
-The summary is prose over the packet and nothing else — the model never sees an
-evidence bundle — and it is only rendered once `benchctl packet` has bound it to
-that packet. A rejected summary is reported in the run summary and does **not**
-fail the workflow: narration is commentary on evidence, and may never be the
-reason evidence is discarded. `scripts/benchmark-openai-summary-test` proves the
-request contract offline, with no network and no key, on every pull request.
+- **CI** runs the quality gate. It tests the harness; it does not measure client performance.
+- **Nightly** runs the full pack on a shared runner and uploads evidence for 30 days.
+- **Nightly numbers are diagnostic only.** Shared-runner output cannot support a client comparison.
+- **Generated prose is checked.** `benchctl packet` rejects summaries that do not match the analysis packet.
 
 ## Evidence
 
-The measurement document is `kafkars.producer-benchmark.v2`. Every offer owns
-one immutable identity and four timestamps — intended, call start, accepted,
-terminal — and none of them is ever reset because a queue was full, so the time
-a record spent being pushed back on is part of every latency the document
-reports. Offers that never crossed the client API are counted as offered but not
-accepted, which is what stops an overload from being spent as throughput.
-Distributions are carried as bounded log-linear histograms whose bytes the Rust
-and C adapters must produce identically, so evidence memory does not scale with
-run length and percentiles are derived by the reader rather than chosen by the
-writer. The full document set, the accounting invariants, and what a reader may
-conclude from each field are in [`docs/EVIDENCE.md`](./docs/EVIDENCE.md).
+The main measurement document is `kafkars.producer-benchmark.v2`.
+
+- Each offer keeps one identity and four timestamps: intended, call start, accepted, terminal.
+- Queue pressure remains part of end-to-end latency.
+- Offered and accepted counts stay separate, so overload cannot look like throughput.
+- Bounded histograms keep evidence size independent of run length.
+- Rust and C adapters must encode those histograms byte for byte.
+
+[`docs/EVIDENCE.md`](./docs/EVIDENCE.md) defines the documents, accounting rules,
+and allowed conclusions.
 
 ## Scenarios and packs
 
-`scenarios/producer/headline/` is the predeclared headline set: a 128-byte
-latency floor, the balanced 1 KiB default, a 96-partition fanout point, a 16 KiB
-payload point, a deliberate overload with a declared SLO, and a balanced
-capacity search. Each file opens with the question it exists to answer, and each
-resolves.
+- `scenarios/producer/headline/`: the runnable producer set.
+- `scenarios/producer/producer-baseline.toml`: the parameter matrix, not a runnable scenario.
+- `scenarios/producer/deferred/`: workloads blocked by a known client limit.
+- `scenarios/packs/pr.toml`: one balanced attempt.
+- `scenarios/packs/nightly.toml`: three repetitions of the full set plus capacity search.
 
-One file under `scenarios/` deliberately does not:
-`scenarios/producer/producer-baseline.toml` is the design document's parameter
-matrix, where every value is a list of settings to sweep rather than one
-setting. It is a reference for which axes exist, kept beside the runnable set
-and refused by the resolver on purpose.
-
-The 256 KiB and 900 KB payload points are not in that set. They moved to
-`scenarios/producer/deferred/` because the client under test declines records
-that large today; `scenarios/DEFERRED.md` names the specific limit.
-
-`scenarios/packs/` says which of those belong to which cadence — `pr.toml` is
-one balanced attempt, `nightly.toml` is the whole set at three repetitions plus
-one capacity search. A pack is a reviewed manifest of scenario paths and
-repetition counts, and `benchctl pack` is what runs one.
-
-Workloads from the design document's matrix that cannot run yet are listed, with
-the specific thing that refuses each one, in
-[`scenarios/DEFERRED.md`](./scenarios/DEFERRED.md).
+[`scenarios/DEFERRED.md`](./scenarios/DEFERRED.md) names every blocked workload
+and the specific limitation.
 
 ## Quickstart
 
 ```sh
 git clone https://github.com/zsumz/kafka-benchmarks && cd kafka-benchmarks
+cargo +1.96.0 install zrail --version 0.0.1 --locked
 scripts/check
 ```
 
-That is the single gate, and it runs on a clean clone with nothing beside it. It
-formats, lints, tests, and documents the Rust workspace, measures the source
-tree against the architecture policy in `guardrails.toml` — per-category file
-budgets, declarative facades, module contracts, and no async runtime anywhere in
-the harness's own lock file — checks the schema registry against `schemas/`,
-asserts the librdkafka pin reads the same in every place it is written down,
-runs the legacy control-plane tests and the offline model-summary contract, and
-reports on sibling-checkout provenance.
+`scripts/check` is the review gate. It runs formatting, linting, tests, docs,
+schema checks, zrail policy, detached-adapter policy, legacy tests, and
+provenance checks.
 
-Provenance is the one lane that behaves differently on a bare clone: the sibling
-checkouts it attests are `kafka-client`, `kafka-driver`, and `kafka-protocol`
-next to this directory, and when they are absent it says so as an advisory and
-exits 0. That is deliberate — no crate in this workspace depends on them.
+On a bare clone, missing sibling checkouts are advisory. Strict provenance
+checks the pinned public `kafkars/kafkars`, `kafkars/kafka-driver`, and
+`kafkars/kafka-wire` revisions.
 
 What needs the siblings is anything that builds or runs a real subject:
 
 | Command | Needs |
 | --- | --- |
-| `scripts/check` | nothing but the pinned Rust and Node toolchains |
+| `scripts/check` | the pinned Rust and Node toolchains, plus zrail 0.0.1 installed with Rust 1.96 |
 | the offline first run above | nothing but the pinned Rust toolchain |
 | `scripts/generate-subject-config` | the three sibling checkouts, plus a librdkafka it downloads and builds on first use |
 | `scripts/check-benchmarks` | the three sibling checkouts, plus a bootstrapped librdkafka |
 | `scripts/bench-m0-acceptance`, `scripts/bench-suite-acceptance` | the above, plus a running broker |
 | `KAFKA_BENCH_PROVENANCE=strict scripts/check-dependency-provenance` | the siblings, on their pinned revisions and clean |
 
-The acceptance scripts check for a broker first and exit 69 without touching
-anything if none is listening, so running one on a laptop with no cluster costs
-a second and prints the compose command that would start one. Both write their
-generated inputs and evidence under `target/` — `target/m0-acceptance` and
-`target/suite-acceptance` — and honour `CARGO_TARGET_DIR`.
+Acceptance scripts exit 69 before changing anything when no broker is listening.
+Their generated inputs and evidence stay under `target/`.
 
 ```sh
 docker compose -f clusters/dev-compose/compose.yml up -d --wait
@@ -414,47 +270,27 @@ what a result is allowed to claim lives in
 
 kafka-benchmarks is not:
 
-- **a leaderboard.** It produces evidence for a specific experiment on specific
-  hardware. Ranking clients in general is not something a benchmark can do, and
-  publishing a table that implies otherwise is the failure mode this repository
-  exists to avoid.
-- **a microbenchmark suite for private internals.** Adapters depend only on
-  shipped public client surfaces. If a measurement requires reaching inside a
-  client, it belongs in that client's repository, not here.
-- **a claim generator from developer-host numbers.** The headline scenarios are
-  sized to run on a laptop against containers sharing that laptop. Numbers taken
-  there are diagnostic: useful for spotting a regression while working, never
-  evidence for a public statement about performance. Every scenario in this
-  repository declares `claim_eligible = false`, and the resolver refuses any
-  that does not.
-- **a Kafka client.** Nothing here implements the protocol. The subjects do.
+- **a leaderboard.** Results describe one experiment on one environment.
+- **a private-internals benchmark.** Adapters use shipped public client surfaces.
+- **a claim generator for laptop numbers.** Every current scenario is diagnostic only.
+- **a Kafka client.** The subjects implement the protocol; this repository measures them.
 
 ## Status
 
-Pre-0.1 and moving. The current milestone is a measurement-correct v2 engine:
-the four-timestamp offer model, bounded histograms in place of run-sized arrays,
-`suite` and `capacity` in Rust rather than only in the legacy Node plane,
-reports over sealed bundles, and a headline scenario pack that says what each of
-its workloads is for.
+Pre-0.1. The v2 engine has four-timestamp offer accounting, bounded histograms,
+paired suites, capacity search, sealed-bundle reports, and a headline scenario
+pack.
 
-The harness was extracted from the private `zsumz/kafka-client-private`
-repository, where it had grown into a hard-coded two-subject script; this
-repository is the generalization of that work into a lab that can measure any
-client behind the adapter protocol.
+The public Kafkars surface now supplies exact measured-window Produce request,
+partition-batch, record, and encoded-record-byte deltas. v2 seals them with
+both boundary snapshots under `kafkars.kafkars-native-metrics.v1`; counters the
+surface still lacks remain absent rather than inferred. The protocol-aware
+loopback lane and the remaining internal counters stay in
+[`docs/ROADMAP.md`](./docs/ROADMAP.md).
 
-Two things this milestone deliberately did not build: a protocol-aware loopback
-lane, and the client-internal request and batch counters the performance
-contract asks for — the second because reading them would mean changing the
-client, which is out of bounds here. Both, with the rest of the loop's
-deferrals, are in [`docs/ROADMAP.md`](./docs/ROADMAP.md).
-
-Nothing is published. No crate from this workspace goes to a registry, and the
-artifact this repository produces is a sealed evidence bundle, not a release.
-
-Every bundle sealed today records `claim_eligible: false`. That is deliberate,
-not an oversight: the checks that would justify a public performance claim —
-sufficient paired repetitions, a dedicated cluster, provenance strict enough to
-name what was running — are recorded as deferred rather than quietly assumed.
+Nothing is published. The artifact is a sealed evidence bundle, not a crate.
+Every current bundle records `claim_eligible: false`; unmet publication checks
+remain explicit deferrals.
 
 ## Project
 
