@@ -278,9 +278,9 @@ fn a_group_wide_sigint_is_an_interrupt_and_not_a_crash() {
 
     wait_for_sealed_inputs(&results);
     std::thread::sleep(Duration::from_millis(300));
-    // A negative pid is the whole process group, as `kill(2)` defines it.
+    // A negative pid is the whole group; `--` ends GNU kill's option parsing.
     let interrupted = Command::new("kill")
-        .args(["-INT", &format!("-{}", child.id())])
+        .args(["-INT", "--", &format!("-{}", child.id())])
         .status()
         .unwrap();
     assert!(interrupted.success());

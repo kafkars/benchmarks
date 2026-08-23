@@ -4,13 +4,9 @@
 //!
 //! # Why probing is hostile
 //!
-//! A subject is an arbitrary program named by a configuration file. It may
-//! print nothing, print a gigabyte, block forever, or answer in a dialect of
-//! JSON this repository does not speak. None of those may hang the control
-//! plane or exhaust its memory, so every probe is bounded three ways: a wall
-//! deadline enforced by polling rather than by a blocking read, a byte cap
-//! applied by `Read::take` on both streams, and a strict parse that refuses
-//! unknown fields.
+//! Subjects can block, flood output, or return foreign JSON. Probes stay bounded
+//! by a polled wall deadline, `Read::take` caps on both streams, and strict
+//! parsing. None may hang the control plane or exhaust memory.
 //!
 //! Both streams are drained by reader threads while the main thread polls
 //! `Child::try_wait`. Reading one stream inline would deadlock the moment the
@@ -19,11 +15,8 @@
 //!
 //! # What a failed probe means
 //!
-//! Every failure here is [`CtlErrorKind::InvalidExperiment`]: the subject list
-//! named something that cannot act as a subject. The captured head of the
-//! child's stderr is folded into the message, because the one thing a person
-//! debugging "the adapter did not answer" needs is what the adapter said before
-//! it stopped.
+//! Every failure is [`CtlErrorKind::InvalidExperiment`]. Errors quote captured
+//! stderr so late or unreadable answers remain debuggable.
 //!
 //! [`CtlErrorKind::InvalidExperiment`]: crate::CtlErrorKind::InvalidExperiment
 
@@ -41,12 +34,10 @@ use crate::error::{CtlError, CtlResult};
 /// How often the supervising thread asks whether the probe has exited.
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-/// How long a reader thread is given to hand over its buffer after the child
-/// has been reaped, before the capture gives up and reports what it has.
+/// Total grace shared by both reader threads after the child is reaped.
 ///
-/// A grandchild that inherited the pipe can hold it open after its parent is
-/// gone; waiting forever for that case would defeat the deadline this module
-/// exists to enforce.
+/// A grandchild can hold inherited pipes open; sharing one budget prevents
+/// stdout and stderr from doubling the delay.
 const READER_GRACE: Duration = Duration::from_secs(2);
 
 /// Characters of captured output quoted back in an error message.
@@ -198,8 +189,16 @@ fn spawn_probe(
         .take()
         .map(|pipe| read_capped(pipe, capture_cap));
     let status = await_exit(&mut child, timeout);
-    let stdout = stdout.as_ref().map(collect).unwrap_or_default();
-    let stderr = stderr.as_ref().map(collect).unwrap_or_default();
+    let collection_started = Instant::now();
+    let stdout = stdout
+        .as_ref()
+        .map(|r| collect(r, READER_GRACE))
+        .unwrap_or_default();
+    let remaining_grace = READER_GRACE.saturating_sub(collection_started.elapsed());
+    let stderr = stderr
+        .as_ref()
+        .map(|r| collect(r, remaining_grace))
+        .unwrap_or_default();
 
     let capture = Capture {
         program: program.clone(),
@@ -267,9 +266,9 @@ fn read_capped<R: Read + Send + 'static>(reader: R, cap: u64) -> Receiver<Vec<u8
     receiver
 }
 
-/// Takes a reader thread's buffer, giving up after [`READER_GRACE`].
-fn collect(receiver: &Receiver<Vec<u8>>) -> Vec<u8> {
-    receiver.recv_timeout(READER_GRACE).unwrap_or_default()
+/// Takes a reader thread's buffer, giving up after its share of the grace.
+fn collect(receiver: &Receiver<Vec<u8>>, grace: Duration) -> Vec<u8> {
+    receiver.recv_timeout(grace).unwrap_or_default()
 }
 
 /// Reports whether a capped read came back longer than the cap allows.

@@ -360,7 +360,7 @@ value = 91
 [[ratchet]]
 rule = "rust.file-size"
 target = "crates/benchctl/src/probe.rs"
-value = 298
+value = 297
 
 [[ratchet]]
 rule = "rust.file-size"
