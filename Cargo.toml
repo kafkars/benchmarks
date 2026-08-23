@@ -20,7 +20,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
-repository = "https://github.com/zsumz/kafka-benchmarks"
+repository = "https://github.com/kafkars/benchmarks"
 
 # The dependency set is deliberately small and deliberately synchronous. No
 # async runtime may enter this workspace, including through dev-dependencies,
