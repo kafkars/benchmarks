@@ -10,14 +10,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bench-guardrails"
-version = "0.1.0"
-dependencies = [
- "serde",
- "toml",
-]
-
-[[package]]
 name = "bench-report"
 version = "0.1.0"
 dependencies = [

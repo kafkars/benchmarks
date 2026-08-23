@@ -169,15 +169,11 @@ fn the_default_repository_map_names_this_repository_and_its_three_siblings() {
     let names: Vec<&str> = repositories.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(
         names,
-        vec![
-            "kafka_benchmarks",
-            "kafka_client",
-            "kafka_driver",
-            "kafka_protocol"
-        ],
-        "the v2 source map keeps the legacy sibling names"
+        vec!["kafka_benchmarks", "kafkars", "kafka_driver", "kafka_wire"],
+        "the v2 source map names the public repositories"
     );
     assert_eq!(repositories[0].1, root);
+    assert!(repositories[1].1.ends_with("kafkars"));
     assert!(repositories[2].1.ends_with("kafka-driver"));
     assert!(repositories[3].1.ends_with("kafka-protocol"));
 }

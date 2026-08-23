@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""Fixture tests for the policy checker that covers the detached adapter."""
+
+from __future__ import annotations
+
+import runpy
+import tempfile
+import unittest
+from pathlib import Path
+
+
+SCRIPT = Path(__file__).with_name("check-detached-policy")
+POLICY = runpy.run_path(str(SCRIPT))
+ROOT = POLICY["ROOT"]
+
+
+class DetachedPolicyTest(unittest.TestCase):
+    def test_module_contract_and_facade_findings_fail_closed(self) -> None:
+        facade = ROOT / "adapters" / "kafkars" / "src" / "sample" / "mod.rs"
+        contract = POLICY["module_contract"]
+        findings = POLICY["facade_findings"]
+
+        self.assertIsNone(contract(facade, "//! Sample.\nmod worker;\n"))
+        self.assertIn("module contract", contract(facade, "mod worker;\n"))
+        self.assertEqual(findings(facade, "//! Sample.\nmod worker;\n"), [])
+        self.assertTrue(findings(facade, "//! Sample.\nfn hidden() {}\n"))
+
+    def test_sibling_test_requires_a_subject_and_cfg_declaration(self) -> None:
+        subject = ROOT / "adapters" / "kafkars" / "src" / "sample.rs"
+        test = ROOT / "adapters" / "kafkars" / "src" / "sample_test.rs"
+        check = POLICY["sibling_findings"]
+        paths = [subject, test]
+
+        valid = {subject: "#[cfg(test)] mod sample_test;", test: "//! Tests."}
+        self.assertEqual(check(paths, valid), [])
+        invalid = {subject: "//! Subject.", test: "//! Tests."}
+        self.assertTrue(check(paths, invalid))
+
+    def test_lock_scan_separates_harness_runtime_and_framework_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            root_lock = root / "Cargo.lock"
+            adapter_lock = root / "adapter.lock"
+            root_lock.write_text(
+                'version = 4\n[[package]]\nname = "tokio"\nversion = "1.0.0"\n',
+                encoding="utf-8",
+            )
+            adapter_lock.write_text(
+                'version = 4\n[[package]]\nname = "criterion"\nversion = "1.0.0"\n',
+                encoding="utf-8",
+            )
+            POLICY["relative"] = lambda path: path.name
+            POLICY["lock_findings"].__globals__["relative"] = POLICY["relative"]
+            findings = POLICY["lock_findings"](root_lock, adapter_lock)
+
+        self.assertTrue(any("tokio" in finding for finding in findings))
+        self.assertTrue(any("criterion" in finding for finding in findings))
+
+    def test_manifest_requires_the_detached_adapter_lint_floor(self) -> None:
+        with tempfile.TemporaryDirectory() as scratch:
+            manifest = Path(scratch) / "Cargo.toml"
+            manifest.write_text(
+                "[lints.rust]\nunsafe_code = \"allow\"\n"
+                "[lints.clippy]\ndbg_macro = \"deny\"\n",
+                encoding="utf-8",
+            )
+            POLICY["manifest_findings"].__globals__["relative"] = lambda path: path.name
+            findings = POLICY["manifest_findings"](manifest)
+
+        self.assertTrue(any("unsafe_code" in finding for finding in findings))
+        self.assertTrue(any("unwrap_used" in finding for finding in findings))
+
+
+if __name__ == "__main__":
+    unittest.main()

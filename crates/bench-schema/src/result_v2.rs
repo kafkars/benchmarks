@@ -164,8 +164,7 @@ pub struct ProducerBenchmarkV2 {
     /// Self-reported process resources, when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<ProcessResources>,
-    /// Bundle-relative path of native client metrics, when the client emits
-    /// them (librdkafka statistics JSONL).
+    /// Bundle-relative path of versioned native client metrics, when emitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_metrics_path: Option<String>,
     /// The adapter's own validity verdict for this measurement.

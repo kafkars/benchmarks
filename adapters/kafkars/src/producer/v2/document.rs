@@ -92,8 +92,8 @@ pub(super) fn build(request: &DocumentRequest<'_>) -> Result<ProducerBenchmarkV2
         // control plane's classification, not something this adapter silently
         // omits.
         resources: None,
-        // `kafkars` emits no statistics JSONL; its native metric snapshot has
-        // no field in this document and no schema of its own to point at.
+        // The protocol write site assigns the bundle-relative sidecar path
+        // after it knows the subject directory. The measurement path does not.
         native_metrics_path: None,
         valid: invalid_reason.is_none(),
         invalid_reason,

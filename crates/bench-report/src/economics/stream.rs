@@ -8,11 +8,13 @@
 
 use std::path::Path;
 
+use bench_schema::{KAFKARS_NATIVE_METRICS_V1, KafkarsNativeMetrics};
 use serde_json::Value;
 
 use crate::error::{ReportError, ReportResult};
 
 use super::RequestEconomics;
+use super::kafkars;
 use super::normalize::{per_million, ratio};
 use super::snapshot::{broker_counter_delta, counter_delta, request_type_delta, statistics_of};
 use super::window::aggregate_topic_window;
@@ -20,7 +22,7 @@ use super::window::aggregate_topic_window;
 /// The file name adapters write their native statistics stream to.
 pub const STATISTICS_FILE_NAME: &str = "client-metrics.jsonl";
 
-/// Reads a native statistics stream and normalizes it into request economics.
+/// Reads versioned native client metrics and normalizes request economics.
 ///
 /// `acknowledged_records` comes from the measurement document, not from the
 /// stream, so the normalization is anchored to what the harness counted.
@@ -40,6 +42,12 @@ pub fn read_request_economics(
     measured_topic: Option<&str>,
 ) -> ReportResult<RequestEconomics> {
     let text = std::fs::read_to_string(path).map_err(|error| ReportError::io(path, &error))?;
+    if let Ok(value) = serde_json::from_str::<Value>(&text)
+        && value.get("schema").and_then(Value::as_str) == Some(KAFKARS_NATIVE_METRICS_V1)
+    {
+        let document = KafkarsNativeMetrics::from_slice(text.as_bytes())?;
+        return Ok(kafkars::from_document(&document, acknowledged_records));
+    }
     let mut snapshots = Vec::new();
     for (offset, line) in text.lines().enumerate() {
         if line.trim().is_empty() {

@@ -1,25 +1,33 @@
 #!/usr/bin/env bash
-# Executable architecture policy: the repository measured against its own
-# `guardrails.toml`.
+# Executable architecture policy: zrail over the harness workspace, followed by
+# the two repository-specific checks zrail deliberately cannot own.
 #
-# The rules — per-category file budgets, declarative facades, a `//!` contract
-# on every file, unit tests that name a subject, and no async runtime anywhere
-# in the harness's resolved dependency graph — were review conventions before
-# they were code. This lane is what makes them fail on the change that breaks
-# them rather than on the change months later that finally notices.
+# zrail owns the checked-in architecture, dependency edges, module contracts,
+# declarative facades, sibling-test reachability, and file-size ratchets. The
+# companion script reads the complete root Cargo.lock (zrail models declared
+# edges, not the resolved transitive graph) and checks the detached subject
+# adapter, whose reviewed path dependencies correctly escape this repository.
 #
-# `--nocapture` is the point of having a separate lane rather than relying on
-# the workspace test sweep: advisories print on every run, pass or fail, and
-# they are the early warning about files heading for a cap. Suppressed, they
-# would only ever appear once something was already broken.
-#
-# What this lane deliberately does NOT read: `adapters/kafkars/Cargo.lock`. That
-# adapter is a separate workspace built against the client under test, and the
-# client brings whatever dependency graph it brings. The runtime ban has always
-# been about what the *harness* links.
+# The adapter's own lock is read only for the repository-wide criterion/divan
+# ban. It remains exempt from the async-runtime ban: the adapter is a separate
+# workspace built against the client under test, and the client brings whatever
+# runtime graph it brings.
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
-cargo test --locked -p bench-guardrails -- --nocapture
+if ! command -v zrail >/dev/null 2>&1; then
+  echo "check-guardrails: zrail 0.0.1 is required; install it with:" >&2
+  echo "  cargo +1.96.0 install zrail --version 0.0.1 --locked" >&2
+  exit 127
+fi
+zrail_version=$(zrail --version)
+if [[ "$zrail_version" != "zrail 0.0.1" ]]; then
+  echo "check-guardrails: expected zrail 0.0.1, found $zrail_version" >&2
+  exit 1
+fi
+
+zrail check
+scripts/check-detached-policy-test
+scripts/check-detached-policy

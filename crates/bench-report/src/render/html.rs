@@ -1,12 +1,7 @@
 //! The self-contained HTML suite report.
 //!
-//! No stylesheet, no script, no font, no image request: the page is a single
-//! self-contained document, so it can be attached to an issue or opened from a
-//! sealed bundle on a machine with no network. The interval bars are inline SVG
-//! for the same reason.
-//!
-//! The section order is the Markdown report's, and the numbers are formatted by
-//! the same code, so the two renderings can only differ in markup.
+//! Styles and interval bars are embedded for offline use. Section order and
+//! number formatting match the Markdown report.
 
 use std::fmt::Write as _;
 
@@ -17,8 +12,8 @@ use crate::suite::{SubjectEconomics, metric_of_field};
 use super::bar::ratio_bar;
 use super::economics::html_economics;
 use super::format::{
-    dispersion_role, escape, format_mib, format_ms, format_rate, format_ratio, format_seconds,
-    optional_ms, pass_word, valid_count, verdict_word,
+    dispersion_role, escape, format_mib, format_ms, format_percent, format_rate, format_ratio,
+    format_seconds, optional_ms, pass_word, valid_count, verdict_word, yes_no,
 };
 use super::style::STYLE;
 use super::{DIAGNOSTIC_BANNER, NOT_REPORTED};
@@ -33,8 +28,8 @@ pub fn render_html_suite(summary: &SuiteSummary) -> String {
 pub(super) fn html_suite(summary: &SuiteSummary, economics: &[SubjectEconomics]) -> String {
     let mut out = String::new();
     html_head(&mut out, summary);
-    html_scorecard(&mut out, summary);
     html_pairs(&mut out, summary);
+    html_scorecard(&mut out, summary);
     html_gates(&mut out, summary);
     html_dispersion(&mut out, summary);
     html_economics(&mut out, economics);
@@ -50,7 +45,6 @@ pub(super) fn html_suite(summary: &SuiteSummary, economics: &[SubjectEconomics])
     out
 }
 
-/// The document head, banner, and the facts a reader needs before the numbers.
 fn html_head(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(
         out,
@@ -69,23 +63,22 @@ fn html_head(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(
         out,
         "<dl class=\"facts\">\
-         <dt>experiment</dt><dd><code>{}</code></dd>\
-         <dt>attempts</dt><dd>{} requested, {} valid</dd>\
+         <dt>evidence</dt><dd>{} of {} attempts valid</dd>\
+         <dt>public claim allowed</dt><dd>{}</dd>\
          <dt>practical threshold</dt><dd>{}</dd>\
-         <dt>bootstrap</dt><dd>{} resamples, seed <code>{}</code></dd>\
-         <dt>claim eligible</dt><dd>{}</dd>\
+         <dt>analysis</dt><dd>{} bootstrap resamples, seed <code>{}</code></dd>\
+         <dt>experiment</dt><dd><code>{}</code></dd>\
          </dl>",
-        escape(summary.experiment_id.as_str()),
-        summary.repetitions,
         valid_count(summary),
-        format_ratio(summary.practical_threshold),
+        summary.repetitions,
+        yes_no(summary.claim_eligible),
+        format_percent(summary.practical_threshold),
         summary.resamples,
         summary.seed,
-        summary.claim_eligible
+        escape(summary.experiment_id.as_str()),
     );
 }
 
-/// The medians table.
 fn html_scorecard(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(out, "<h2>Scorecard</h2>");
     if summary.medians.is_empty() {
@@ -97,9 +90,9 @@ fn html_scorecard(out: &mut String, summary: &SuiteSummary) {
     }
     let _ = writeln!(
         out,
-        "<p>Latency is offer-to-terminal, so it includes admission wait. Lateness and \
-         accepted-to-terminal are attribution: they locate a difference inside a subject and \
-         cannot establish one, because both are improved by refusing work.</p>\n\
+        "<p>Medians from valid attempts. Latency runs from offer to terminal and includes \
+         admission wait. Lateness and accepted-to-terminal only help locate a difference; \
+         refusing work can improve both.</p>\n\
          <table><thead><tr><th>Subject</th><th>Role</th>\
          <th class=\"n\">Goodput (records/s)</th><th class=\"n\">p50 (ms)</th>\
          <th class=\"n\">p99 (ms)</th><th class=\"n\">p99.9 (ms)</th>\
@@ -138,20 +131,20 @@ fn html_scorecard(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(out, "</tbody></table>");
 }
 
-/// The paired-ratio table, each row carrying its inline interval bar.
 fn html_pairs(out: &mut String, summary: &SuiteSummary) {
-    let _ = writeln!(out, "<h2>Paired comparisons</h2>");
+    let _ = writeln!(out, "<h2>Result</h2>");
     if summary.pairs.is_empty() {
         let _ = writeln!(out, "<p>No pair had enough valid attempts to compare.</p>");
         return;
     }
     let _ = writeln!(
         out,
-        "<p>Ratios are numerator over denominator of the medians; the bar shows the \
-         confidence interval against parity and the practical threshold.</p>\n\
+        "<p>Ratios are numerator / denominator. A result is favorable only when its full \
+         confidence interval clears the practical threshold. The bar shows that interval \
+         against parity and the threshold.</p>\n\
          <table><thead><tr><th>Comparison</th><th>Metric</th><th class=\"n\">Ratio</th>\
          <th class=\"n\">CI low</th><th class=\"n\">CI high</th><th>Interval</th>\
-         <th>Clears threshold</th></tr></thead><tbody>"
+         <th>Result</th></tr></thead><tbody>"
     );
     for pair in &summary.pairs {
         let Some(metric) = metric_of_field(&pair.metric) else {
@@ -174,11 +167,10 @@ fn html_pairs(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(out, "</tbody></table>");
 }
 
-/// The gate table.
 fn html_gates(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(
         out,
-        "<h2>Gates</h2>\n<table><thead><tr><th>Gate</th><th>Result</th><th>Rule</th>\
+        "<h2>Checks</h2>\n<table><thead><tr><th>Check</th><th>Result</th><th>Requirement</th>\
          <th>Observed</th></tr></thead><tbody>"
     );
     for gate in &summary.gates {
@@ -195,20 +187,21 @@ fn html_gates(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(out, "</tbody></table>");
 }
 
-/// The dispersion table. See [`dispersion_role`] for the two kinds of row and
-/// why both are shown.
 fn html_dispersion(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(
         out,
-        "<h2>Dispersion</h2>\n<table><thead><tr><th>Series</th><th>Metric</th>\
-         <th class=\"n\">Coefficient of variation</th><th>Gated</th></tr></thead><tbody>"
+        "<h2>Run stability</h2>\n<table><thead><tr><th>Series</th><th>Metric</th>\
+         <th class=\"n\">Variation</th><th>Used by check</th></tr></thead><tbody>"
     );
     for entry in &summary.dispersion {
         let _ = writeln!(
             out,
             "<tr><td>{}</td><td>{}</td><td class=\"n\">{}</td><td>{}</td></tr>",
             escape(&entry.name),
-            escape(&entry.metric),
+            escape(
+                metric_of_field(&entry.metric)
+                    .map_or(entry.metric.as_str(), |metric| metric.label()),
+            ),
             entry
                 .coefficient_of_variation
                 .map_or_else(|| NOT_REPORTED.to_owned(), format_ratio),
@@ -217,13 +210,11 @@ fn html_dispersion(out: &mut String, summary: &SuiteSummary) {
     }
     let _ = writeln!(
         out,
-        "</tbody></table>\n<p>Ratio series are gated against the noise budget. \
-         Per-subject rows are informational: they say whether the machine was steady, \
-         which is a different question from whether the comparison was.</p>"
+        "</tbody></table>\n<p>Ratio variation is checked against the noise budget. \
+         Subject variation only shows whether the machine was steady.</p>"
     );
 }
 
-/// The attempt roster, valid and invalid alike.
 fn html_attempts(out: &mut String, summary: &SuiteSummary) {
     let _ = writeln!(
         out,

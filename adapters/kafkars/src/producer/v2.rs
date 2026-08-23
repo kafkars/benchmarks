@@ -33,12 +33,13 @@
 //! is why the slab stores one entry per in-flight *group* rather than per
 //! record while remaining bounded by the offer budget.
 //!
-//! # What this path does not report
+//! # Native metrics boundary
 //!
-//! Native client metrics and per-record latency rows. The v2 document has no
-//! field for a `kafkars` metrics snapshot, and inventing one here would mint a
-//! schema this adapter does not own; `latency.csv` is exactly the run-sized
-//! evidence the histograms replace. Both remain available on the legacy path.
+//! The public client is sampled after warmup, immediately before measurement,
+//! and again after drain. The versioned sidecar records both producer snapshots
+//! and exact cumulative-counter deltas. It does not infer counters the public
+//! API lacks. Per-record `latency.csv` remains legacy-only because it is exactly
+//! the run-sized evidence the histograms replace.
 
 mod admission;
 #[cfg(test)]
@@ -55,15 +56,17 @@ mod fixed_rate;
 mod measurement;
 #[cfg(test)]
 mod measurement_test;
+mod native_metrics;
 mod outstanding;
 mod pool;
 #[cfg(test)]
 mod pool_test;
+mod seal;
 mod slab;
 
 use std::{error::Error, sync::Arc, time::Instant};
 
-use bench_schema::{LoadMode, ProducerBenchmarkV2};
+use bench_schema::{KafkarsNativeMetrics, LoadMode, ProducerBenchmarkV2};
 
 use crate::arguments::{FixedProduceArgs, ProduceArgs};
 
@@ -75,6 +78,16 @@ use self::{
 };
 
 pub(crate) use self::document::{COMPLETION_MODE as V2_COMPLETION_MODE, OWNERSHIP as V2_OWNERSHIP};
+pub(super) use self::seal::seal;
+
+/// One completed v2 measurement and its versioned native-metrics sidecar.
+#[derive(Debug)]
+pub(crate) struct V2RunOutcome {
+    /// The primary measurement document.
+    pub(crate) document: ProducerBenchmarkV2,
+    /// Public Kafkars metrics around the measured phase.
+    pub(crate) native_metrics: KafkarsNativeMetrics,
+}
 
 /// Everything a phase shares with the engine that runs it.
 #[derive(Debug)]
@@ -105,9 +118,7 @@ pub(super) struct PhaseShape {
 }
 
 /// Runs one closed-loop experiment and returns its v2 document.
-pub(crate) fn run_closed_loop_v2(
-    arguments: &ProduceArgs,
-) -> Result<ProducerBenchmarkV2, Box<dyn Error>> {
+pub(crate) fn run_closed_loop_v2(arguments: &ProduceArgs) -> Result<V2RunOutcome, Box<dyn Error>> {
     let session = Session::open(SessionSpec {
         bootstrap: &arguments.bootstrap,
         client_id: super::CLOSED_LOOP_CLIENT_ID,
@@ -123,7 +134,7 @@ pub(crate) fn run_closed_loop_v2(
 /// Runs one fixed-rate experiment and returns its v2 document.
 pub(crate) fn run_fixed_rate_v2(
     arguments: &FixedProduceArgs,
-) -> Result<ProducerBenchmarkV2, Box<dyn Error>> {
+) -> Result<V2RunOutcome, Box<dyn Error>> {
     let common = &arguments.common;
     let session = Session::open(SessionSpec {
         bootstrap: &common.bootstrap,
@@ -137,53 +148,16 @@ pub(crate) fn run_fixed_rate_v2(
     seal(outcome, session.close())
 }
 
-/// Reports what the measurement said, not what shutting down afterwards said.
-///
-/// The session is closed on every path, including the failing ones, so a phase
-/// that gave up still releases the client rather than leaving the process to
-/// tear it down. That ordering had a cost: `close()?` ran first, so a shutdown
-/// that failed *because* the phase had already failed replaced the diagnosis
-/// with its own symptom, and the run reported the consequence instead of the
-/// cause. The measurement's error is therefore the one that survives, and a
-/// close failure is appended to it rather than substituted for it.
-///
-/// A close failure after a *good* measurement is not a failure of the run
-/// either. The offers were made, the client answered them, and the terminals
-/// were observed and recorded; what happened afterwards is teardown of a
-/// process that is about to exit, and every attempt runs in a fresh one, so
-/// there is no state a hung close can carry into the next. Throwing the
-/// document away would delete evidence that was already complete and leave a
-/// reader with nothing to read but the shutdown. The warning goes to stderr,
-/// which the control plane captures, so the hiccup stays visible without being
-/// mistaken for the result.
-pub(super) fn seal<T>(
-    outcome: Result<T, Box<dyn Error>>,
-    closed: Result<(), Box<dyn Error>>,
-) -> Result<T, Box<dyn Error>> {
-    match (outcome, closed) {
-        (Ok(document), Ok(())) => Ok(document),
-        (Ok(document), Err(close)) => {
-            eprintln!(
-                "kafkars: the measurement completed and the session then failed to close: {close}"
-            );
-            Ok(document)
-        }
-        (Err(failure), Ok(())) => Err(failure),
-        (Err(failure), Err(close)) => {
-            Err(format!("{failure}; the session then failed to close: {close}").into())
-        }
-    }
-}
-
 /// Warms up, measures, and builds the closed-loop document.
 fn measure_closed_loop(
     session: &Session,
     arguments: &ProduceArgs,
-) -> Result<ProducerBenchmarkV2, Box<dyn Error>> {
+) -> Result<V2RunOutcome, Box<dyn Error>> {
     let pool = PayloadPool::build(&arguments.run_id, arguments.payload_bytes)?;
     let budget = u64::try_from(arguments.max_outstanding)?;
     let partitions = usize::try_from(arguments.partitions)?;
     warm_up(session, &pool, arguments, partitions, budget)?;
+    let baseline = native_metrics::snapshot(&super::metrics(&session.client)?)?;
 
     let outstanding = OutstandingGauge::new(u64::try_from(arguments.payload_bytes)?);
     let started = Instant::now();
@@ -205,7 +179,8 @@ fn measure_closed_loop(
     // remained afterwards, so the measured interval ends here and there is
     // nothing left to push out.
     let measured_duration_ns = context.clock.at(Instant::now());
-    document::build(&DocumentRequest {
+    let final_snapshot = native_metrics::snapshot(&super::metrics(&session.client)?)?;
+    let document = document::build(&DocumentRequest {
         run_id: &arguments.run_id,
         load_mode: LoadMode::ClosedLoop,
         payload_bytes: u64::try_from(arguments.payload_bytes)?,
@@ -213,6 +188,10 @@ fn measure_closed_loop(
         measured_duration_ns,
         measurement: &measurement,
         outstanding: &outstanding,
+    })?;
+    Ok(V2RunOutcome {
+        document,
+        native_metrics: native_metrics::between(baseline, final_snapshot)?,
     })
 }
 
@@ -220,12 +199,13 @@ fn measure_closed_loop(
 fn measure_fixed_rate(
     session: &Session,
     arguments: &FixedProduceArgs,
-) -> Result<ProducerBenchmarkV2, Box<dyn Error>> {
+) -> Result<V2RunOutcome, Box<dyn Error>> {
     let common = &arguments.common;
     let pool = PayloadPool::build(&common.run_id, common.payload_bytes)?;
     let budget = u64::try_from(common.max_outstanding)?;
     let partitions = usize::try_from(common.partitions)?;
     warm_up(session, &pool, common, partitions, budget)?;
+    let baseline = native_metrics::snapshot(&super::metrics(&session.client)?)?;
 
     let outstanding = OutstandingGauge::new(u64::try_from(common.payload_bytes)?);
     let outcome = fixed_rate::run(&fixed_rate::FixedRateSpec {
@@ -239,7 +219,8 @@ fn measure_fixed_rate(
         offered_records_per_second: arguments.offered_records_per_second,
         outstanding: &outstanding,
     })?;
-    document::build(&DocumentRequest {
+    let final_snapshot = native_metrics::snapshot(&super::metrics(&session.client)?)?;
+    let document = document::build(&DocumentRequest {
         run_id: &common.run_id,
         load_mode: LoadMode::ScheduledOpenLoopFixedRate,
         payload_bytes: u64::try_from(common.payload_bytes)?,
@@ -247,6 +228,10 @@ fn measure_fixed_rate(
         measured_duration_ns: outcome.measured_duration_ns,
         measurement: &outcome.measurement,
         outstanding: &outstanding,
+    })?;
+    Ok(V2RunOutcome {
+        document,
+        native_metrics: native_metrics::between(baseline, final_snapshot)?,
     })
 }
 

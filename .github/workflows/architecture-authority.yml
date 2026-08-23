@@ -1,0 +1,66 @@
+# This workflow executes only the trusted base revision. The proposal checkout
+# is data passed to the registry-pinned zrail binary; no proposal script,
+# action, build, or generated program runs here.
+#
+# This is strong preview feedback, not production merge authority. GitHub gives
+# every workflow in this repository the same Actions identity, so production
+# enforcement still belongs in an organization ruleset workflow or dedicated
+# App outside the proposal's write domain.
+name: Architecture preview
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+concurrency:
+  group: architecture-authority-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  review:
+    name: protected-base source preview
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ZRAIL_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      ZRAIL_PROPOSAL_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out trusted base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.ZRAIL_BASE_SHA }}
+          persist-credentials: false
+
+      - name: Isolate trusted zrail state
+        run: |
+          echo "CARGO_HOME=$RUNNER_TEMP/zrail-cargo-home" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/zrail-authority-target" >> "$GITHUB_ENV"
+
+      - name: Install trusted zrail toolchain
+        run: rustup toolchain install 1.96.0 --profile minimal
+
+      - name: Install trusted zrail release
+        run: cargo +1.96.0 install zrail --version 0.0.1 --locked
+
+      - name: Check out proposal as untrusted data
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ env.ZRAIL_PROPOSAL_SHA }}
+          path: proposal
+          persist-credentials: false
+          allow-unsafe-pr-checkout: true
+
+      - name: Independently review observed proposal state
+        run: >-
+          zrail review
+          --authority-root "$GITHUB_WORKSPACE"
+          --base "$ZRAIL_BASE_SHA"
+          --root "$GITHUB_WORKSPACE/proposal"

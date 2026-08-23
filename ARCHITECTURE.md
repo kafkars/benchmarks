@@ -74,20 +74,40 @@ they hash to, and the statistics computed over them. It never reaches a broker,
 spawns a process, or reads a clock, so a reporting bug can never move a
 measurement.
 
-Beside the four roles, and belonging to none of them, is
-`crates/bench-guardrails`: a test-only crate that reads the hand-authored
-`guardrails.toml` and asserts the repository still has the shape this document
-describes. It walks `crates/` and `adapters/kafkars/src`, classifies every Rust
-file as facade, implementation, test, or auxiliary, and measures each against
-its category's advisory target and its failing gate; it also checks that every
-file opens with a `//!` contract, that `lib.rs` and `mod.rs` stay declarative,
-that each `*_test.rs` names a subject and lives behind `#[cfg(test)]`, and that
-no banned async runtime appears in the root `Cargo.lock`. A file may exceed its
-gate only through a `[budgets].baseline` entry carrying its exact length and a
-justification, which becomes an error the moment the file fits again — so the
-list of exceptions is a work queue that empties rather than a ceiling that
-fills. The crate is deliberately outside the evidence path: it constrains how
-this repository is written, and can never influence what a measurement says.
+## Repository guardrails
+
+Beside the four roles, and belonging to none of them, is the reviewed zrail
+contract in `zrail.toml` and its content-bound `zrail.lock`. It assigns the
+harness packages to evidence, adapter, and control-plane layers and enforces
+their dependency direction, module contracts, declarative facades,
+sibling-test reachability, reviewed macro expansion, source hygiene, production
+evidence runtime boundaries, and tightening file-size ratchets.
+`zrail check` is read-only; architecture movement is reviewed with
+`zrail diff --base HEAD --deny-grants` before the lock changes.
+
+Pull requests also receive a protected-base architecture preview. The workflow
+runs the registry-pinned zrail release from the trusted base, checks the
+proposal out separately, and passes its source to `zrail review` as data; it
+never executes proposal-controlled code. GitHub nevertheless gives every
+workflow in this repository the same Actions identity, so that preview is not
+claimed as production merge authority. A required authority result must
+eventually come from an organization ruleset workflow or dedicated App outside
+the proposal's write domain.
+
+The Kafkars adapter remains a deliberately detached Cargo workspace because it
+builds against path-pinned sibling repositories. zrail correctly rejects those
+paths as outside this repository's authority, so `scripts/check-detached-policy`
+keeps its source-shape and budget checks narrow and visible. That companion
+also scans the complete root `Cargo.lock` for forbidden async runtimes; zrail
+models exact declared dependency edges, while the repository contract bans a
+runtime even when it arrives transitively. Both locks reject benchmarking
+frameworks, while the adapter's lock remains exempt from the runtime ban
+because the client under measurement owns that dependency graph. The remaining
+product boundaries are recorded in [`docs/ZRAIL_GAPS.md`](docs/ZRAIL_GAPS.md).
+
+These checks constrain how the lab is written and remain outside the evidence
+path. A sealed bundle can conclude no more about client performance because
+zrail passed, and must not treat architecture qualification as measurement.
 
 ## The evidence path
 
@@ -167,9 +187,9 @@ The Kafka family repositories are peers, and several checks assume it:
 
 ```txt
 ~/code/
-├── kafka-protocol      generated wire types
-├── kafka-driver        RPC and I/O
-├── kafka-client        the client under measurement
+├── kafka-protocol      checkout of kafkars/kafka-wire; generated wire types
+├── kafka-driver        checkout of kafkars/kafka-driver; RPC and I/O
+├── kafkars             checkout of kafkars/kafkars; client under measurement
 └── kafka-benchmarks    this repository
 ```
 
@@ -199,7 +219,7 @@ Upstream, this control plane lived *inside* the client repository, so its
 environment capture read the client's git state out of its own repository root.
 Here the client is a sibling checkout, so both capture sites resolve it through
 the `KAFKA_BENCH_CLIENT_ROOT` environment variable, falling back to
-`../kafka-client` when it is unset. Setting that variable points a legacy run at
+`../kafkars` when it is unset. Setting that variable points a legacy run at
 a client checkout somewhere else — a worktree, a bisect, a second clone —
 without editing the harness.
 

@@ -17,7 +17,7 @@ feature that already exists.
 absolute path in a `subjects.toml` that `scripts/generate-subject-config`
 writes, plus one shared sibling pin in
 `dependencies/sibling-revisions.env`. The adapter is built once, against that
-one pinned `kafka-client` revision, and both subjects in a comparison are
+one pinned `kafkars/kafkars` revision, and both subjects in a comparison are
 whatever binaries happen to be on disk. **Two client revisions therefore cannot
 be compared in a single attempt.** A `head/base` pair today is two adapter
 builds a human arranged, and nothing in the sealed bundle proves they differ in
@@ -65,9 +65,9 @@ inadmissible, on artifacts that sound authoritative.
 
 ## Cross-repository trigger from a product pull request
 
-The design's intent is that a pull request against `kafka-client` can ask this
-lab for a comparison. **Parked, not deferred**: implementing it requires adding
-a workflow to `kafka-client`, and this repository's standing constraint is that
+The design's intent is that a pull request against `kafkars/kafkars` can ask
+this lab for a comparison. **Parked, not deferred**: implementing it requires
+adding a workflow to Kafkars, and this repository's standing constraint is that
 it does not modify sibling repositories. The half that lives here — a manifest,
 a `workflow_dispatch` entry point, and the PR pack — already exists; the half
 that lives there has to be a decision made there.
@@ -99,17 +99,20 @@ serves, how it fails, and what it is allowed to be evidence *of*. A loopback
 that is not designed against the protocol measures the loopback. It belongs in
 the Layer 2 work, not in a scenario pack.
 
-## kafkars-internal request and batch counters
+## Remaining Kafkars-internal counters
 
-The performance contract's required internal counters — buffer occupancy,
-records and bytes per batch, size-triggered versus linger-triggered batches,
-copies and allocations, requests submitted and retried, wakeups — are not
-readable from a shipped public surface today. Getting them means changing
-`kafka-client`, which is out of bounds for this repository: adapters depend
-only on shipped public client surfaces, and a measurement that needs a private
-hook belongs in the client's own repository. Until the client ships them, the
-librdkafka side of every batch-shape comparison is exact and the kafkars side
-is inferred, and the bundle says so.
+The public Kafkars surface now exposes producer ownership gauges plus cumulative
+Produce request, partition-batch, record, and encoded-record-byte counters. The
+adapter seals exact measured-window deltas and both boundary snapshots under
+`kafkars.kafkars-native-metrics.v1`, so request and aggregate batch shape are no
+longer inferred.
+
+The remaining performance-contract counters — per-batch distributions,
+size-triggered versus linger-triggered batches, total request and response wire
+bytes, retries, timeouts, copies, allocations, and wakeups — are not readable
+from the shipped public surface. Adding them is a Kafkars repository decision;
+this adapter will not reach through a private hook. Until they ship, the fields
+they would support remain absent rather than zero or inferred.
 
 ## rust-rdkafka and Java adapters
 
@@ -180,7 +183,7 @@ does not block anything before that. Bundles are written to a gitignored
 
 ## Findings awaiting a client decision
 
-The large-record scenarios surfaced two `kafka-client` behaviors the lab can
+The large-record scenarios surfaced two Kafkars behaviors the lab can
 measure but not change: `batch_bytes` acts as a hard cap on the encoded wire
 batch (records above it fail locally, without a broker), and one failure
 terminal permanently fences producer admission. Both are recorded with

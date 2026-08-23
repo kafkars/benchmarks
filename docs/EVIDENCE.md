@@ -91,6 +91,7 @@ shape and who is entitled to have written it.
 | `subjects.lock.json` | What each subject's binary actually was at probe time, with its digest and the version it declared. | control plane probe | `kafkars.subjects-lock.v1` |
 | `environment.json` | Repository states, toolchain and build identity, host facts, broker identity. | control plane | `kafkars.benchmark-environment.v2` |
 | `adapters/<subject>/result.json` | The measurement: four timestamps, bounded histograms, offer accounting, declared execution. | the adapter under test | `kafkars.producer-benchmark.v2` |
+| `adapters/<subject>/kafkars-native-metrics.json` | Public Kafkars producer snapshots bracketing measurement and their exact cumulative-counter deltas. Present for the Kafkars adapter. | the adapter under test | `kafkars.kafkars-native-metrics.v1` |
 | `adapters/<subject>/status.json` | The adapter's own report of how its run verb ended. | the adapter under test | `kafkars.adapter-status.v1` |
 | `adapters/<subject>/stdout.log`, `stderr.log` | The subject's captured output, truncated at the declared budget. | the adapter under test | — (text) |
 | `verification/<subject>-<phase>.json` | What the broker-visible verifier read back off the topic. Never written by a subject. | the configured verifier tool | `kafkars.producer-verification.v1` |
@@ -111,6 +112,14 @@ with its `llm-summary-request.json` and `llm-provenance.json` beside it.
 Those are derived from sealed bundles and never part of one, because a
 bundle is immutable and an aggregate over several of them is not a fact
 about any single attempt.
+
+The Kafkars native sidecar lets a reader conclude how many public
+driver-accepted Produce requests, partition batches, records, and encoded
+record bytes accumulated between the post-warmup baseline and post-drain final
+snapshot. It also preserves producer ownership gauges and lifecycle flags at
+both boundaries. Its peaks are process-lifetime values and may include warmup;
+the sidecar does not claim continuous gauge maxima, application payload bytes,
+complete request wire bytes, retries, timeouts, allocations, or wakeups.
 
 ## The offer model
 

@@ -183,7 +183,7 @@ both sealed as evidence by the attempts that discovered them:
 
 - **`batch_bytes` is a hard cap on the encoded wire batch.** Both adapters
   pin the client batch budget at 65,536 bytes per the performance contract,
-  and `kafka-client` refuses to materialize any record whose complete batch
+  and Kafkars refuses to materialize any record whose complete batch
   encoding exceeds it (`kafka-wire-records` `batch_encode` returns
   `BatchLimitExceeded`; the engine settles the record as an immediate,
   non-retried failure terminal). librdkafka's `batch.size` is a soft cap — an
@@ -194,7 +194,7 @@ both sealed as evidence by the attempts that discovered them:
   `close()` reports `producer is already closed`. A workload with any local
   failure therefore cannot finish its measurement.
 
-Unblocking is a `kafka-client` decision (oversized-record batching, or a
+Unblocking is a Kafkars decision (oversized-record batching, or a
 documented refusal the resolver can check before running; and whether
 admission fencing after a failure terminal is intended semantics). Until
 then these two stay out of the runnable packs. The adapter now reports the

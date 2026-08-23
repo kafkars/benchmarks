@@ -53,5 +53,5 @@ cluster to a clean state.
 ## Boundary
 
 This cluster serves local diagnostics for this repository. The
-smoque-driven smoke cluster stays in kafka-client for this loop — the compose
+smoque-driven smoke cluster stays in Kafkars for this loop — the compose
 file here is a copy with defaulted host ports, not a replacement for it.

@@ -149,7 +149,7 @@ const gitState = (cwd) => ({
 });
 const sibling = (name) => resolve(repo, "..", name);
 const clientRoot =
-  process.env.KAFKA_BENCH_CLIENT_ROOT ?? resolve(repo, "..", "kafka-client");
+  process.env.KAFKA_BENCH_CLIENT_ROOT ?? resolve(repo, "..", "kafkars");
 const environment = {
   schema: "kafkars.benchmark-environment.v1",
   captured_at: new Date().toISOString(),

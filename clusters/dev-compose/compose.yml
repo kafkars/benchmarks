@@ -1,6 +1,6 @@
 # Three-broker KRaft cluster for local diagnostics.
 #
-# Extracted from the kafka-client smoke cluster, with one deliberate change:
+# Extracted from the Kafkars smoke cluster, with one deliberate change:
 # the host ports default to 39092-39094 instead of being required. The upstream
 # copy is launched by a harness that always sets them; this one is launched by
 # a human typing `docker compose ... up -d --wait`, and a compose file that

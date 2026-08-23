@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Check policy outside zrail's authority for this repository's detached subject."""
+
+from __future__ import annotations
+
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent.parent
+ADAPTER = ROOT / "adapters" / "kafkars" / "src"
+ASYNC_RUNTIMES = {
+    "async-std",
+    "compio",
+    "futures-executor",
+    "glommio",
+    "monoio",
+    "smol",
+    "tokio",
+}
+BENCHMARK_FRAMEWORKS = {"criterion", "divan"}
+BUDGETS = {
+    "facade": (80, 120),
+    "implementation": (240, 300),
+    "test": (300, 500),
+    "auxiliary": (300, 500),
+}
+
+
+def relative(path: Path) -> str:
+    return path.relative_to(ROOT).as_posix()
+
+
+def category(path: Path) -> str:
+    shown = f"/{relative(path)}"
+    if "/bin/" in shown or "/tests/common/" in shown:
+        return "auxiliary"
+    if path.name in {"lib.rs", "mod.rs"}:
+        return "facade"
+    if path.name.endswith("_test.rs") or "/tests/" in shown:
+        return "test"
+    return "implementation"
+
+
+def module_contract(path: Path, source: str) -> str | None:
+    first = next((line.strip() for line in source.splitlines() if line.strip()), "")
+    if first.startswith("//!"):
+        return None
+    return f"{relative(path)}: first non-empty line is not a `//!` module contract"
+
+
+def facade_findings(path: Path, source: str) -> list[str]:
+    if category(path) != "facade":
+        return []
+    findings: list[str] = []
+    pending_use = False
+    for number, raw in enumerate(source.splitlines(), start=1):
+        code = raw.split("//", 1)[0].strip()
+        if not code or code.startswith(("#![", "#[")):
+            continue
+        if pending_use:
+            pending_use = not code.endswith(";")
+            continue
+        declaration = re.sub(r"^pub(?:\([^)]*\))?\s+", "", code)
+        if declaration.startswith("mod ") and declaration.endswith(";") and "{" not in declaration:
+            continue
+        if declaration.startswith("use "):
+            pending_use = not declaration.endswith(";")
+            continue
+        findings.append(f"{relative(path)}:{number}: facade contains implementation: {code[:72]}")
+    if pending_use:
+        findings.append(f"{relative(path)}: facade ends inside an unterminated use declaration")
+    return findings
+
+
+def subject_exists(test: Path, sources: set[Path]) -> bool:
+    stem = test.with_name(test.name.removesuffix("_test.rs"))
+    if stem.with_suffix(".rs") in sources:
+        return True
+    if any(path.is_relative_to(stem) for path in sources):
+        return True
+    parent = stem.parent
+    return parent.name == stem.name and parent.with_suffix(".rs") in sources
+
+
+def sibling_findings(paths: list[Path], text: dict[Path, str]) -> list[str]:
+    findings: list[str] = []
+    sources = set(paths)
+    joined = "\n".join(text.values())
+    for path in paths:
+        if not path.name.endswith("_test.rs"):
+            continue
+        module = path.stem
+        if not subject_exists(path, sources):
+            findings.append(f"{relative(path)}: orphan unit test has no matching subject")
+        declaration = re.compile(
+            rf"#\[\s*cfg\s*\(\s*test\s*\)\s*\]"
+            rf"(?:\s*#\[[^]]+\])*\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+{re.escape(module)}\s*;"
+        )
+        if declaration.search(joined) is None:
+            findings.append(
+                f"{relative(path)}: no `#[cfg(test)] mod {module};` declaration"
+            )
+    return findings
+
+
+def package_names(path: Path) -> set[str]:
+    lock = tomllib.loads(path.read_text(encoding="utf-8"))
+    return {package["name"] for package in lock.get("package", [])}
+
+
+def lock_findings(
+    root_lock: Path = ROOT / "Cargo.lock",
+    adapter_lock: Path = ROOT / "adapters" / "kafkars" / "Cargo.lock",
+) -> list[str]:
+    root_present = package_names(root_lock)
+    adapter_present = package_names(adapter_lock)
+    findings = [
+        f"{relative(root_lock)}: forbidden harness dependency `{name}` is present"
+        for name in sorted((ASYNC_RUNTIMES | BENCHMARK_FRAMEWORKS) & root_present)
+    ]
+    findings.extend(
+        f"{relative(adapter_lock)}: forbidden benchmarking framework `{name}` is present"
+        for name in sorted(BENCHMARK_FRAMEWORKS & adapter_present)
+    )
+    return findings
+
+
+def lint_level(table: dict[str, object], name: str) -> object:
+    configured = table.get(name)
+    if isinstance(configured, dict):
+        return configured.get("level")
+    return configured
+
+
+def manifest_findings(
+    manifest_path: Path = ROOT / "adapters" / "kafkars" / "Cargo.toml",
+) -> list[str]:
+    manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+    findings: list[str] = []
+    rust_lints = manifest.get("lints", {}).get("rust", {})
+    if lint_level(rust_lints, "unsafe_code") != "forbid":
+        findings.append(
+            f"{relative(manifest_path)}: lints.rust.unsafe_code must remain `forbid`"
+        )
+    clippy_lints = manifest.get("lints", {}).get("clippy", {})
+    for name in ["dbg_macro", "expect_used", "todo", "unimplemented", "unwrap_used"]:
+        if lint_level(clippy_lints, name) != "deny":
+            findings.append(
+                f"{relative(manifest_path)}: lints.clippy.{name} must remain `deny`"
+            )
+    return findings
+
+
+def main() -> int:
+    paths = sorted(ADAPTER.rglob("*.rs"))
+    if not paths:
+        print("check-detached-policy: no Kafkars adapter Rust sources found", file=sys.stderr)
+        return 1
+    text = {path: path.read_text(encoding="utf-8") for path in paths}
+    failures = lock_findings()
+    failures.extend(manifest_findings())
+    advisories: list[str] = []
+    for path in paths:
+        source = text[path]
+        contract = module_contract(path, source)
+        if contract is not None:
+            failures.append(contract)
+        failures.extend(facade_findings(path, source))
+        role = category(path)
+        target, hard = BUDGETS[role]
+        lines = len(source.splitlines())
+        if lines > hard:
+            failures.append(
+                f"{relative(path)}: {role}, {lines} lines, above the {hard}-line ceiling"
+            )
+        elif lines > target:
+            advisories.append(
+                f"{relative(path)}: {role}, {lines} lines, above the {target}-line target"
+            )
+    failures.extend(sibling_findings(paths, text))
+    for advisory in advisories:
+        print(f"advisory: {advisory}")
+    if failures:
+        for failure in failures:
+            print(f"error: {failure}", file=sys.stderr)
+        return 1
+    print(
+        f"check-detached-policy: {len(paths)} adapter files, both locks, and adapter lints satisfy policy"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

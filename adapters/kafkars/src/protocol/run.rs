@@ -8,7 +8,9 @@ use bench_schema::{AdapterStatus, LoadMode, ProducerBenchmarkV2};
 use crate::producer;
 
 use super::{
-    documents::{read_experiment, write_result, write_status},
+    documents::{
+        NATIVE_METRICS_FILE, read_experiment, write_native_metrics, write_result, write_status,
+    },
     timestamp::{now, utc_rfc3339_millis},
     translate::{fixed_arguments, produce_arguments},
     verdict::{report, subject_of},
@@ -62,7 +64,7 @@ fn execute(experiment_path: &Path, output: &Path) -> Result<ProducerBenchmarkV2,
         )
         .into());
     }
-    let document = match experiment.load_mode {
+    let mut outcome: producer::V2RunOutcome = match experiment.load_mode {
         LoadMode::ClosedLoop => {
             producer::run_closed_loop_v2(&produce_arguments(&experiment, &subject, output)?)
         }
@@ -70,6 +72,9 @@ fn execute(experiment_path: &Path, output: &Path) -> Result<ProducerBenchmarkV2,
             producer::run_fixed_rate_v2(&fixed_arguments(&experiment, &subject, output)?)
         }
     }?;
-    write_result(output, &document)?;
-    Ok(document)
+    outcome.document.native_metrics_path =
+        Some(format!("adapters/{subject}/{NATIVE_METRICS_FILE}"));
+    write_native_metrics(output, &outcome.native_metrics)?;
+    write_result(output, &outcome.document)?;
+    Ok(outcome.document)
 }
