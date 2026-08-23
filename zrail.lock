@@ -268,7 +268,7 @@ sha256 = "730b05f738671de088850e2b03fc6ce3aaf01a57a217f1ddab4af9d61b0a84fa"
 
 [[gate.input]]
 path = "Cargo.toml"
-sha256 = "0807fb4c1ae3ef1012e533bf311fd5a68697af6cc3f4441e72421a4d3590be23"
+sha256 = "6b12d1ae186cac2d106a7b1aae6b96a7a8496a1ce74ebf6a4e498b29e540b546"
 
 [[gate.input]]
 path = "docs/ZRAIL_GAPS.md"

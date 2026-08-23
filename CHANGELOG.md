@@ -213,6 +213,9 @@ not permitted and appears instead as a new schema id.
 
 ### Changed
 
+- the README now uses the Kafkars organization benchmarks mark and keeps the
+  front door to purpose, verification, one real run, result reading, and links
+  to the detailed contracts;
 - suite reports now lead with the comparison result, use plain-language
   checks and run-stability labels, show the practical threshold as a
   percentage, and replace raw metric field names with reader-facing names. The

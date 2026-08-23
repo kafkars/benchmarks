@@ -8,9 +8,10 @@ on `main`.
 
 ## Reporting a vulnerability
 
-Do not open a public issue. Email `shawn@zsumz.com` with
-`[kafka-benchmarks security]` in the subject. Once the public repository exists,
-its private GitHub Security Advisory form is the preferred channel.
+Do not open a public issue. Use the repository's
+[private GitHub Security Advisory form](https://github.com/kafkars/benchmarks/security/advisories/new).
+If that is unavailable, email `shawn@zsumz.com` with
+`[kafka-benchmarks security]` in the subject.
 
 Include the affected revision, the smallest practical reproducer, the security
 impact, and any known mitigations. Do not include live credentials, broker
