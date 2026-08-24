@@ -24,7 +24,7 @@
 # A MISSING sibling checkout is advisory too, and that is a deliberate choice
 # rather than an oversight. No crate in this workspace depends on the siblings —
 # only the out-of-workspace adapter under adapters/kafkars does — so a clean
-# clone with nothing beside it can still run `scripts/check` end to end. Failing
+# clone with nothing beside it can still run `zcheck` end to end. Failing
 # hard here would mean the quickstart in README.md did not work on a fresh
 # machine, which teaches the reader that the gate is optional. Strict mode still
 # fails: anything producing a claim-eligible bundle must have the siblings, and
@@ -323,7 +323,7 @@ if [[ "$mode" == strict ]] &&
 fi
 if [[ "$missing_siblings" -gt 0 ]]; then
   echo "provenance advisory: sibling checkouts absent; adapter builds and check-benchmarks require them" >&2
-  echo "provenance advisory: the workspace, schema, control-plane, and summary lanes do not, so scripts/check is still meaningful here" >&2
+  echo "provenance advisory: the workspace, schema, control-plane, and summary tasks do not, so zcheck is still meaningful here" >&2
 fi
 if [[ "$unreadable_checks" -gt 0 ]]; then
   echo "provenance advisory: $unreadable_checks cross-check(s) had nothing to read, so they are unchecked rather than mismatched" >&2

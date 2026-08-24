@@ -106,7 +106,7 @@ and it is not a place to make a client look good.
   repositories outside this one. Review policy and lock movement with
   `zrail diff --base HEAD --deny-grants`; never use `--accept-grants` in an
   automated gate.
-- Run `scripts/check` before requesting review.
+- Run `zcheck` before requesting review.
 
 ## Deferred decisions
 

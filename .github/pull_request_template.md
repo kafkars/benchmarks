@@ -22,4 +22,4 @@
 ## Validation
 
 - [ ] Complete diff reviewed
-- [ ] `scripts/check`
+- [ ] `zcheck`

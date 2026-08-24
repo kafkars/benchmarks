@@ -213,6 +213,14 @@ not permitted and appears instead as a new schema id.
 
 ### Changed
 
+- `zcheck.toml` is now the canonical local and CI qualification graph. zcheck
+  0.0.2 preserves the seven existing bare-clone tasks, records receipts and
+  complete logs, retains CI qualification evidence for 30 days, and replaces
+  only the deleted `scripts/check` dispatcher;
+  adapter conformance remains a separate task requiring reviewed sibling
+  checkouts. The zrail 0.0.2 epoch migration is deliberately deferred because
+  that release reports 62 unresolved ordinary Rust bindings under the current
+  strict policy, so zrail remains pinned to 0.0.1 without weakening authority;
 - the README now uses the Kafkars organization benchmarks mark and keeps the
   front door to purpose, verification, one real run, result reading, and links
   to the detailed contracts;

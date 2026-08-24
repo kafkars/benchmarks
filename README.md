@@ -37,13 +37,14 @@ A benchmark here is more than a timing:
 ```sh
 git clone https://github.com/kafkars/benchmarks
 cd benchmarks
+cargo +1.96.0 install zcheck --version 0.0.2 --locked
 cargo +1.96.0 install zrail --version 0.0.1 --locked
-scripts/check
+zcheck
 ```
 
-`scripts/check` is the review gate. It runs formatting, linting, tests, docs,
-schemas, zrail policy, detached-adapter policy, legacy tests, and provenance
-checks. No Kafka cluster or sibling checkout is required.
+`zcheck` is the review gate. It records one receipt across formatting, linting,
+tests, docs, schemas, zrail policy, detached-adapter policy, legacy tests, and
+provenance checks. No Kafka cluster or sibling checkout is required.
 
 ## Run
 
@@ -112,7 +113,7 @@ diagnostic only.
 | `scenarios/` | workloads and cadence packs |
 | `schemas/` and `conformance/` | versioned contracts and byte-exact vectors |
 | `docs/` | design, evidence semantics, boundaries, and roadmap |
-| `scripts/` | review gates and benchmark entry points |
+| `scripts/` | qualification tasks and benchmark entry points |
 
 ## Documentation
 

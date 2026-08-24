@@ -85,6 +85,12 @@ evidence runtime boundaries, and tightening file-size ratchets.
 `zrail check` is read-only; architecture movement is reviewed with
 `zrail diff --base HEAD --deny-grants` before the lock changes.
 
+`zcheck.toml` is the qualification graph over that authority and the retained
+repository-specific checks. It changes orchestration, not policy: the same
+tasks run locally and in CI, and each run records its plan, logs, repository
+state, and result in a versioned receipt. CI retains those receipts and complete
+logs for 30 days.
+
 Pull requests also receive a protected-base architecture preview. The workflow
 runs the registry-pinned zrail release from the trusted base, checks the
 proposal out separately, and passes its source to `zrail review` as data; it

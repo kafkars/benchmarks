@@ -5,6 +5,25 @@ workspace. Two repository requirements remain outside that authority and are
 kept executable in `scripts/check-detached-policy` rather than silently
 deferred.
 
+## Zrail 0.0.2 ordinary binding resolution
+
+Zrail 0.0.2 moves the lock to semantics epoch 2, but it cannot currently
+baseline this workspace under the existing strict policy. A read-only check
+reports 62 `RUST-INCLUDE-002` errors for ordinary Rust bindings, including a
+method call in `crates/bench-adapter-librdkafka/src/run.rs`, a public field in
+`crates/bench-report/src/economics/totals.rs`, and a local variable in
+`crates/benchctl/src/supervise.rs`.
+
+Those are normal, compiler-resolved Rust expressions rather than include or
+import indirection the repository can simplify. Weakening macro policy,
+accepting unresolved analysis, or restructuring working Rust to move the
+diagnostic would reduce authority rather than migrate it. The repository
+therefore stays on zrail 0.0.1 and does not regenerate `zrail.lock` at epoch 2.
+
+Requested zrail change: resolve ordinary path bindings across this workspace,
+or report the unsupported language form precisely enough that the repository
+can make a source-level decision without suppressing unresolved analysis.
+
 ## Detached workspace with reviewed external paths
 
 The Kafkars adapter is a separate Cargo workspace whose client dependency is a

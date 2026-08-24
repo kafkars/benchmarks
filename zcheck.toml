@@ -1,0 +1,120 @@
+schema = 1
+default = "check"
+
+[execution]
+jobs = 4
+default_timeout = "30m"
+repository_state = "preserve"
+
+[tasks.workspace]
+description = "Validate Rust formatting, lints, tests, and documentation."
+run = ["scripts/check-workspace"]
+tools = ["bash", "cargo"]
+resources = ["cargo-target"]
+inputs = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "rust-toolchain.toml",
+  "crates",
+  "scripts/check-workspace",
+]
+
+[tasks.architecture]
+description = "Validate zrail and the detached adapter policies."
+run = ["scripts/check-guardrails"]
+tools = ["bash", "python3", "zrail"]
+inputs = [
+  "Cargo.toml",
+  "Cargo.lock",
+  "zrail.toml",
+  "zrail.lock",
+  "adapters/kafkars/Cargo.toml",
+  "adapters/kafkars/Cargo.lock",
+  "scripts/check-guardrails",
+  "scripts/check-detached-policy",
+  "scripts/check-detached-policy-test",
+]
+
+[tasks.schemas]
+description = "Validate every registered evidence schema."
+run = ["scripts/check-schemas"]
+tools = ["bash", "node"]
+inputs = ["schemas", "scripts/check-schemas"]
+
+[tasks.librdkafka-pin]
+description = "Validate every copy of the reviewed librdkafka pin."
+run = ["scripts/check-librdkafka-pin"]
+tools = ["bash", "grep", "sed"]
+inputs = [
+  "scripts/bootstrap-librdkafka",
+  "scripts/check-librdkafka-pin",
+  "crates/bench-adapter-librdkafka/src/describe.rs",
+  ".github/workflows/ci.yml",
+  ".github/workflows/nightly.yml",
+  "schemas/kafkars.benchmark-environment.v1.schema.json",
+  "legacy/benchctl/environment.mjs",
+  "legacy/benchctl/seal.mjs",
+]
+
+[tasks.control-plane]
+description = "Validate the legacy Node control plane."
+run = ["scripts/check-control-plane"]
+tools = ["bash", "grep", "node"]
+inputs = ["package.json", "legacy/benchctl", "scripts/check-control-plane"]
+
+[tasks.summary-contract]
+description = "Validate the offline model-summary request and replay contract."
+run = ["scripts/benchmark-openai-summary-test"]
+tools = ["bash", "python3"]
+inputs = [
+  "analysis/prompts/producer-comparison.v1.md",
+  "crates/bench-report/src/render.rs",
+  "scripts/benchmark-openai-summary",
+  "scripts/benchmark-openai-summary-test",
+]
+
+[tasks.provenance]
+description = "Validate the reviewed sibling revisions when they are present."
+run = ["scripts/check-dependency-provenance"]
+tools = ["bash", "git", "grep", "sed"]
+inputs = [
+  "dependencies/sibling-revisions.env",
+  "scripts/check-dependency-provenance",
+]
+
+[tasks.adapters-conformance]
+description = "Build both adapters and validate byte-exact conformance."
+run = ["scripts/check-benchmarks"]
+tools = ["bash", "cargo", "cc", "cmp", "curl", "make", "node", "shasum", "tar"]
+resources = ["cargo-target"]
+timeout = "35m"
+inputs = [
+  "adapters/kafkars/Cargo.toml",
+  "adapters/kafkars/Cargo.lock",
+  "adapters/librdkafka-c",
+  "conformance",
+  "dependencies/sibling-revisions.env",
+  "scripts/bootstrap-librdkafka",
+  "scripts/build-benchmark-adapters",
+  "scripts/check-benchmarks",
+]
+
+[tasks.ci-workspace]
+description = "Run the workspace CI qualification lane."
+needs = ["workspace", "architecture", "schemas", "librdkafka-pin"]
+
+[tasks.ci-control-plane]
+description = "Run the control-plane CI qualification lane."
+needs = ["control-plane", "summary-contract"]
+
+[tasks.check]
+description = "Run complete local benchmark-lab qualification."
+needs = [
+  "workspace",
+  "architecture",
+  "schemas",
+  "librdkafka-pin",
+  "control-plane",
+  "summary-contract",
+  "provenance",
+]

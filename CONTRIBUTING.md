@@ -16,20 +16,25 @@ For each patch:
 4. Add the test that would fail if the behavior regressed, not the test that
    passes today.
 5. Keep the patch narrow enough to review as one decision.
-6. Run `scripts/check` and inspect the complete diff.
+6. Run `zcheck` and inspect the complete diff.
 
-`scripts/check` runs on a clean clone of this repository alone. It needs the
-pinned Rust and Node toolchains plus zrail 0.0.1 (`cargo +1.96.0 install zrail
---version 0.0.1 --locked`): the workspace, architecture, schema,
-librdkafka-pin, control-plane, and model-summary lanes all work without the
-sibling checkouts, and the provenance lane reports absent siblings as an
-advisory and exits 0 rather than failing. Nothing in this workspace depends on
-them.
+`zcheck` runs on a clean clone of this repository alone. Install zcheck 0.0.2
+and zrail 0.0.1 with Rust 1.96, then use the repository's pinned Rust and Node
+toolchains for the tasks. The workspace, architecture, schema, librdkafka-pin,
+control-plane, and model-summary tasks all work without sibling checkouts; the
+provenance task reports absent siblings as an advisory and exits 0. Nothing in
+this workspace depends on them.
+
+The canonical qualification graph is `zcheck.toml`. CI selects named tasks
+from that same graph; scripts retain implementation logic but no longer own the
+order or completeness of qualification.
 
 The architecture authority is `zrail.toml` plus `zrail.lock`. Run
 `zrail diff --base HEAD --deny-grants` when either moves. `zrail update
 --accept-grants` is a human-reviewed authority change and must never appear in
-CI or a routine implementation script.
+CI or a routine implementation script. The repository remains on zrail 0.0.1
+until the 0.0.2 binding-resolution gap recorded in
+[`docs/ZRAIL_GAPS.md`](docs/ZRAIL_GAPS.md) is fixed.
 
 Work that builds or runs a real subject does need the public siblings, cloned
 beside this repository as `../kafkars`, `../kafka-driver`, and

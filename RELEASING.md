@@ -36,9 +36,9 @@ when it is.
 
 ## Before tagging
 
-1. `scripts/check` green from a clean checkout.
-2. `scripts/check-benchmarks` green, with the conformance vectors agreeing three
-   ways.
+1. `zcheck` green from a clean checkout.
+2. `zcheck run adapters-conformance` green, with the conformance vectors
+   agreeing three ways.
 3. `CHANGELOG.md` updated.
 4. `dependencies/sibling-revisions.env` pointing at the revisions the tag is
    meant to describe, and strict provenance passing over them:
@@ -47,7 +47,7 @@ when it is.
    KAFKA_BENCH_PROVENANCE=strict scripts/check-dependency-provenance
    ```
 
-   This step is not covered by item 1. Plain `scripts/check` runs provenance in
+   This step is not covered by item 1. Plain `zcheck` runs provenance in
    **advisory** mode, where an absent, mismatched, or dirty sibling prints a
    warning and still exits 0 — which is what lets the gate run on a machine
    sitting on another branch, and on a clone with no siblings beside it at all.

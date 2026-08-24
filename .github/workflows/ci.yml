@@ -107,6 +107,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install pinned zcheck
+        uses: zsumz/zcheck/.github/actions/setup-zcheck@4ca5e71db9974972d4d59349550a6d25a8dc7e90 # v0.0.2
+        with:
+          version: 0.0.2
+          sha256: a9e3ca964b6f5e86c693edeff4aeaddb46ee9d62f8713d3ded0bb6533b758e53
       - name: Install pinned Rust toolchain
         uses: ./.github/actions/setup-rust
       # zrail 0.0.1 has its own Rust 1.96 source floor. Installing it with an
@@ -120,21 +125,20 @@ jobs:
       # and a network blip reads as a fetch failure rather than a lint failure.
       - name: Fetch reviewed dependencies
         run: cargo fetch --locked
-      - name: Validate the workspace
-        run: scripts/check-workspace
-      # Runs beside the workspace lane rather than inside it: the guardrails are
-      # a policy over the source tree and the resolved lock file, not a property
-      # of a compiled artifact, and a separate step keeps a budget violation
-      # legible as one instead of buried in a test sweep.
-      - name: Validate the source-shape and dependency guardrails
-        run: scripts/check-guardrails
-      - name: Validate the schema registry
-        run: scripts/check-schemas
-      # Cheap, needs no toolchain, and guards the cache key used by the two
-      # jobs below: the librdkafka version and checksum are written down in
-      # seven places and nothing else notices when a bump misses one.
-      - name: Validate the librdkafka pin
-        run: scripts/check-librdkafka-pin
+      - name: Qualify the workspace
+        run: >-
+          zcheck run ci-workspace
+          --format github
+          --logs-dir "$RUNNER_TEMP/zcheck/workspace/logs"
+          --receipt "$RUNNER_TEMP/zcheck/workspace/receipt.json"
+      - name: Upload workspace qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zcheck-workspace-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: ${{ runner.temp }}/zcheck/workspace/
+          if-no-files-found: warn
+          retention-days: 30
 
   control-plane:
     name: control-plane
@@ -145,6 +149,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install pinned zcheck
+        uses: zsumz/zcheck/.github/actions/setup-zcheck@4ca5e71db9974972d4d59349550a6d25a8dc7e90 # v0.0.2
+        with:
+          version: 0.0.2
+          sha256: a9e3ca964b6f5e86c693edeff4aeaddb46ee9d62f8713d3ded0bb6533b758e53
       # package-manager-cache is off deliberately: this repository has no
       # lockfile to key a cache on, and the control plane has no dependencies.
       - name: Install pinned Node
@@ -152,20 +161,27 @@ jobs:
         with:
           node-version: "24.19.0"
           package-manager-cache: false
-      - name: Validate the legacy control plane
-        run: scripts/check-control-plane
-      # python3 is preinstalled on ubuntu-24.04, and this test needs nothing
-      # else: it drives the summary script's --dry-run against a committed
-      # fixture, so it reaches no network and builds nothing. It lives in this
-      # lane rather than in workspace because it is a script contract, not a
-      # Rust one.
-      - name: Validate the model-summary request contract
-        run: scripts/benchmark-openai-summary-test
+      - name: Qualify the control plane
+        run: >-
+          zcheck run ci-control-plane
+          --format github
+          --logs-dir "$RUNNER_TEMP/zcheck/control-plane/logs"
+          --receipt "$RUNNER_TEMP/zcheck/control-plane/receipt.json"
+      - name: Upload control-plane qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zcheck-control-plane-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: ${{ runner.temp }}/zcheck/control-plane/
+          if-no-files-found: warn
+          retention-days: 30
 
   adapters-conformance:
     name: adapters-conformance
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    # zcheck owns the 35-minute task deadline. The job gets five more minutes
+    # to write and upload the receipt and complete logs after any ending.
+    timeout-minutes: 40
     # This checkout lives at kafka-benchmarks/ so the sibling repositories can
     # be materialized next to it, reproducing the developer layout that the
     # adapter path deps and environment capture already assume.
@@ -178,6 +194,11 @@ jobs:
         with:
           path: kafka-benchmarks
           persist-credentials: false
+      - name: Install pinned zcheck
+        uses: zsumz/zcheck/.github/actions/setup-zcheck@4ca5e71db9974972d4d59349550a6d25a8dc7e90 # v0.0.2
+        with:
+          version: 0.0.2
+          sha256: a9e3ca964b6f5e86c693edeff4aeaddb46ee9d62f8713d3ded0bb6533b758e53
       - name: Install pinned Rust toolchain
         uses: ./kafka-benchmarks/.github/actions/setup-rust
       - name: Install pinned Node
@@ -210,8 +231,20 @@ jobs:
           key: librdkafka-2.15.0-259015220c
       - name: Fetch reviewed adapter dependencies
         run: cargo fetch --manifest-path adapters/kafkars/Cargo.toml --locked
-      - name: Build adapters and verify conformance vectors
-        run: scripts/check-benchmarks
+      - name: Qualify adapter conformance
+        run: >-
+          zcheck run adapters-conformance
+          --format github
+          --logs-dir "$RUNNER_TEMP/zcheck/adapters-conformance/logs"
+          --receipt "$RUNNER_TEMP/zcheck/adapters-conformance/receipt.json"
+      - name: Upload adapter qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zcheck-adapters-conformance-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+          path: ${{ runner.temp }}/zcheck/adapters-conformance/
+          if-no-files-found: warn
+          retention-days: 30
 
   quality-gate:
     name: quality-gate

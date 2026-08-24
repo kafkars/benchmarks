@@ -5,7 +5,7 @@ adapters = ["rust"]
 name = "guardrails"
 kind = "local"
 path = "scripts/check-guardrails"
-inputs = ["scripts/check-detached-policy", "scripts/check-detached-policy-test", "Cargo.lock", "Cargo.toml", "docs/ZRAIL_GAPS.md"]
+inputs = ["scripts/check-detached-policy", "scripts/check-detached-policy-test", "Cargo.lock", "Cargo.toml", "docs/ZRAIL_GAPS.md", "zcheck.toml"]
 reason = "The canonical architecture lane runs zrail and the two explicitly detached repository checks."
 
 [[gate]]

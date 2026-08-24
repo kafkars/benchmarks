@@ -2,7 +2,7 @@
 schema = 1
 semantics = 1
 producer = "0.0.1"
-contract_sha256 = "10f66d0c108a0103fea6785dbc036dd27f7d644be1d4fe0af0615d3328a7377c"
+contract_sha256 = "d71bb0cab1e9508318a82e055881c93744bf25718f187b5ad5a43f66e3335a2e"
 
 [[package]]
 name = "bench-adapter-librdkafka"
@@ -251,7 +251,7 @@ sha256 = "388d72762688982f22302e53aac04fe11bc5a9548e077975988c3cd675dd5ee6"
 [[gate]]
 name = "ci"
 path = ".github/workflows/ci.yml"
-sha256 = "1ac3a08c46a9f1863ff17351200b126e13717214f9fe2807b192c2bb177c4305"
+sha256 = "8f6b6d1a2bc10745ae86a8b15bc995a637d7300fa1f6bb161989b9d83579b58f"
 
 [[gate.input]]
 path = ".github/actions/setup-rust/action.yml"
@@ -272,7 +272,7 @@ sha256 = "6b12d1ae186cac2d106a7b1aae6b96a7a8496a1ce74ebf6a4e498b29e540b546"
 
 [[gate.input]]
 path = "docs/ZRAIL_GAPS.md"
-sha256 = "1a3b06ba7f609b0f780245773fffa807bdf0fbc939ee6d64e4c0347d59411534"
+sha256 = "c8e9d83cef01ad2f4d69813987a95a6947a945bc07d21cd3c9280b1c4527104a"
 
 [[gate.input]]
 path = "scripts/check-detached-policy"
@@ -281,6 +281,10 @@ sha256 = "4a144c3d8bbd1d54be1b2824dddf0c4346e9ed7e2a40f475f85eeb9ed950bd37"
 [[gate.input]]
 path = "scripts/check-detached-policy-test"
 sha256 = "24866c5a65e6a06289cfb5d438f39cbad6b1af6d376a52be14c1708669a7ce6d"
+
+[[gate.input]]
+path = "zcheck.toml"
+sha256 = "d4e62dc5f081602263bc3da80e97829e0d0a9562275226fb020b86cde5bee146"
 
 [[ratchet]]
 rule = "rust.file-size"
