@@ -67,6 +67,37 @@ def rows(path, expected):
     return result
 
 
+def check_storage(directory, duration):
+    path = directory / "broker-storage.json"
+    if not path.exists():
+        return False  # Older attempts did not claim storage readiness.
+    document = read_json(path)
+    minimum = 4 * 1024**3 + 3 * duration * 50 * 256
+    if not isinstance(document, dict) or document.get("minimum_available_bytes") != minimum:
+        raise ValueError("broker storage reserve differs from the campaign budget")
+    brokers = document.get("brokers", [])
+    if not isinstance(brokers, list) or len(brokers) != 3 or any(not isinstance(broker, dict) for broker in brokers):
+        raise ValueError("incomplete three-member broker storage report")
+    if [broker.get("service") for broker in brokers] != ["kafka-1", "kafka-2", "kafka-3"]:
+        raise ValueError("broker storage identities do not match the three-member cluster")
+    identities = [broker.get("container_id", "") for broker in brokers]
+    if any(not isinstance(identity, str) or re.fullmatch(r"[0-9a-f]{12,64}", identity) is None for identity in identities) or len(set(identities)) != 3:
+        raise ValueError("incomplete or duplicate broker storage identity")
+    for broker in brokers:
+        available = broker.get("available_bytes", {})
+        if not isinstance(available, dict) or set(available) != {"/tmp/kafka-logs", "/opt/kafka/logs", "/opt/kafka/config", "/tmp"} or any(
+            type(value) is not int or value < minimum for value in available.values()
+        ):
+            raise ValueError("broker write paths lack the declared storage reserve")
+        mounts = broker.get("mounts")
+        if not isinstance(mounts, list) or len(mounts) > 16 or any(
+            not isinstance(mount, dict) or set(mount) != {"Type", "Source", "Destination"} or any(not isinstance(value, str) for value in mount.values())
+            for mount in mounts
+        ):
+            raise ValueError("incomplete broker storage mount facts")
+    return True
+
+
 def grade(directory):
     inventory(directory)
     plan = tomllib.loads((directory / "plan.toml").read_text())
@@ -77,6 +108,7 @@ def grade(directory):
         raise ValueError("incomplete or invalid declared endurance budget")
     if not 60 <= plan["duration_seconds"] <= 86400:
         raise ValueError("duration outside the bounded campaign contract")
+    storage_recorded = check_storage(directory, plan["duration_seconds"])
     status = tomllib.loads((directory / "status.toml").read_text())
     if status != {"complete": True, "failure": ""}:
         raise ValueError(f"campaign did not complete: {status}")
@@ -157,6 +189,7 @@ def grade(directory):
             "duration_seconds": plan["duration_seconds"], "acknowledged_records": expected_records,
             "sample_count": len(samples), "recovered_broker_restarts": len(faults), "peak_rss_bytes": peak_rss,
             "produce_request_record_attempts": native["delta"]["records"],
+            "broker_storage_readiness_recorded": storage_recorded,
             "performance_claim_eligible": False, "production_supported": False}
 
 

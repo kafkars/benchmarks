@@ -100,10 +100,10 @@ claimed as production merge authority. A required authority result must
 eventually come from an organization ruleset workflow or dedicated App outside
 the proposal's write domain.
 
-The Kafkars adapter remains a deliberately detached Cargo workspace because it
-builds against path-pinned sibling repositories. zrail correctly rejects those
-paths as outside this repository's authority, so `scripts/check-detached-policy`
-keeps its source-shape and budget checks narrow and visible. That companion
+The Kafkars adapter remains a deliberately detached Cargo workspace so the
+control plane cannot resolve or link the subject's pinned registry closure.
+`scripts/check-detached-policy` keeps its source-shape and budget checks narrow
+and visible. That companion
 also scans the complete root `Cargo.lock` for forbidden async runtimes; zrail
 models exact declared dependency edges, while the repository contract bans a
 runtime even when it arrives transitively. Both locks reject benchmarking

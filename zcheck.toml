@@ -102,9 +102,19 @@ inputs = [
   "scripts/check-benchmarks",
 ]
 
+[tasks.endurance]
+description = "Validate continuous endurance, storage admission, and independent refusal contracts."
+run = ["scripts/check-producer-endurance-test"]
+tools = ["python3"]
+inputs = [
+  "scripts/run-producer-endurance",
+  "scripts/verify-producer-endurance",
+  "scripts/check-producer-endurance-test",
+]
+
 [tasks.ci-workspace]
 description = "Run the workspace CI qualification lane."
-needs = ["workspace", "architecture", "schemas", "librdkafka-pin"]
+needs = ["workspace", "architecture", "schemas", "librdkafka-pin", "endurance"]
 
 [tasks.ci-control-plane]
 description = "Run the control-plane CI qualification lane."
@@ -120,4 +130,5 @@ needs = [
   "control-plane",
   "summary-contract",
   "provenance",
+  "endurance",
 ]

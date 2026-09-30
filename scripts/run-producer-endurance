@@ -92,6 +92,29 @@ def brokers(project):
     return base
 
 
+def storage_readiness(base, seconds):
+    # Reserve metadata/log headroom plus all three replicas of a conservative
+    # 256-byte encoded record. Never infer container capacity from host df.
+    minimum = 4 * 1024**3 + 3 * seconds * 50 * 256
+    paths = ["/tmp/kafka-logs", "/opt/kafka/logs", "/opt/kafka/config", "/tmp"]
+    observed = []
+    for ordinal in range(1, 4):
+        service = f"kafka-{ordinal}"
+        identity = command([*base, "ps", "-q", service])
+        if re.fullmatch(r"[0-9a-f]{12,64}", identity) is None:
+            raise RuntimeError("incomplete broker identity for storage preflight")
+        lines = command(["docker", "exec", identity, "df", "-Pk", *paths]).splitlines()[1:]
+        if len(lines) != len(paths) or any(len(line.split()) < 6 for line in lines):
+            raise RuntimeError("incomplete broker filesystem capacity report")
+        available = {path: int(line.split()[3]) * 1024 for path, line in zip(paths, lines, strict=True)}
+        if min(available.values()) < minimum:
+            raise RuntimeError(f"{service} write paths lack the declared storage reserve ({minimum} bytes)")
+        mounts = json.loads(command(["docker", "inspect", "--format", "{{json .Mounts}}", identity]))
+        observed.append({"service": service, "container_id": identity, "available_bytes": available,
+                         "mounts": [{key: mount[key] for key in ["Type", "Source", "Destination"]} for mount in mounts]})
+    return {"minimum_available_bytes": minimum, "brokers": observed}
+
+
 def restart(base, ordinal):
     subprocess.run([*base, "restart", f"kafka-{ordinal}"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45)
     deadline = time.monotonic() + 60
@@ -161,6 +184,7 @@ def prepare(args, directory):
 def run(args):
     directory = args.output.resolve()
     base = brokers(args.compose_project)
+    storage = storage_readiness(base, args.seconds)
     binary, ctl = prepare(args, directory)
     argv = [str(ctl), "run", "--experiment", str(directory / "experiment.toml"), "--subjects", str(directory / "subjects.toml"), "--cluster", str(directory / "cluster.toml"), "--bootstrap", args.bootstrap, "--results", str(directory / "results"), "--run-timeout-secs", str(args.seconds + 180), "--tool-timeout-secs", "180"]
     started = time.monotonic_ns()
@@ -173,6 +197,7 @@ def run(args):
     for kind in [signal.SIGINT, signal.SIGTERM]:
         signal.signal(kind, stop)
     try:
+        (directory / "broker-storage.json").write_text(json.dumps(storage, sort_keys=True) + "\n")
         with (directory / "control.log").open("w") as log, (directory / "resources.csv").open("w") as resource_file, (directory / "faults.csv").open("w") as fault_file, ThreadPoolExecutor(max_workers=1) as faults:
             samples = csv.writer(resource_file)
             actions = csv.writer(fault_file)

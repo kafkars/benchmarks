@@ -101,9 +101,9 @@ and it is not a place to make a client look good.
   for forbidden runtimes transitively, checks both locks for forbidden
   benchmarking frameworks, and checks the Kafkars adapter source and lint
   floor while exempting that subject's own lock from the runtime ban. The
-  adapter cannot be a zrail Cargo
-  root because its reviewed path dependencies intentionally live in sibling
-  repositories outside this one. Review policy and lock movement with
+  detached adapter remains outside this Cargo root's zrail authority; registry
+  archives and clean source correspondence are checked independently by
+  `scripts/check-dependency-provenance`. Review policy and lock movement with
   `zrail diff --base HEAD --deny-grants`; never use `--accept-grants` in an
   automated gate.
 - Run `zcheck` before requesting review.

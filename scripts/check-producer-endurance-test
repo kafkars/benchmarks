@@ -164,6 +164,46 @@ class EnduranceTest(unittest.TestCase):
             runner.prepare(args, self.root / "not-created")
         self.assertFalse((self.root / "not-created").exists())
 
+    def storage(self, free_kib):
+        base = ["docker", "compose", "-p", "kafkars-endurance-test", "-f", "compose.yml"]
+        def probe(argv):
+            if argv[:len(base)] == base:
+                return "a" * 63 + argv[-1][-1]
+            if argv[1] == "exec":
+                return "Filesystem 1024-blocks Used Available Capacity Mounted\n" + "\n".join(
+                    f"volume 20000000 1 {free_kib} 1% {path}" for path in argv[5:]
+                )
+            return '[{"Type":"bind","Source":"/private/tmp/owned","Destination":"/tmp"}]'
+        with patch.object(runner, "command", side_effect=probe):
+            return runner.storage_readiness(base, 240)
+
+    def test_full_broker_filesystem_is_refused_before_an_attempt_starts(self):
+        with self.assertRaisesRegex(RuntimeError, "storage reserve"):
+            self.storage(0)
+        storage = self.storage(16000000)
+        self.assertEqual(len(storage["brokers"]), 3)
+        self.assertEqual(storage["minimum_available_bytes"], 4 * 1024**3 + 3 * 240 * 50 * 256)
+
+    def test_storage_facts_are_sealed_and_independently_checked(self):
+        document = self.storage(16000000)
+        path = self.root / "broker-storage.json"
+        path.write_text(json.dumps(document))
+        self.assertTrue(self.grade()["broker_storage_readiness_recorded"])
+        for mutation in ["reserve", "identity", "capacity", "missing_path"]:
+            with self.subTest(mutation=mutation):
+                changed = json.loads(json.dumps(document))
+                if mutation == "reserve":
+                    changed["minimum_available_bytes"] = 1
+                elif mutation == "identity":
+                    changed["brokers"][2]["container_id"] = changed["brokers"][0]["container_id"]
+                elif mutation == "capacity":
+                    changed["brokers"][0]["available_bytes"]["/tmp"] = 0
+                else:
+                    del changed["brokers"][0]["available_bytes"]["/tmp"]
+                path.write_text(json.dumps(changed))
+                with self.assertRaises(ValueError):
+                    self.grade()
+
 
 if __name__ == "__main__":
     unittest.main()
