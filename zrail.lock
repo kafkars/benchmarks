@@ -246,7 +246,7 @@ requirement = "0.8"
 [[gate]]
 name = "architecture-review"
 path = ".github/workflows/architecture-authority.yml"
-sha256 = "388d72762688982f22302e53aac04fe11bc5a9548e077975988c3cd675dd5ee6"
+sha256 = "6008df039f540bc7937a55319216953a58845af8bc8a061b4411475a677cfece"
 
 [[gate]]
 name = "ci"

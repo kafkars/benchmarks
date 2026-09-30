@@ -11,9 +11,15 @@ name: Architecture preview
 on:
   pull_request_target:
     types: [opened, reopened, synchronize]
+  workflow_dispatch:
+    inputs:
+      proposal_sha:
+        description: Exact proposal SHA to inspect as data; empty means this trusted SHA
+        required: false
+        type: string
 
 concurrency:
-  group: architecture-authority-${{ github.event.pull_request.number }}
+  group: architecture-authority-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -29,9 +35,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      ZRAIL_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      ZRAIL_PROPOSAL_SHA: ${{ github.event.pull_request.head.sha }}
+      ZRAIL_BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+      ZRAIL_PROPOSAL_SHA: ${{ github.event.pull_request.head.sha || inputs.proposal_sha || github.sha }}
     steps:
+      - name: Require exact review identities
+        run: |
+          [[ "$ZRAIL_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$ZRAIL_PROPOSAL_SHA" =~ ^[0-9a-f]{40}$ ]]
       - name: Check out trusted base
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,12 +57,14 @@ jobs:
         run: rustup toolchain install 1.96.0 --profile minimal
 
       - name: Install trusted zrail release
-        run: cargo +1.96.0 install zrail --version 0.0.1 --locked
+        run: |
+          cargo +1.96.0 install zrail --version 0.0.1 --locked
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
 
       - name: Check out proposal as untrusted data
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ env.ZRAIL_PROPOSAL_SHA }}
           path: proposal
           persist-credentials: false
