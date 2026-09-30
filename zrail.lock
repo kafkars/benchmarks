@@ -2,7 +2,7 @@
 schema = 1
 semantics = 1
 producer = "0.0.1"
-contract_sha256 = "d71bb0cab1e9508318a82e055881c93744bf25718f187b5ad5a43f66e3335a2e"
+contract_sha256 = "ac18170860cf16181e0b6f18638a3376faa421599f770d7626b567465c11c178"
 
 [[package]]
 name = "bench-adapter-librdkafka"
@@ -272,7 +272,7 @@ sha256 = "6b12d1ae186cac2d106a7b1aae6b96a7a8496a1ce74ebf6a4e498b29e540b546"
 
 [[gate.input]]
 path = "docs/ZRAIL_GAPS.md"
-sha256 = "c8e9d83cef01ad2f4d69813987a95a6947a945bc07d21cd3c9280b1c4527104a"
+sha256 = "efb43576f20be6fe5a168a3e7c199c4d78ba7091facc91c0414752cf8b413573"
 
 [[gate.input]]
 path = "scripts/check-detached-policy"
@@ -284,7 +284,7 @@ sha256 = "24866c5a65e6a06289cfb5d438f39cbad6b1af6d376a52be14c1708669a7ce6d"
 
 [[gate.input]]
 path = "zcheck.toml"
-sha256 = "d4e62dc5f081602263bc3da80e97829e0d0a9562275226fb020b86cde5bee146"
+sha256 = "9c5087da2bc1703c5d41ae52bd29f64a0b9da2eb16f91e5c5760dd75ac748e68"
 
 [[ratchet]]
 rule = "rust.file-size"

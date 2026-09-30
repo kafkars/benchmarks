@@ -10,7 +10,7 @@ use std::{
     thread,
 };
 
-use kafkars::Record;
+use kafkars::producer::Record;
 
 use crate::producer::{
     turn::AdmissionPermit,

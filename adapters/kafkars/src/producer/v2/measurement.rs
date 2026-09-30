@@ -6,7 +6,7 @@
 use std::error::Error;
 
 use bench_schema::{Histogram, OfferOutcomes, OfferTiming};
-use kafkars::KafkaError;
+use kafkars::Error as KafkaError;
 
 use crate::schedule;
 

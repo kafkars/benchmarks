@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Synthetic refusal tests for continuous, resource-bounded endurance evidence."""
+
+import argparse
+import csv
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+sys.dont_write_bytecode = True
+
+
+def load(name):
+    loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), str(Path(__file__).with_name(name)))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+runner = load("run-producer-endurance")
+verifier = load("verify-producer-endurance")
+
+
+class EnduranceTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.bundle = self.root / "results/experiment/attempt"
+        (self.bundle / "adapters/kafkars").mkdir(parents=True)
+        (self.bundle / "verification").mkdir()
+        plan = {"duration_seconds": 240, "rate": 50, "sample_interval_seconds": 10,
+                "fault_interval_seconds": 60, "rss_limit_bytes": 512000000,
+                "rss_growth_bytes": 64000000, "fd_growth": 32, "thread_growth": 8,
+                "post_warmup_seconds": 60, "max_sample_gap_seconds": 35}
+        (self.root / "plan.toml").write_text("".join(f"{key} = {value}\n" for key, value in plan.items()))
+        (self.root / "status.toml").write_text('complete = true\nfailure = ""\n')
+        self.document("status.json", {"execution_status": "complete"})
+        self.document("classification.json", {"run_valid": True, "subjects": [{"name": "kafkars", "reasons": [], "valid": True}]})
+        self.document("adapters/kafkars/result.json", {"outcomes": {"offered": 12000, "accepted": 12000, "acknowledged": 12000, "failed": 0, "timed_out": 0, "unknown": 0}, "throughput": {"measured_duration_ns": 240000000000}})
+        self.native = {"baseline": {"records": 1000, "produce_requests": 10, "partition_batches": 10, "encoded_record_bytes": 1000},
+                       "delta": {"records": 12000, "produce_requests": 100, "partition_batches": 100, "encoded_record_bytes": 12000},
+                       "final": {"records": 13000, "produce_requests": 110, "partition_batches": 110, "encoded_record_bytes": 13000,
+                                 "accepting": True, "healthy": True, **dict.fromkeys(["active_bytes", "active_records", "waiting_bytes", "waiting_records", "prepared_batch_bytes", "prepared_batches", "terminal_backlog"], 0)}}
+        self.document("adapters/kafkars/kafkars-native-metrics.json", self.native)
+        self.document("verification/kafkars-measured.json", {"valid": True, "expected_records": 12000, "verified_records": 12000, "duplicates": 0, "missing_records": 0, "corrupt": 0, "unexpected": 0})
+        self.samples = [[seconds * 1000000000, 123, "a" * 64, 16000000, 8, 12] for seconds in range(0, 241, 10)]
+        self.write_samples()
+        self.write_faults([[90000000000, 1, 1]])
+
+    def document(self, relative, value):
+        (self.bundle / relative).write_text(json.dumps(value))
+
+    def write_samples(self):
+        with (self.root / "resources.csv").open("w") as source:
+            writer = csv.writer(source)
+            writer.writerow(runner.SAMPLE_HEADER)
+            writer.writerows(self.samples)
+
+    def write_faults(self, values):
+        with (self.root / "faults.csv").open("w") as source:
+            writer = csv.writer(source)
+            writer.writerow(runner.FAULT_HEADER)
+            writer.writerows(values)
+
+    def grade(self):
+        (self.root / "checksums.txt").unlink(missing_ok=True)
+        runner.seal(self.root)
+        return verifier.grade(self.root)
+
+    def test_complete_bounded_lifetime_passes_without_support_or_performance_claim(self):
+        verdict = self.grade()
+        self.assertTrue(verdict["valid"])
+        self.assertFalse(verdict["production_supported"])
+        self.assertFalse(verdict["performance_claim_eligible"])
+
+    def test_both_restarted_pid_and_reused_pid_are_rejected(self):
+        for field, value in [(1, 456), (2, "b" * 64)]:
+            with self.subTest(field=field):
+                original = self.samples[-1][field]
+                self.samples[-1][field] = value
+                self.write_samples()
+                with self.assertRaisesRegex(ValueError, "restarted"):
+                    self.grade()
+                self.samples[-1][field] = original
+
+    def test_incomplete_or_gapped_resource_history_is_rejected(self):
+        for samples in [self.samples[:10], self.samples[:5] + self.samples[15:]]:
+            with self.subTest(count=len(samples)):
+                self.samples, original = samples, self.samples
+                self.write_samples()
+                with self.assertRaises(ValueError):
+                    self.grade()
+                self.samples = original
+
+    def test_rss_fd_and_thread_growth_are_each_bounded(self):
+        for field, value in [(3, 81000000), (4, 17), (5, 45)]:
+            with self.subTest(field=field):
+                original = self.samples[-1][field]
+                self.samples[-1][field] = value
+                self.write_samples()
+                with self.assertRaisesRegex(ValueError, "growth"):
+                    self.grade()
+                self.samples[-1][field] = original
+
+    def test_independent_record_violation_is_rejected(self):
+        self.document("verification/kafkars-measured.json", {"valid": True, "expected_records": 12000, "verified_records": 12000, "duplicates": 1, "missing_records": 0, "corrupt": 0, "unexpected": 0})
+        with self.assertRaisesRegex(ValueError, "record violation"):
+            self.grade()
+
+    def test_retried_wire_attempts_are_not_mistaken_for_duplicate_application_delivery(self):
+        self.native["delta"]["records"] += 108
+        self.native["final"]["records"] += 108
+        self.document("adapters/kafkars/kafkars-native-metrics.json", self.native)
+        self.assertEqual(self.grade()["produce_request_record_attempts"], 12108)
+        self.native["final"]["records"] -= 1
+        self.document("adapters/kafkars/kafkars-native-metrics.json", self.native)
+        with self.assertRaisesRegex(ValueError, "reconcile"):
+            self.grade()
+
+    def test_failed_or_missing_fault_is_rejected(self):
+        for faults in [[], [[90000000000, 1, 0]], [[90000000000, 2, 1]]]:
+            with self.subTest(faults=faults):
+                self.write_faults(faults)
+                with self.assertRaises(ValueError):
+                    self.grade()
+
+    def test_interrupted_attempt_is_invalid(self):
+        (self.root / "status.toml").write_text('complete = false\nfailure = "interrupted"\n')
+        with self.assertRaisesRegex(ValueError, "did not complete"):
+            self.grade()
+
+    def test_altered_inventory_duplicate_json_and_symlink_are_refused(self):
+        self.grade()
+        (self.root / "resources.csv").write_text("tampered")
+        with self.assertRaisesRegex(ValueError, "altered"):
+            verifier.grade(self.root)
+        with self.assertRaisesRegex(ValueError, "duplicate JSON"):
+            path = self.root / "duplicate.json"
+            path.write_text('{"valid":true,"valid":false}')
+            verifier.read_json(path)
+        (self.root / "escape").symlink_to(self.bundle)
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
+            runner.seal(self.root)
+
+    def test_darwin_thread_table_is_counted_without_treating_headers_as_threads(self):
+        self.assertEqual(runner.darwin_threads("USER PID TT COMMAND\nu 123 ? native\nu 123 ? worker\n"), 2)
+        with self.assertRaises(ValueError):
+            runner.darwin_threads("")
+
+    def test_hosted_duration_and_project_scope_fail_before_writing(self):
+        args = argparse.Namespace(seconds=86400, fault_interval=900, compose_project="kafkars-endurance-test")
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}), self.assertRaisesRegex(ValueError, "hosted"):
+            runner.prepare(args, self.root / "not-created")
+        args.seconds, args.compose_project = 3600, "production"
+        with self.assertRaisesRegex(ValueError, "uniquely named"):
+            runner.prepare(args, self.root / "not-created")
+        self.assertFalse((self.root / "not-created").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

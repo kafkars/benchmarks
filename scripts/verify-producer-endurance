@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Independently grade immutable producer endurance evidence, never the adapter.
+
+Requires the sealed benchmark verdict and independent librdkafka read-back,
+one continuously sampled native process, declared resource bounds and recovered
+broker faults. No public performance or production-support claim is produced.
+"""
+
+import argparse
+import csv
+import hashlib
+import json
+from pathlib import Path
+import re
+import sys
+import tomllib
+
+
+def read_json(path):
+    def unique(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+    if path.stat().st_size > 4 * 1024 * 1024:
+        raise ValueError(f"oversized JSON document: {path.name}")
+    return json.loads(path.read_text(), object_pairs_hook=unique)
+
+
+def inventory(directory):
+    listed = {}
+    for line in (directory / "checksums.txt").read_text().splitlines():
+        match = re.fullmatch(r"([0-9a-f]{64})  (.+)", line)
+        if match is None:
+            raise ValueError("noncanonical checksum entry")
+        digest, relative = match.groups()
+        if relative in listed or Path(relative).is_absolute() or ".." in Path(relative).parts:
+            raise ValueError("duplicate or escaping evidence path")
+        listed[relative] = digest
+    files = set()
+    for path in directory.rglob("*"):
+        if path.is_symlink():
+            raise ValueError("symlink in sealed evidence")
+        if path.is_file() and path != directory / "checksums.txt":
+            relative = path.relative_to(directory).as_posix()
+            files.add(relative)
+            with path.open("rb") as source:
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+            if digest != listed.get(relative):
+                raise ValueError(f"unsealed or altered evidence: {relative}")
+    if files != set(listed) or len(files) > 128:
+        raise ValueError("incomplete or oversized evidence inventory")
+
+
+def rows(path, expected):
+    if path.stat().st_size > 8 * 1024 * 1024:
+        raise ValueError("sample history exceeds its evidence budget")
+    with path.open(newline="") as source:
+        reader = csv.DictReader(source)
+        if reader.fieldnames != expected:
+            raise ValueError(f"unexpected {path.name} fields")
+        result = list(reader)
+    if len(result) > 10000 or any(set(row) != set(expected) for row in result):
+        raise ValueError("invalid or excessive CSV history")
+    return result
+
+
+def grade(directory):
+    inventory(directory)
+    plan = tomllib.loads((directory / "plan.toml").read_text())
+    required = {"duration_seconds", "rate", "sample_interval_seconds", "fault_interval_seconds",
+                "rss_limit_bytes", "rss_growth_bytes", "fd_growth", "thread_growth",
+                "post_warmup_seconds", "max_sample_gap_seconds"}
+    if set(plan) != required or any(type(value) is not int or value <= 0 for value in plan.values()):
+        raise ValueError("incomplete or invalid declared endurance budget")
+    if not 60 <= plan["duration_seconds"] <= 86400:
+        raise ValueError("duration outside the bounded campaign contract")
+    status = tomllib.loads((directory / "status.toml").read_text())
+    if status != {"complete": True, "failure": ""}:
+        raise ValueError(f"campaign did not complete: {status}")
+    bundles = list((directory / "results").glob("*/*/classification.json"))
+    if len(bundles) != 1:
+        raise ValueError("expected exactly one sealed native attempt")
+    bundle = bundles[0].parent
+    classification = read_json(bundles[0])
+    if classification["run_valid"] is not True or read_json(bundle / "status.json")["execution_status"] != "complete":
+        raise ValueError("native benchmark or independent broker read-back failed")
+    result = read_json(bundle / "adapters/kafkars/result.json")
+    readback = read_json(bundle / "verification/kafkars-measured.json")
+    native = read_json(bundle / "adapters/kafkars/kafkars-native-metrics.json")
+    outcomes = result["outcomes"]
+    expected_records = plan["duration_seconds"] * plan["rate"]
+    if classification["subjects"] != [{"name": "kafkars", "reasons": [], "valid": True}]:
+        raise ValueError("not one exact qualified native subject")
+    if readback["valid"] is not True or any(readback[key] != expected_records for key in ["expected_records", "verified_records"]):
+        raise ValueError("independent broker read-back did not recover the complete record set")
+    if any(readback[key] != 0 for key in ["duplicates", "missing_records", "corrupt", "unexpected"]):
+        raise ValueError("independent broker read-back found a record violation")
+    if any(outcomes[key] != expected_records for key in ["offered", "accepted", "acknowledged"]):
+        raise ValueError("continuous schedule did not acknowledge its complete record set")
+    if any(outcomes[key] != 0 for key in ["failed", "timed_out", "unknown"]):
+        raise ValueError("failed, timed-out or unowned producer completions")
+    if result["throughput"]["measured_duration_ns"] < (plan["duration_seconds"] - 30) * 1_000_000_000:
+        raise ValueError("measured phase was shorter than the declared duration")
+    # produce_records counts records in driver-accepted Produce requests, not
+    # unique application admissions. A recovered retry legitimately adds to it;
+    # exact unique delivery is proved above by the independent broker read-back.
+    if native["delta"]["records"] < expected_records:
+        raise ValueError("public Produce-attempt count omits acknowledged records")
+    for key in ["records", "produce_requests", "partition_batches", "encoded_record_bytes"]:
+        before, delta, after = (native[part][key] for part in ["baseline", "delta", "final"])
+        if any(type(value) is not int or value < 0 for value in [before, delta, after]) or before + delta != after:
+            raise ValueError("public cumulative Produce counters do not reconcile")
+    final = native["final"]
+    if not final["accepting"] or not final["healthy"] or any(final[key] for key in [
+        "active_bytes", "active_records", "waiting_bytes", "waiting_records", "prepared_batch_bytes", "prepared_batches", "terminal_backlog"
+    ]):
+        raise ValueError("public producer did not drain to a healthy idle owner")
+    samples = rows(directory / "resources.csv", ["elapsed_ns", "pid", "birth_identity", "rss_bytes", "threads", "fds"])
+    identities = {(row["pid"], row["birth_identity"]) for row in samples}
+    if len(identities) != 1:
+        raise ValueError("native lifetime missing or restarted; segmented attempts are not continuous")
+    if any(int(row["pid"]) <= 0 or re.fullmatch(r"[0-9a-f]{64}", row["birth_identity"]) is None
+           or min(int(row[key]) for key in ["rss_bytes", "threads", "fds"]) <= 0 for row in samples):
+        raise ValueError("incomplete native process identity or resource facts")
+    times = [int(row["elapsed_ns"]) for row in samples]
+    if any(next_time <= previous for previous, next_time in zip(times, times[1:])):
+        raise ValueError("resource history is not in strict monotonic order")
+    if times[-1] - times[0] < (plan["duration_seconds"] - 30) * 1_000_000_000:
+        raise ValueError("resource sampling did not cover the continuous lifetime")
+    if any(next_time - previous > plan["max_sample_gap_seconds"] * 1_000_000_000 for previous, next_time in zip(times, times[1:])):
+        raise ValueError("resource sampling contains an unqualified observation gap")
+    settled = [row for row, moment in zip(samples, times) if moment - times[0] >= plan["post_warmup_seconds"] * 1_000_000_000]
+    if not settled:
+        raise ValueError("no post-warmup resource baseline")
+    baseline = settled[0]
+    peak_rss = max(int(row["rss_bytes"]) for row in samples)
+    if peak_rss > plan["rss_limit_bytes"]:
+        raise ValueError("native peak RSS exceeds its declared ceiling")
+    for field, allowance in [("rss_bytes", "rss_growth_bytes"), ("fds", "fd_growth"), ("threads", "thread_growth")]:
+        if max(int(row[field]) for row in settled) > int(baseline[field]) + plan[allowance]:
+            raise ValueError(f"post-warmup {field} growth exceeds its declared bound")
+    faults = rows(directory / "faults.csv", ["elapsed_ns", "broker", "recovered"])
+    if not faults or any(row["recovered"] != "1" for row in faults):
+        raise ValueError("no independently controlled recovered broker fault")
+    expected_faults = max(1, (plan["duration_seconds"] - 121) // plan["fault_interval_seconds"])
+    if len(faults) < expected_faults:
+        raise ValueError("declared repeated broker fault schedule was not completed")
+    fault_times = [int(row["elapsed_ns"]) for row in faults]
+    if any(next_time <= previous for previous, next_time in zip(fault_times, fault_times[1:])):
+        raise ValueError("broker fault history is not in strict monotonic order")
+    if [int(row["broker"]) for row in faults] != [index % 3 + 1 for index in range(len(faults))]:
+        raise ValueError("broker faults did not preserve the declared rolling order")
+    return {"valid": True, "scope": "native-producer-continuous-endurance",
+            "duration_seconds": plan["duration_seconds"], "acknowledged_records": expected_records,
+            "sample_count": len(samples), "recovered_broker_restarts": len(faults), "peak_rss_bytes": peak_rss,
+            "produce_request_record_attempts": native["delta"]["records"],
+            "performance_claim_eligible": False, "production_supported": False}
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directory", type=Path)
+    try:
+        print(json.dumps(grade(parser.parse_args().directory.resolve()), sort_keys=True))
+    except (OSError, ValueError, KeyError, IndexError, csv.Error) as error:
+        parser.exit(1, f"endurance verdict: invalid: {error}\n")

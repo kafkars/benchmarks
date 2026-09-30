@@ -17,7 +17,7 @@ feature that already exists.
 absolute path in a `subjects.toml` that `scripts/generate-subject-config`
 writes, plus one shared sibling pin in
 `dependencies/sibling-revisions.env`. The adapter is built once, against that
-one pinned `kafkars/kafkars` revision, and both subjects in a comparison are
+one exact published RC selected by the detached adapter lock, and both subjects in a comparison are
 whatever binaries happen to be on disk. **Two client revisions therefore cannot
 be compared in a single attempt.** A `head/base` pair today is two adapter
 builds a human arranged, and nothing in the sealed bundle proves they differ in

@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use kafkars::{KafkaError, RecordMetadata};
+use kafkars::{Error as KafkaError, producer::RecordMetadata};
 
 use crate::producer::{
     flush_until,

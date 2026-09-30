@@ -1,0 +1,82 @@
+name: Producer endurance
+
+on:
+  workflow_dispatch:
+    inputs:
+      window:
+        description: Continuous native lifetime; separate segments are not a 24-hour soak
+        type: choice
+        options: [smoke-1h, segment-4h]
+        default: smoke-1h
+
+# Opt-in, one hosted job at a time. A four-hour phase leaves build, independent
+# read-back, seal and upload headroom below GitHub's six-hour hosted-job ceiling.
+concurrency:
+  group: producer-endurance-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: kafka-benchmarks
+
+jobs:
+  endurance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    steps:
+      - name: Check out benchmarks
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: kafka-benchmarks
+          persist-credentials: false
+      - name: Check out reviewed archive source identities
+        uses: ./kafka-benchmarks/.github/actions/checkout-siblings
+      - name: Install pinned Rust
+        uses: ./kafka-benchmarks/.github/actions/setup-rust
+      - name: Build and check endurance tools
+        id: build
+        timeout-minutes: 45
+        run: |
+          scripts/check-producer-endurance-test
+          scripts/build-benchmark-adapters
+          cargo build --locked --release -p benchctl -p bench-adapter-librdkafka
+      - name: Start isolated disposable brokers
+        run: |
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+          docker compose -p "kafkars-endurance-$GITHUB_RUN_ID" \
+            -f clusters/dev-compose/compose.yml up -d --wait --wait-timeout 150
+      - name: Run one continuously owned producer
+        id: campaign
+        timeout-minutes: 260
+        env:
+          ENDURANCE_WINDOW: ${{ inputs.window }}
+        run: |
+          seconds=3600
+          if [[ "$ENDURANCE_WINDOW" == segment-4h ]]; then seconds=14400; fi
+          scripts/run-producer-endurance \
+            --seconds "$seconds" \
+            --compose-project "kafkars-endurance-$GITHUB_RUN_ID" \
+            --output "target/endurance/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: Independently verify sealed lifetime, resources, and broker records
+        if: ${{ !cancelled() && steps.campaign.outcome != 'skipped' }}
+        run: >-
+          scripts/verify-producer-endurance
+          "target/endurance/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: Retain only the bounded external evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: producer-endurance-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: kafka-benchmarks/target/endurance/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove only this run's synthetic broker cluster
+        if: ${{ always() }}
+        run: |
+          [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]]
+          docker compose -p "kafkars-endurance-$GITHUB_RUN_ID" \
+            -f clusters/dev-compose/compose.yml down

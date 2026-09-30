@@ -6,7 +6,7 @@
 //! accounting built on them can be exercised without a broker and without
 //! fabricating client types a test has no way to build.
 
-use kafkars::{ErrorKind, KafkaError, RecordMetadata};
+use kafkars::{Error as KafkaError, error::ErrorKind, producer::RecordMetadata};
 
 use crate::producer::v2::admission::AdmissionClock;
 

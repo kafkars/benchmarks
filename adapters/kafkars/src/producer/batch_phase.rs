@@ -18,7 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use kafkars::{Producer, SendBatch, SendBatchResult};
+use kafkars::producer::{Producer, SendBatch, SendBatchResult};
 
 use crate::report::ApplicationBatchAdmissionMetrics;
 

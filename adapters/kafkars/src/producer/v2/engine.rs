@@ -22,7 +22,7 @@ use std::{
     },
 };
 
-use kafkars::{Producer, SendBatch};
+use kafkars::producer::{Producer, SendBatch};
 
 use crate::producer::turn::AdmissionTurn;
 

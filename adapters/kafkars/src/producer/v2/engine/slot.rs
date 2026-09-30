@@ -12,7 +12,11 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
-use kafkars::{ErrorKind, KafkaError, Record, RecordMetadata, SendBatchResult};
+use kafkars::{
+    Error as KafkaError,
+    error::ErrorKind,
+    producer::{Record, RecordMetadata, SendBatchResult},
+};
 
 use super::{GroupWake, Slot};
 

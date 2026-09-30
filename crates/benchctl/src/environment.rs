@@ -20,23 +20,15 @@
 //! "externally managed by the caller", because a harness that starts its own
 //! broker is measuring its own startup.
 //!
-//! Three things deliberately differ. The repository map is open rather than
-//! fixed, so this repository itself is captured under `kafka_benchmarks` and a
-//! future subject can add its own. The librdkafka artifact pin is gone: it was
-//! adapter provenance, and adapter provenance now lives in the subjects lock
-//! next to the binary digest. And `node` is not recorded, because no Node
-//! process participates in an attempt this control plane runs.
+//! The repository map is open; adapter provenance lives in the subjects lock
+//! beside the binary digest. No Node process participates in an attempt.
 //!
 //! A repository whose state cannot be read is recorded as dirty. That matches
 //! the legacy capture and is the conservative reading: an unknown working tree
 //! is not a clean one, and cleanliness is what claim eligibility would rest on.
 //!
-//! # Host probes are platform-agnostic at run time
-//!
-//! Memory and CPU model are read through the Darwin probe first and the Linux
-//! probe second, taking whichever answers. Compiling both paths on both
-//! platforms means the fallback chain is exercised by the test suite wherever
-//! it runs, rather than only on the platform it was written for.
+//! Memory and CPU probes try Darwin then Linux on every build, so fallback
+//! behavior is exercised wherever the tests run.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -56,7 +48,7 @@ pub const BROKER_LIFECYCLE: &str = "externally managed by the caller";
 /// Broker version recorded when the operator did not state one.
 pub const BROKER_VERSION_UNKNOWN: &str = "unknown";
 
-/// Environment variable that relocates the Kafkars checkout.
+/// Environment variable that relocates the corresponding Kafkars source.
 pub const CLIENT_ROOT_VARIABLE: &str = "KAFKA_BENCH_CLIENT_ROOT";
 
 /// Captures the environment an attempt is about to run in.
@@ -88,22 +80,30 @@ pub fn capture(
 }
 
 /// Returns the repository list a real attempt captures: this repository, plus
-/// the three sibling checkouts the measured clients are built from.
+/// the three source checkouts corresponding to the native registry artifacts.
 ///
-/// The sibling layout uses `kafkars`, `kafka-driver`, and `kafka-protocol`; the
-/// last path is the public `kafkars/kafka-wire` repository because that is the
-/// path Kafkars' reviewed workspace dependency declares. [`CLIENT_ROOT_VARIABLE`]
-/// relocates Kafkars alone for compatibility with existing automation.
+/// Source correspondence uses the same three optional root overrides as the
+/// provenance gate. These checkouts are not inputs to the registry build.
 #[must_use]
 pub fn default_repositories(repository_root: &Path) -> Vec<(String, PathBuf)> {
-    let sibling = |name: &str| repository_root.join("..").join(name);
-    let client =
-        std::env::var_os(CLIENT_ROOT_VARIABLE).map_or_else(|| sibling("kafkars"), PathBuf::from);
+    let source = |variable: &str, name: &str| {
+        std::env::var_os(variable)
+            .map_or_else(|| repository_root.join("..").join(name), PathBuf::from)
+    };
     vec![
         ("kafka_benchmarks".to_owned(), repository_root.to_path_buf()),
-        ("kafkars".to_owned(), client),
-        ("kafka_driver".to_owned(), sibling("kafka-driver")),
-        ("kafka_wire".to_owned(), sibling("kafka-protocol")),
+        (
+            "kafkars".to_owned(),
+            source(CLIENT_ROOT_VARIABLE, "kafkars"),
+        ),
+        (
+            "kafka_driver".to_owned(),
+            source("KAFKA_BENCH_DRIVER_ROOT", "kafka-driver"),
+        ),
+        (
+            "kafka_wire".to_owned(),
+            source("KAFKA_BENCH_PROTOCOL_ROOT", "kafka-protocol"),
+        ),
     ]
 }
 

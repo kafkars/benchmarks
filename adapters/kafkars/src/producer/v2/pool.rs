@@ -3,7 +3,7 @@
 use std::{error::Error, sync::Arc};
 
 use bytes::Bytes;
-use kafkars::Record;
+use kafkars::producer::Record;
 
 use crate::payload;
 

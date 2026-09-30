@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use kafkars::{Producer, Record, SendBatch, SendBatchResult};
+use kafkars::producer::{Producer, Record, SendBatch, SendBatchResult};
 
 use crate::schedule::ScheduledBatch;
 

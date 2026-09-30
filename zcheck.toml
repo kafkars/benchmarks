@@ -74,12 +74,15 @@ inputs = [
 ]
 
 [tasks.provenance]
-description = "Validate the reviewed sibling revisions when they are present."
-run = ["scripts/check-dependency-provenance"]
-tools = ["bash", "git", "grep", "sed"]
+description = "Validate the exact registry closure and reviewed source correspondence."
+run = ["bash", "-c", "scripts/check-dependency-provenance-test && scripts/check-dependency-provenance"]
+tools = ["bash", "python3", "git"]
 inputs = [
   "dependencies/sibling-revisions.env",
   "scripts/check-dependency-provenance",
+  "scripts/check-dependency-provenance-test",
+  "adapters/kafkars/Cargo.toml",
+  "adapters/kafkars/Cargo.lock",
 ]
 
 [tasks.adapters-conformance]

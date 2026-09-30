@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""One continuous public-producer lifetime; never restart a subject to resume.
+
+The existing v2 engine bounds schedule, payload and histogram memory. Evidence
+is streamed outside source history. Each invocation creates a new sealed attempt;
+rerunning or combining attempts does not prove one continuous client lifetime.
+Only a caller-owned, uniquely named disposable Compose project may be faulted.
+"""
+
+from concurrent.futures import ThreadPoolExecutor
+import argparse
+import csv
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+import sys
+import time
+
+ROOT = Path(__file__).resolve().parent.parent
+SAMPLE_HEADER = ["elapsed_ns", "pid", "birth_identity", "rss_bytes", "threads", "fds"]
+FAULT_HEADER = ["elapsed_ns", "broker", "recovered"]
+
+
+def command(argv, timeout=10):
+    return subprocess.check_output(argv, text=True, stderr=subprocess.DEVNULL, timeout=timeout,
+                                   env={**os.environ, "LC_ALL": "C"}).strip()
+
+
+def darwin_threads(output):
+    lines = [line for line in output.splitlines() if line.strip()]
+    if not lines or not lines[0].startswith("USER") or "PID" not in lines[0].split():
+        raise ValueError("unrecognized Darwin thread table")
+    return len(lines) - 1
+
+
+def native_child(parent, binary):
+    result = subprocess.run(["pgrep", "-P", str(parent)], capture_output=True, text=True, timeout=5)
+    if result.returncode not in (0, 1):
+        raise RuntimeError("could not inspect the owned control-plane children")
+    children = result.stdout.split()
+    if len(children) > 16:
+        raise RuntimeError("control-plane child budget exceeded")
+    matches = []
+    for child in children:
+        try:
+            args = command(["ps", "-p", child, "-o", "args="])
+            if args.startswith(f"{binary} run "):
+                matches.append(int(child))
+        except subprocess.CalledProcessError:
+            pass  # A short-lived probe or tool exited before inspection.
+    if len(matches) > 1:
+        raise RuntimeError("more than one native run process exists")
+    return matches[0] if matches else None
+
+
+def resources(pid):
+    birth = hashlib.sha256(command(["ps", "-p", str(pid), "-o", "lstart="]).encode()).hexdigest()
+    if sys.platform == "linux":
+        fields = dict(line.split(":", 1) for line in Path(f"/proc/{pid}/status").read_text().splitlines() if ":" in line)
+        rss = int(fields["VmRSS"].split()[0]) * 1024
+        threads = int(fields["Threads"])
+        fds = len(list(Path(f"/proc/{pid}/fd").iterdir()))
+    elif sys.platform == "darwin":
+        rss = int(command(["ps", "-p", str(pid), "-o", "rss="])) * 1024
+        threads = darwin_threads(command(["ps", "-M", "-p", str(pid)]))
+        descriptors = command(["lsof", "-nP", "-a", "-p", str(pid), "-F", "f"])
+        fds = sum(re.fullmatch(r"f[0-9]+", line) is not None for line in descriptors.splitlines())
+    else:
+        raise RuntimeError("resource sampling requires Linux or Darwin")
+    if min(rss, threads, fds) <= 0:
+        raise RuntimeError("incomplete native resource sample")
+    return [pid, birth, rss, threads, fds]
+
+
+def brokers(project):
+    base = ["docker", "compose", "-p", project, "-f", str(ROOT / "clusters/dev-compose/compose.yml")]
+    ids = command([*base, "ps", "-a", "-q"]).splitlines()
+    if len(ids) != 3:
+        raise RuntimeError("endurance project must contain exactly three brokers")
+    observed = []
+    for identity in ids:
+        fields = command(["docker", "inspect", "--format", '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.Config.Image}}|{{.State.Health.Status}}', identity]).split("|")
+        if len(fields) != 4 or fields[0] != project or fields[2:] != ["apache/kafka:4.3.1", "healthy"]:
+            raise RuntimeError("disposable broker identity or health mismatch")
+        observed.append(fields[1])
+    if sorted(observed) != ["kafka-1", "kafka-2", "kafka-3"]:
+        raise RuntimeError("unexpected service in endurance project")
+    return base
+
+
+def restart(base, ordinal):
+    subprocess.run([*base, "restart", f"kafka-{ordinal}"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=45)
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        try:
+            brokers(base[3])
+            return True
+        except (RuntimeError, subprocess.SubprocessError):
+            time.sleep(1)
+    raise RuntimeError(f"broker {ordinal} did not recover within its original fault deadline")
+
+
+def seal(directory):
+    entries = []
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            raise RuntimeError("symlink in endurance evidence")
+        if path.is_file():
+            with path.open("rb") as source:
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+            entries.append(f"{digest}  {path.relative_to(directory).as_posix()}\n")
+    (directory / "checksums.txt").write_text("".join(entries))
+
+
+def prepare(args, directory):
+    if not 60 <= args.seconds <= 86400 or not 10 <= args.fault_interval <= 3600:
+        raise ValueError("duration must be 60..86400 seconds; fault interval 10..3600")
+    if os.environ.get("GITHUB_ACTIONS") == "true" and args.seconds > 14400:
+        raise ValueError("hosted endurance is capped at four hours with build/seal headroom")
+    if not re.fullmatch(r"kafkars-endurance-[a-z0-9-]+", args.compose_project):
+        raise ValueError("faults require a uniquely named kafkars-endurance-* project")
+    endpoints = args.bootstrap.split(",")
+    if len(endpoints) != 3 or len(set(endpoints)) != 3 or any(
+        re.fullmatch(r"(?:127\.0\.0\.1|localhost):[0-9]{1,5}", endpoint) is None
+        or not 1 <= int(endpoint.rsplit(":", 1)[1]) <= 65535 for endpoint in endpoints
+    ):
+        raise ValueError("endurance bootstrap must name three distinct loopback ports")
+    template = (ROOT / "scenarios/producer/legacy-balanced-1k-fixed.toml").read_text()
+    for old, new in [
+        ('name = "producer-balanced-1k-fixed-diagnostic"', 'name = "native-producer-endurance-diagnostic"'),
+        ("records = 100000\n", f"records = {args.seconds * 50}\n"),
+        ("warmup_records = 10000\n", "warmup_records = 1000\n"),
+        ("offered_records_per_second = 100000\n", "offered_records_per_second = 50\n"),
+        ("bytes = 1024\n", "bytes = 128\n"),
+    ]:
+        if template.count(old) != 1:
+            raise ValueError(f"scenario template changed: {old.strip()}")
+        template = template.replace(old, new)
+    binary = ROOT / "target/benchmarks/bin/kafkars-benchmark-adapter"
+    verifier = ROOT / "target/benchmarks/bin/librdkafka-benchmark-verifier"
+    ctl = ROOT / "target/release/benchctl"
+    for path in [binary, verifier, ctl]:
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise ValueError(f"missing built binary: {path}")
+    directory.mkdir(parents=True, exist_ok=False)
+    (directory / "experiment.toml").write_text(template)
+    (directory / "subjects.toml").write_text(f'[[subjects]]\nname = "kafkars"\ncommand = ["{binary}"]\n')
+    (directory / "cluster.toml").write_text(f'name = "endurance-compose"\nbootstrap = "{args.bootstrap}"\nbroker_version = "apache/kafka:4.3.1"\nsecurity = "plaintext"\nbrokers = 3\nlifecycle = "externally managed by the caller"\n[tools]\ntopic_create = ["{binary}", "topics-create"]\ntopic_delete = ["{binary}", "topics-delete"]\nverify = ["{verifier}"]\n')
+    plan = {"duration_seconds": args.seconds, "rate": 50, "sample_interval_seconds": 10,
+            "fault_interval_seconds": args.fault_interval, "rss_limit_bytes": 512 * 1024 * 1024,
+            "rss_growth_bytes": 64 * 1024 * 1024, "fd_growth": 32, "thread_growth": 8,
+            "post_warmup_seconds": 60, "max_sample_gap_seconds": 35}
+    (directory / "plan.toml").write_text("".join(f"{key} = {value}\n" for key, value in plan.items()))
+    return binary, ctl
+
+
+def run(args):
+    directory = args.output.resolve()
+    base = brokers(args.compose_project)
+    binary, ctl = prepare(args, directory)
+    argv = [str(ctl), "run", "--experiment", str(directory / "experiment.toml"), "--subjects", str(directory / "subjects.toml"), "--cluster", str(directory / "cluster.toml"), "--bootstrap", args.bootstrap, "--results", str(directory / "results"), "--run-timeout-secs", str(args.seconds + 180), "--tool-timeout-secs", "180"]
+    started = time.monotonic_ns()
+    failure = ""
+    child = None
+    interrupted = False
+    def stop(_signal, _frame):
+        nonlocal interrupted
+        interrupted = True
+    for kind in [signal.SIGINT, signal.SIGTERM]:
+        signal.signal(kind, stop)
+    try:
+        with (directory / "control.log").open("w") as log, (directory / "resources.csv").open("w") as resource_file, (directory / "faults.csv").open("w") as fault_file, ThreadPoolExecutor(max_workers=1) as faults:
+            samples = csv.writer(resource_file)
+            actions = csv.writer(fault_file)
+            samples.writerow(SAMPLE_HEADER)
+            actions.writerow(FAULT_HEADER)
+            child = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            worker_started = None
+            next_sample = 0
+            next_fault = args.fault_interval
+            pending = None
+            ordinal = 1
+            while child.poll() is None:
+                elapsed = (time.monotonic_ns() - started) / 1e9
+                if interrupted or elapsed > args.seconds + 600:
+                    raise RuntimeError("interrupted" if interrupted else "campaign wall-clock budget exceeded")
+                if elapsed >= next_sample:
+                    pid = native_child(child.pid, binary)
+                    if pid is not None:
+                        try:
+                            sample = resources(pid)
+                        except (FileNotFoundError, subprocess.CalledProcessError):
+                            sample = None  # The subject may have just completed.
+                        if sample is not None:
+                            samples.writerow([time.monotonic_ns() - started, *sample])
+                            resource_file.flush()
+                            worker_started = worker_started or elapsed
+                            if sample[2] > 512 * 1024 * 1024:
+                                raise RuntimeError("native RSS ceiling exceeded")
+                    next_sample = elapsed + 10
+                if pending is not None and pending.done():
+                    actions.writerow([time.monotonic_ns() - started, ordinal, int(pending.result())])
+                    fault_file.flush()
+                    ordinal = ordinal % 3 + 1
+                    pending = None
+                if worker_started is not None and elapsed - worker_started >= next_fault and pending is None and elapsed - worker_started < args.seconds - 120:
+                    brokers(args.compose_project)  # Never disrupt a second unhealthy member.
+                    pending = faults.submit(restart, base, ordinal)
+                    next_fault += args.fault_interval
+                time.sleep(1)
+            if pending is not None:
+                actions.writerow([time.monotonic_ns() - started, ordinal, int(pending.result())])
+            if child.returncode != 0:
+                raise RuntimeError(f"control plane exited {child.returncode}")
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        failure = str(error)
+        if child is not None and child.poll() is None:
+            os.killpg(child.pid, signal.SIGINT)
+            try:
+                child.wait(timeout=90)
+            except subprocess.TimeoutExpired:
+                os.killpg(child.pid, signal.SIGKILL)
+                child.wait(timeout=10)
+    finally:
+        (directory / "status.toml").write_text(f'complete = {str(not failure).lower()}\nfailure = {json.dumps(failure)}\n')
+        seal(directory)
+        print(directory)
+    return 1 if failure else 0
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--seconds", type=int, required=True)
+    parser.add_argument("--compose-project", required=True)
+    parser.add_argument("--fault-interval", type=int, default=900)
+    parser.add_argument("--bootstrap", default="127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094")
+    parser.add_argument("--output", type=Path, required=True)
+    try:
+        raise SystemExit(run(parser.parse_args()))
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        parser.exit(1, f"endurance preflight failed: {error}\n")

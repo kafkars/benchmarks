@@ -173,7 +173,13 @@ fn the_default_repository_map_names_this_repository_and_its_three_siblings() {
         "the v2 source map names the public repositories"
     );
     assert_eq!(repositories[0].1, root);
-    assert!(repositories[1].1.ends_with("kafkars"));
-    assert!(repositories[2].1.ends_with("kafka-driver"));
-    assert!(repositories[3].1.ends_with("kafka-protocol"));
+    for (index, variable, sibling) in [
+        (1, "KAFKA_BENCH_CLIENT_ROOT", "kafkars"),
+        (2, "KAFKA_BENCH_DRIVER_ROOT", "kafka-driver"),
+        (3, "KAFKA_BENCH_PROTOCOL_ROOT", "kafka-protocol"),
+    ] {
+        let expected =
+            std::env::var_os(variable).map_or_else(|| root.join("..").join(sibling), PathBuf::from);
+        assert_eq!(repositories[index].1, expected);
+    }
 }

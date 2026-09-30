@@ -3,7 +3,7 @@
 use std::error::Error;
 
 use bench_schema::{KafkarsNativeMetrics, KafkarsProducerMetricsSnapshot};
-use kafkars::MetricsSnapshot;
+use kafkars::metrics::MetricsSnapshot;
 
 /// Captures the public producer portion of one client metrics snapshot.
 pub(super) fn snapshot(

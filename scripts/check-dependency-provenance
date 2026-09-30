@@ -1,338 +1,159 @@
-#!/usr/bin/env bash
-# Attest that the sibling checkouts this repository measures are exactly the
-# reviewed ones. A benchmark number is a claim about a specific stack; if the
-# stack under the harness is not the stack named in dependencies/sibling-
-# revisions.env, the number is anecdote, not evidence.
-#
-# Three checks per sibling, all inherited from Kafkars' original:
-#   1. HEAD equals the pin (the obvious one),
-#   2. the worktree is clean modulo a per-repo ignore allowance (a dirty tree
-#      means the measured bytes are not the reviewed bytes),
-#   3. no noncanonical index flags — assume-unchanged / skip-worktree /
-#      fsmonitor-valid entries make check 2 lie, so they are rejected outright.
-# Plus cross-checks this repository adds: the pinned Kafkars revision's own
-# committed sibling env and public-pair attestation must agree with our
-# driver/wire pins, and kafka-driver's guardrails.toml must declare our wire pin.
-#
-# MODES. Strict when CI=true or KAFKA_BENCH_PROVENANCE=strict: any mismatch
-# exits 1. Otherwise advisory: mismatches print `provenance advisory: ...` and
-# exit 0. The advisory mode exists because a developer machine legitimately
-# sits on other branches all day, and a provenance gate that blocks `scripts/
-# check` locally just teaches people to skip the gate. CI=true always wins —
-# KAFKA_BENCH_PROVENANCE can escalate to strict but can never relax CI.
-#
-# A MISSING sibling checkout is advisory too, and that is a deliberate choice
-# rather than an oversight. No crate in this workspace depends on the siblings —
-# only the out-of-workspace adapter under adapters/kafkars does — so a clean
-# clone with nothing beside it can still run `zcheck` end to end. Failing
-# hard here would mean the quickstart in README.md did not work on a fresh
-# machine, which teaches the reader that the gate is optional. Strict mode still
-# fails: anything producing a claim-eligible bundle must have the siblings, and
-# CI is where that is enforced.
-#
-# What is NOT forgiven in either mode: a malformed or missing revision file.
-# Without it there is no pin to check against, so there is nothing to be
-# advisory about.
-#
-# Advisory-mode runs are still recorded: bundles produced against unpinned or
-# absent siblings carry dirty/mismatched provenance in their environment
-# document and are never claim-eligible.
-set -euo pipefail
+#!/usr/bin/env python3
+"""Bind the registry adapter to its reviewed source and locked archive closure.
 
-repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-client_root="${KAFKA_BENCH_CLIENT_ROOT:-$repo_root/../kafkars}"
-driver_root="${KAFKA_BENCH_DRIVER_ROOT:-$repo_root/../kafka-driver}"
-protocol_root="${KAFKA_BENCH_PROTOCOL_ROOT:-$repo_root/../kafka-protocol}"
-revision_file="$repo_root/dependencies/sibling-revisions.env"
+Registry manifests and lock identity always fail closed. Clean source checkout
+correspondence is strict in CI and advisory locally. --archives additionally
+verifies the fetched .crate bytes and their embedded, clean VCS identities.
+"""
 
-mode=advisory
-if [[ "${CI:-}" == "true" || "${KAFKA_BENCH_PROVENANCE:-}" == "strict" ]]; then
-  mode=strict
-fi
+from __future__ import annotations
 
-missing_siblings=0
-unreadable_checks=0
-soft_failures=0
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tarfile
+import tomllib
 
-# missing    = a sibling checkout that is not there at all.
-# unreadable = a cross-check whose input could not be read, which on a bare
-#              clone is simply the downstream consequence of `missing`.
-# soft       = provenance mismatch against a sibling that is there.
-# All three fail in strict mode and warn in advisory mode; they are counted
-# separately only so that the summary can say which one happened, since "absent",
-# "could not be checked", and "on the wrong commit" call for different fixes —
-# and because reporting the first as the third told a reader on a bare clone
-# that two revisions disagreed when nothing had been compared at all.
-report() {
-  local severity=$1
-  shift
-  if [[ "$severity" == missing ]]; then
-    missing_siblings=$((missing_siblings + 1))
-  elif [[ "$severity" == unreadable ]]; then
-    unreadable_checks=$((unreadable_checks + 1))
-  else
-    soft_failures=$((soft_failures + 1))
-  fi
-  if [[ "$mode" == strict ]]; then
-    echo "provenance failure: $*" >&2
-  else
-    echo "provenance advisory: $*" >&2
-  fi
+
+ROOT = Path(__file__).resolve().parent.parent
+REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
+FAMILIES = {
+    "KAFKARS_REVISION": ("0.0.2-rc.2", ("kafkars", "kafka-client-core", "kafka-client-engine")),
+    "KAFKA_DRIVER_REVISION": (
+        "0.1.0-rc.7", ("kafka-driver", "kafka-driver-core", "kafka-driver-transport")
+    ),
+    "KAFKA_PROTOCOL_REVISION": (
+        "0.1.0-rc.3", ("kafka-wire", "kafka-wire-core", "kafka-wire-records")
+    ),
 }
 
-if [[ ! -f "$revision_file" ]]; then
-  echo "provenance failure: revision file is missing at $revision_file" >&2
-  exit 1
-fi
 
-revision_lines=()
-while IFS= read -r line || [[ -n "$line" ]]; do
-  if [[ -z "$line" || "$line" == "#"* ]]; then
-    continue
-  fi
-  revision_lines+=("$line")
-done < "$revision_file"
-if [[ "${#revision_lines[@]}" -ne 3 ]]; then
-  echo "provenance failure: revision file must contain exactly three assignments" >&2
-  exit 1
-fi
-if [[ ! "${revision_lines[0]}" =~ ^KAFKARS_REVISION=([0-9a-f]{40})$ ]]; then
-  echo "provenance failure: invalid Kafkars revision assignment" >&2
-  exit 1
-fi
-KAFKARS_REVISION="${BASH_REMATCH[1]}"
-if [[ ! "${revision_lines[1]}" =~ ^KAFKA_DRIVER_REVISION=([0-9a-f]{40})$ ]]; then
-  echo "provenance failure: invalid kafka-driver revision assignment" >&2
-  exit 1
-fi
-KAFKA_DRIVER_REVISION="${BASH_REMATCH[1]}"
-if [[ ! "${revision_lines[2]}" =~ ^KAFKA_PROTOCOL_REVISION=([0-9a-f]{40})$ ]]; then
-  echo "provenance failure: invalid Kafka Wire revision assignment" >&2
-  exit 1
-fi
-KAFKA_PROTOCOL_REVISION="${BASH_REMATCH[1]}"
+def revisions(text: str) -> dict[str, str]:
+    lines = [line for line in text.splitlines() if line and not line.startswith("#")]
+    if len(lines) != len(FAMILIES):
+        raise ValueError("revision file must contain exactly three assignments")
+    pins = {}
+    for key, line in zip(FAMILIES, lines, strict=True):
+        match = re.fullmatch(rf"{key}=([0-9a-f]{{40}})", line)
+        if match is None:
+            raise ValueError(f"invalid {key} assignment")
+        pins[key] = match[1]
+    return pins
 
-check_revision() {
-  local name=$1
-  local checkout=$2
-  local expected=$3
-  local actual
-  local index_state
-  local unexpected
-  local status
-  local tree
 
-  actual=$(git -C "$checkout" rev-parse --verify 'HEAD^{commit}' 2>/dev/null) || {
-    report missing "$name is not checked out at $checkout"
-    return 0
-  }
-  if [[ "$actual" != "$expected" ]]; then
-    report soft "$name revision $actual does not match reviewed revision $expected"
-  fi
-  index_state=$(LC_ALL=C git -C "$checkout" ls-files -v -f) || {
-    report soft "could not inspect $name index flags at $checkout"
-    return 0
-  }
-  while IFS= read -r entry; do
-    if [[ -n "$entry" && "$entry" != "H "* ]]; then
-      report soft "$name index contains a noncanonical tracked-path flag: $entry"
-      break
-    fi
-  done <<< "$index_state"
-  status=$(
-    LC_ALL=C git -C "$checkout" status \
-      --porcelain=v1 \
-      --untracked-files=all \
-      --ignored=matching
-  ) || {
-    report soft "could not inspect $name worktree at $checkout"
-    return 0
-  }
-  unexpected=
-  while IFS= read -r entry; do
-    # Global allowances. `target/` is build output in every sibling, and
-    # `.DS_Store` is written by the Finder into whatever directory somebody
-    # opened — neither is a tracked byte, so neither says anything about
-    # whether the measured source matches the reviewed source.
-    if [[ -z "$entry" ||
-      "$entry" == "!! target/"* ||
-      "$entry" == "!! .DS_Store" ||
-      "$entry" == *"/.DS_Store" ]]; then
-      continue
-    fi
-    # Historical Kafkars checkouts may carry generated benchmark output outside
-    # their root target directory; neither changes the reviewed source tree.
-    if [[ "$name" == "kafkars" ]] &&
-      { [[ "$entry" == "!! node_modules/"* ]] ||
-        [[ "$entry" == "!! benchmarks/adapters/kafkars/target/"* ]]; }; then
-      continue
-    fi
-    if [[ "$name" == "kafka-driver" ]] &&
-      { [[ "$entry" == "!! node_modules/"* ]] ||
-        [[ "$entry" == "!! kafka-driver-review-"*.zip ]]; }; then
-      continue
-    fi
-    if [[ "$name" == "kafka-wire" ]] &&
-      { [[ "$entry" == "!! fuzz/corpus/"* ]] ||
-        [[ "$entry" == "!! kafka-wire-review-"*.zip ]] ||
-        [[ "$entry" == "!! fuzz/target/"* ]]; }; then
-      continue
-    fi
-    unexpected+="${unexpected:+$'\n'}$entry"
-  done <<< "$status"
-  if [[ -n "$unexpected" ]]; then
-    report soft "$name worktree at $checkout differs from reviewed commit $expected:"
-    echo "$unexpected" >&2
-  fi
-  tree=$(git -C "$checkout" rev-parse --verify 'HEAD^{tree}' 2>/dev/null) || {
-    report soft "could not resolve $name tree at $checkout"
-    return 0
-  }
-  echo "$name commit=$actual tree=$tree"
-}
+def registry_packages(manifest: dict, lock: dict) -> dict[str, dict]:
+    if manifest["dependencies"]["kafkars"] != "=0.0.2-rc.2":
+        raise ValueError("adapter must use the exact published RC.2, not a path or Git override")
+    if manifest.get("patch") or manifest.get("replace"):
+        raise ValueError("adapter registry patches and replacements are forbidden")
+    expected = {name: version for version, names in FAMILIES.values() for name in names}
+    found = {}
+    for package in lock.get("package", []):
+        name = package["name"]
+        if name not in expected:
+            continue
+        if name in found or package["version"] != expected[name]:
+            raise ValueError(f"unexpected or duplicate registry version for {name}")
+        if package.get("source") != REGISTRY:
+            raise ValueError(f"{name} is not a crates.io dependency")
+        if re.fullmatch(r"[0-9a-f]{64}", package.get("checksum", "")) is None:
+            raise ValueError(f"{name} is missing its canonical archive checksum")
+        found[name] = package
+    if set(found) != set(expected):
+        raise ValueError(f"missing registry packages: {sorted(set(expected) - set(found))}")
+    return found
 
-# The pin rule made executable: whatever the Kafkars revision itself declared
-# is the only legal driver/wire pair for that client. Reading it out of the
-# pinned commit means another checkout cannot launder a wrong pin here.
-check_client_declared_siblings() {
-  local declared
-  local declared_driver
-  local declared_protocol
 
-  declared=$(
-    git -C "$client_root" show \
-      "$KAFKARS_REVISION:dependencies/sibling-revisions.env" 2>/dev/null
-  ) || {
-    report unreadable \
-      "could not read dependencies/sibling-revisions.env from Kafkars revision $KAFKARS_REVISION; nothing was compared"
-    return 0
-  }
-  declared_driver=$(
-    LC_ALL=C grep -E '^KAFKA_DRIVER_REVISION=[0-9a-f]{40}$' <<< "$declared" || true
-  )
-  declared_protocol=$(
-    LC_ALL=C grep -E '^KAFKA_PROTOCOL_REVISION=[0-9a-f]{40}$' <<< "$declared" || true
-  )
-  if [[ "$(wc -l <<< "$declared_driver")" -ne 1 || -z "$declared_driver" ]]; then
-    report soft \
-      "Kafkars revision $KAFKARS_REVISION must declare exactly one canonical KAFKA_DRIVER_REVISION"
-    return 0
-  fi
-  if [[ "$(wc -l <<< "$declared_protocol")" -ne 1 || -z "$declared_protocol" ]]; then
-    report soft \
-      "Kafkars revision $KAFKARS_REVISION must declare exactly one canonical KAFKA_PROTOCOL_REVISION"
-    return 0
-  fi
-  declared_driver="${declared_driver#KAFKA_DRIVER_REVISION=}"
-  declared_protocol="${declared_protocol#KAFKA_PROTOCOL_REVISION=}"
-  if [[ "$declared_driver" != "$KAFKA_DRIVER_REVISION" ]]; then
-    report soft \
-      "Kafkars revision $KAFKARS_REVISION declares kafka-driver $declared_driver but this repository pins $KAFKA_DRIVER_REVISION"
-  fi
-  if [[ "$declared_protocol" != "$KAFKA_PROTOCOL_REVISION" ]]; then
-    report soft \
-      "Kafkars revision $KAFKARS_REVISION declares kafka-wire $declared_protocol but this repository pins $KAFKA_PROTOCOL_REVISION"
-  fi
-  echo "Kafkars declared driver=$declared_driver wire=$declared_protocol"
-}
+def git(path: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(path), *args], check=True, capture_output=True, text=True
+    )
+    return result.stdout.strip()
 
-# The public cutover added a reviewed attestation binding the same pair to
-# runtime-surface fingerprints. This repository does not reinterpret those
-# fingerprints; it verifies that the pinned Kafkars commit publicly attested
-# the exact driver/wire revisions the benchmark names.
-check_kafkars_public_attestation() {
-  local attestation
-  local header
-  local row
-  local tab=$'\t'
-  local attested_driver
-  local attested_wire
-  local declared_wire
 
-  attestation=$(
-    git -C "$client_root" show \
-      "$KAFKARS_REVISION:dependencies/public-sibling-pair.tsv" 2>/dev/null
-  ) || {
-    report unreadable \
-      "could not read the public sibling-pair attestation from Kafkars revision $KAFKARS_REVISION"
-    return 0
-  }
-  header=$(sed -n '1p' <<< "$attestation")
-  row=$(sed -n '2p' <<< "$attestation")
-  if [[ "$header" != $'driver_revision\twire_revision\tdriver_runtime_fingerprint\twire_runtime_fingerprint\tdriver_declared_wire_revision' ]] ||
-    [[ ! "$row" =~ ^([0-9a-f]{40})${tab}([0-9a-f]{40})${tab}[0-9a-f]{40}${tab}[0-9a-f]{40}${tab}([0-9a-f]{40})$ ]]; then
-    report soft "Kafkars public sibling-pair attestation is not canonical"
-    return 0
-  fi
-  attested_driver="${BASH_REMATCH[1]}"
-  attested_wire="${BASH_REMATCH[2]}"
-  declared_wire="${BASH_REMATCH[3]}"
-  if [[ "$attested_driver" != "$KAFKA_DRIVER_REVISION" ]] ||
-    [[ "$attested_wire" != "$KAFKA_PROTOCOL_REVISION" ]] ||
-    [[ "$declared_wire" != "$KAFKA_PROTOCOL_REVISION" ]]; then
-    report soft "Kafkars public sibling-pair attestation does not bind the pinned driver/wire pair"
-    return 0
-  fi
-  echo "Kafkars public pair attests driver=$KAFKA_DRIVER_REVISION wire=$KAFKA_PROTOCOL_REVISION"
-}
+def source_correspondence(pins: dict[str, str], packages: dict[str, dict]) -> list[str]:
+    paths = {
+        "KAFKARS_REVISION": Path(os.environ.get("KAFKA_BENCH_CLIENT_ROOT", ROOT.parent / "kafkars")),
+        "KAFKA_DRIVER_REVISION": Path(os.environ.get("KAFKA_BENCH_DRIVER_ROOT", ROOT.parent / "kafka-driver")),
+        "KAFKA_PROTOCOL_REVISION": Path(os.environ.get("KAFKA_BENCH_PROTOCOL_ROOT", ROOT.parent / "kafka-protocol")),
+    }
+    failures = []
+    for key, path in paths.items():
+        try:
+            if git(path, "rev-parse", "HEAD") != pins[key]:
+                raise ValueError(f"{path.name} is not at {pins[key]}")
+            if git(path, "status", "--porcelain=v1", "--untracked-files=all"):
+                raise ValueError(f"{path.name} has unreviewed working-tree changes")
+            if any(not line.startswith("H ") for line in git(path, "ls-files", "-v", "-f").splitlines()):
+                raise ValueError(f"{path.name} has noncanonical index flags")
+            if key == "KAFKARS_REVISION":
+                source_lock = tomllib.loads(git(path, "show", f"{pins[key]}:Cargo.lock"))
+                source_packages = {item["name"]: item for item in source_lock["package"]}
+                for name, package in packages.items():
+                    source = source_packages.get(name, {})
+                    if source.get("version") != package["version"]:
+                        raise ValueError(f"source and registry disagree on {name} version")
+                    # Native packages are paths in their source workspace; its
+                    # published driver/wire closure must match byte-for-byte.
+                    if name.startswith(("kafka-driver", "kafka-wire")) and (
+                        source.get("source") != REGISTRY or source.get("checksum") != package["checksum"]
+                    ):
+                        raise ValueError(f"source and registry disagree on {name} archive")
+        except (OSError, subprocess.CalledProcessError, ValueError) as error:
+            failures.append(f"{key}: {error}")
+    return failures
 
-check_driver_protocol_revision() {
-  local declaration
-  local -a declarations=()
-  local declared
-  local driver_policy="$driver_root/guardrails.toml"
 
-  if [[ ! -f "$driver_policy" ]]; then
-    report unreadable \
-      "kafka-driver protocol revision policy is missing at $driver_policy; nothing was compared"
-    return 0
-  fi
-  while IFS= read -r declaration; do
-    declarations+=("$declaration")
-  done < <(LC_ALL=C grep -E '^kafka_wire_revision[[:space:]]*=' "$driver_policy" || true)
-  if [[ "${#declarations[@]}" -ne 1 ]]; then
-    report soft "kafka-driver must declare exactly one kafka_wire_revision"
-    return 0
-  fi
-  declaration="${declarations[0]}"
-  if [[ ! "$declaration" =~ ^kafka_wire_revision[[:space:]]*=[[:space:]]*\"([0-9a-f]{40})\"$ ]]; then
-    report soft "kafka-driver kafka_wire_revision must be one canonical 40-hex TOML string"
-    return 0
-  fi
-  declared="${BASH_REMATCH[1]}"
-  if [[ "$declared" != "$KAFKA_PROTOCOL_REVISION" ]]; then
-    report soft \
-      "kafka-driver declares kafka-wire revision $declared but this repository pins $KAFKA_PROTOCOL_REVISION"
-    return 0
-  fi
-  echo "kafka-driver protocol-revision=$declared"
-}
+def check_archives(cache: Path, pins: dict[str, str], packages: dict[str, dict]) -> None:
+    for key, (_, names) in FAMILIES.items():
+        for name in names:
+            package = packages[name]
+            stem = f"{name}-{package['version']}"
+            matches = list(cache.glob(f"*/{stem}.crate"))
+            if len(matches) != 1:
+                raise ValueError(f"expected exactly one cached archive for {stem}")
+            archive = matches[0]
+            with archive.open("rb") as source:
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+            if digest != package["checksum"]:
+                raise ValueError(f"archive checksum mismatch for {stem}")
+            with tarfile.open(archive, "r:gz") as contents:
+                member = contents.extractfile(f"{stem}/.cargo_vcs_info.json")
+                if member is None:
+                    raise ValueError(f"missing VCS identity for {stem}")
+                vcs = json.load(member)
+            if vcs["git"]["sha1"] != pins[key] or vcs["git"].get("dirty", False):
+                raise ValueError(f"unreviewed VCS identity for {stem}")
 
-check_revision kafkars "$client_root" "$KAFKARS_REVISION"
-check_revision kafka-driver "$driver_root" "$KAFKA_DRIVER_REVISION"
-check_revision kafka-wire "$protocol_root" "$KAFKA_PROTOCOL_REVISION"
-check_client_declared_siblings
-check_kafkars_public_attestation
-check_driver_protocol_revision
 
-if [[ "$mode" == strict ]] &&
-  { [[ "$missing_siblings" -gt 0 ]] || [[ "$unreadable_checks" -gt 0 ]] ||
-    [[ "$soft_failures" -gt 0 ]]; }; then
-  echo "provenance: $missing_siblings absent, $unreadable_checks uncheckable, and $soft_failures mismatched sibling check(s) in strict mode" >&2
-  exit 1
-fi
-if [[ "$missing_siblings" -gt 0 ]]; then
-  echo "provenance advisory: sibling checkouts absent; adapter builds and check-benchmarks require them" >&2
-  echo "provenance advisory: the workspace, schema, control-plane, and summary tasks do not, so zcheck is still meaningful here" >&2
-fi
-if [[ "$unreadable_checks" -gt 0 ]]; then
-  echo "provenance advisory: $unreadable_checks cross-check(s) had nothing to read, so they are unchecked rather than mismatched" >&2
-fi
-if [[ "$soft_failures" -gt 0 ]]; then
-  echo "provenance advisory: $soft_failures mismatch(es); measurements taken now are diagnostic only, never claim-eligible" >&2
-fi
-if [[ "$missing_siblings" -eq 0 ]] && [[ "$unreadable_checks" -eq 0 ]] &&
-  [[ "$soft_failures" -eq 0 ]]; then
-  echo "provenance: siblings match dependencies/sibling-revisions.env"
-fi
-exit 0
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--archives", type=Path, help="Cargo registry/cache directory")
+    args = parser.parse_args()
+    try:
+        pins = revisions((ROOT / "dependencies/sibling-revisions.env").read_text())
+        manifest = tomllib.loads((ROOT / "adapters/kafkars/Cargo.toml").read_text())
+        lock = tomllib.loads((ROOT / "adapters/kafkars/Cargo.lock").read_text())
+        packages = registry_packages(manifest, lock)
+        failures = source_correspondence(pins, packages)
+        strict = os.environ.get("CI") == "true" or os.environ.get("KAFKA_BENCH_PROVENANCE") == "strict"
+        for failure in failures:
+            print(f"provenance {'failure' if strict else 'advisory'}: {failure}", file=sys.stderr)
+        if args.archives is not None:
+            check_archives(args.archives, pins, packages)
+        if strict and failures:
+            return 1
+        print(f"provenance: {len(packages)} exact registry packages; source correspondence {'unchecked' if failures else 'verified'}")
+        return 0
+    except (OSError, ValueError, KeyError, tarfile.TarError) as error:
+        print(f"provenance failure: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

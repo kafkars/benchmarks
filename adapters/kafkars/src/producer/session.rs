@@ -13,7 +13,10 @@
 
 use std::error::Error;
 
-use kafkars::{Client, Producer, ProducerLimits};
+use kafkars::{
+    Client,
+    producer::{Producer, ProducerLimits},
+};
 
 use crate::topics;
 

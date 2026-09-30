@@ -48,8 +48,9 @@ provenance checks. No Kafka cluster or sibling checkout is required.
 
 ## Run
 
-Real-client runs need Docker and these sibling checkouts beside this repository.
-The scripts build the pinned librdkafka release on first use.
+Real-client runs need Docker. The native adapter uses the exact published RC.2
+and its locked registry closure; these clean source checkouts provide strict
+provenance correspondence, not build inputs. The scripts build pinned librdkafka.
 
 ```txt
 kafkars/
@@ -75,6 +76,14 @@ For one attempt:
 ```sh
 scripts/bench-m0-acceptance
 ```
+
+For a continuous producer soak, start the cluster with
+`docker compose -p kafkars-endurance-local -f clusters/dev-compose/compose.yml up -d --wait`,
+then run `scripts/run-producer-endurance --seconds 3600 --compose-project kafkars-endurance-local --output target/endurance/smoke`
+and `scripts/verify-producer-endurance target/endurance/smoke`.
+After that gate passes, use `--seconds 86400` and a new output directory locally.
+The opt-in Actions workflow permits only one- or four-hour lifetimes, one job
+at a time; segmented runs do not establish continuous 24-hour endurance.
 
 ## Read the results
 

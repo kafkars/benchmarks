@@ -7,7 +7,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use kafkars::{ErrorKind, Record, SendBatchResult};
+use kafkars::{
+    error::ErrorKind,
+    producer::{Record, SendBatchResult},
+};
 
 use crate::{
     report::{ApplicationBatchAdmissionMetrics, LatencyReport, latencies},

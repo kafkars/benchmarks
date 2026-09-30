@@ -8,7 +8,7 @@
 #   $GITHUB_WORKSPACE/kafka-driver
 #   $GITHUB_WORKSPACE/kafka-protocol  (the kafkars/kafka-wire repository)
 #
-# so the adapter path deps, the environment capture, and scripts/check-
+# so the archive/source correspondence, environment capture, and scripts/check-
 # dependency-provenance all resolve `../<sibling>` without a CI-only special
 # case. A workflow that forgets `path: kafka-benchmarks` on its own checkout
 # gets a hard provenance failure rather than a subtly wrong measurement.

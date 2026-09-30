@@ -199,9 +199,10 @@ The Kafka family repositories are peers, and several checks assume it:
 └── kafka-benchmarks    this repository
 ```
 
-The native adapter resolves the client through a relative path dependency into
-that sibling tree, and `dependencies/sibling-revisions.env` pins the exact
-revision of all three siblings that a run claims to have measured. Provenance
+The native adapter resolves the exact published RC through crates.io, with its
+nine native, driver, and wire archives pinned in the detached Cargo lock.
+`dependencies/sibling-revisions.env` pins the clean source identities embedded
+in those archives; sibling trees prove correspondence, not build inputs. Provenance
 checking is strict in CI and advisory locally, because a developer's checkout is
 routinely dirty and a bundle sealed from a dirty tree is diagnostic rather than
 claimable — which the bundle itself records.

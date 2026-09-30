@@ -1,6 +1,6 @@
 //! Normalized producer result and latency records.
 
-use kafkars::MetricsSnapshot;
+use kafkars::metrics::MetricsSnapshot;
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]

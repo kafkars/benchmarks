@@ -38,7 +38,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use kafkars::{Client, ErrorKind, MetricsSnapshot, Producer};
+use kafkars::{Client, Producer, error::ErrorKind, metrics::MetricsSnapshot};
 use serde::Serialize;
 
 use crate::{

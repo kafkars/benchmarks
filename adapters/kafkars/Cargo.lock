@@ -9,18 +9,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "base64"
-version = "0.22.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
-
-[[package]]
 name = "bench-schema"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "toml",
 ]
 
@@ -40,10 +34,78 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-buffer"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
+dependencies = [
+ "hybrid-array",
+ "zeroize",
+]
+
+[[package]]
+name = "bornera"
+version = "0.0.1-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cb9b37b34c2be2c5131277760464022d46be96dfb96f53b5baf184eca08960f"
+dependencies = [
+ "bornera-core",
+ "bytes",
+ "calandria",
+ "calandria-mio",
+ "mio",
+ "socket2",
+]
+
+[[package]]
+name = "bornera-core"
+version = "0.0.1-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31b50b618633b9cdc95fc3b37461b6c303218baefe14d7958c1cddf3c71c87a1"
+dependencies = [
+ "calandria",
+]
+
+[[package]]
+name = "bornera-rustls"
+version = "0.0.1-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51d5c22e456b51a2f135f7050c7415aa1dd8359e0e2749db3263541f613a07a9"
+dependencies = [
+ "bornera",
+ "calandria",
+ "mio",
+ "rustls",
+ "socket2",
+]
+
+[[package]]
+name = "bytebudget"
+version = "0.0.1-rc.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a333b10952faa5bba198eae85398341c643ed4bce31ae9efb3d8feb22979d25"
+
+[[package]]
 name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
+
+[[package]]
+name = "calandria"
+version = "0.0.1-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af52ded42a9a2804500eb150e1e54a5d655309de2f8c3e971b87b9a08f73f79a"
+
+[[package]]
+name = "calandria-mio"
+version = "0.0.1-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11078309d07df4837863c7309dbb149112dccfcd144645457031b7d3fbf6bd98"
+dependencies = [
+ "calandria",
+ "mio",
+]
 
 [[package]]
 name = "cc"
@@ -62,6 +124,12 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "cmov"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "core-foundation"
@@ -84,6 +152,15 @@ name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "cpufeatures"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ca28b0ae3115b884660db4118d803791fd6756b6e88f39c0f3f7859060d7566"
 dependencies = [
  "libc",
 ]
@@ -117,13 +194,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-common"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
+name = "ctutils"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+dependencies = [
+ "cmov",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
- "block-buffer",
- "crypto-common",
+ "block-buffer 0.10.4",
+ "crypto-common 0.1.7",
+]
+
+[[package]]
+name = "digest"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
+dependencies = [
+ "block-buffer 0.12.1",
+ "crypto-common 0.2.2",
+ "ctutils",
+ "zeroize",
 ]
 
 [[package]]
@@ -187,6 +294,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "hmac"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
+dependencies = [
+ "digest 0.11.3",
+]
+
+[[package]]
+name = "hybrid-array"
+version = "0.4.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
+dependencies = [
+ "typenum",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -214,14 +339,19 @@ dependencies = [
 
 [[package]]
 name = "kafka-client-core"
-version = "0.0.1"
+version = "0.0.2-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5df7fe85247de35031b70bbd5fe98ca077f6c8d5aca46a9b3928e7d6841d5d1d"
 dependencies = [
+ "bytebudget",
  "zeroize",
 ]
 
 [[package]]
 name = "kafka-client-engine"
-version = "0.0.1"
+version = "0.0.2-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf862a1b442955d78a02ab1b057722ff17bb7b1ddf39bcb625e82c471f02a827"
 dependencies = [
  "bytes",
  "kafka-client-core",
@@ -237,10 +367,16 @@ dependencies = [
 
 [[package]]
 name = "kafka-driver"
-version = "0.1.0"
+version = "0.1.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dba09b0eb814d3ac93b2e3af609ed8952e6fe99cf2f16150ef587270b5de49e2"
 dependencies = [
- "base64",
+ "bornera",
+ "bornera-core",
+ "bornera-rustls",
  "bytes",
+ "calandria",
+ "calandria-mio",
  "kafka-driver-core",
  "kafka-driver-transport",
  "kafka-wire",
@@ -248,20 +384,24 @@ dependencies = [
  "mio",
  "ring",
  "rustls",
- "stringprep",
+ "sasl-scram",
  "zeroize",
 ]
 
 [[package]]
 name = "kafka-driver-core"
-version = "0.1.0"
+version = "0.1.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78fbfc8b655076d039bae32cf7b13f6eb105b3f33f73a54f3c4d0f47d28ed05e"
 dependencies = [
  "kafka-wire-core",
 ]
 
 [[package]]
 name = "kafka-driver-transport"
-version = "0.1.0"
+version = "0.1.0-rc.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b638a032f197ffdfafac2910e36c4bfdd98f45c7835e5be5b6f6f388ba70e13"
 dependencies = [
  "bytes",
  "kafka-driver-core",
@@ -270,7 +410,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-wire"
-version = "0.1.0"
+version = "0.1.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef04e07a7f2f73a4d00e3341b60504e0f2baf91491ce55e023f2bdfa5ea60b32"
 dependencies = [
  "bytes",
  "kafka-wire-core",
@@ -278,7 +420,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-wire-core"
-version = "0.1.0"
+version = "0.1.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac4f6d455c6371e95044818fbbdc816d35fa0fff3f5bbc7669ce8c83ccf1c6a4"
 dependencies = [
  "bytes",
  "thiserror",
@@ -286,7 +430,9 @@ dependencies = [
 
 [[package]]
 name = "kafka-wire-records"
-version = "0.1.0"
+version = "0.1.0-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "442e451f90cdcfb7d97570b6ee030b52776a20a62a7c60ac50e0521ce8794905"
 dependencies = [
  "bytes",
  "crc32c",
@@ -300,7 +446,9 @@ dependencies = [
 
 [[package]]
 name = "kafkars"
-version = "0.0.1"
+version = "0.0.2-rc.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b698a35dd36fa1885a50b9a7029f5c5eaf42ecfda32066bb6dc76230fa1b6e4"
 dependencies = [
  "bytes",
  "kafka-client-engine",
@@ -371,6 +519,16 @@ name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
+name = "pbkdf2"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "112d82ceb8c5bf524d9af484d4e4970c9fd5a0cc15ba14ad93dccd28873b0629"
+dependencies = [
+ "digest 0.11.3",
+ "hmac",
+]
 
 [[package]]
 name = "pkg-config"
@@ -472,6 +630,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sasl-scram"
+version = "0.0.1-rc.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b623f7be2171dc0ef7c4fe02b8a05b0a49d995b4a65f5aaa9493f0804857c150"
+dependencies = [
+ "ctutils",
+ "hmac",
+ "pbkdf2",
+ "sha2 0.11.0",
+ "stringprep",
+ "unicode-normalization",
+ "zeroize",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -568,8 +741,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
- "cpufeatures",
- "digest",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.1",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -589,6 +773,16 @@ name = "snap"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
+
+[[package]]
+name = "socket2"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "stringprep"

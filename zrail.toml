@@ -45,10 +45,9 @@ evidence = [
 ]
 
 [repository]
-# The Kafkars adapter is intentionally a detached subject workspace with path
-# dependencies into reviewed sibling checkouts. zrail fails closed on paths
-# outside its repository root, so the adapter keeps its narrow source-shape
-# check in scripts/check-detached-adapter while zrail owns the harness workspace.
+# The registry-backed adapter remains a detached subject workspace; the
+# harness's runtime bans must not pretend to govern the client under test.
+# scripts/check-detached-policy owns its narrow source-shape checks.
 roots = ["crates"]
 exclude = ["adapters/kafkars"]
 workspace_members = "exact"

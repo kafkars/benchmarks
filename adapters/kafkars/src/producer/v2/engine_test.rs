@@ -1,6 +1,6 @@
 //! A refusal the retry loop cannot answer must say so, and say why.
 
-use kafkars::{ErrorKind, KafkaError};
+use kafkars::{Error as KafkaError, error::ErrorKind};
 
 use super::engine::wholly_refused;
 

@@ -26,18 +26,17 @@ can make a source-level decision without suppressing unresolved analysis.
 
 ## Detached workspace with reviewed external paths
 
-The Kafkars adapter is a separate Cargo workspace whose client dependency is a
-path-pinned sibling checkout. Zrail rejects that root with:
+The Kafkars adapter is a separate Cargo workspace. Its client dependency now
+uses the exact published registry RC and locked checksums; the historical
+external-path escape is gone. Before that cutover zrail rejected its root with:
 
 ```text
 dependency "kafkars": path dependency resolves outside the repository
 ```
 
-That fail-closed behavior is correct for an undeclared path escape. This lab
-also has a narrower legitimate need: analyze a detached subject workspace while
-attesting each external path to the exact repository and revision recorded in
-`dependencies/sibling-revisions.env`. Until zrail can model that boundary, the
-adapter cannot receive zrail's dependency layers, macro provenance, source
+That fail-closed behavior was correct for an undeclared path escape. The adapter
+remains excluded from the harness workspace because its subject graph has a
+separate authority boundary. It does not receive zrail's dependency layers, macro provenance, source
 scopes, or content-bound ratchets. The companion checker covers module
 contracts, facade shape, sibling tests, lint floors, and file budgets, but it
 does not claim equivalent macro or capability analysis.

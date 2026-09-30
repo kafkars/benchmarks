@@ -6,7 +6,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use kafkars::{BatchResult, Client, NewTopic, TopicDescription};
+use kafkars::{
+    Client,
+    admin::{BatchResult, NewTopic, TopicDescription},
+};
 
 use crate::arguments::{TopicArgs, TopicDeletionArgs};
 

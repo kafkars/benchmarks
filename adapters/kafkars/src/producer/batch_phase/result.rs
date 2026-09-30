@@ -3,7 +3,10 @@
 use std::{error::Error, sync::Arc, time::Instant};
 
 use bytes::Bytes;
-use kafkars::{ErrorKind, Record, SendBatchResult};
+use kafkars::{
+    error::ErrorKind,
+    producer::{Record, SendBatchResult},
+};
 
 use crate::payload;
 
@@ -99,7 +102,7 @@ pub(in crate::producer) fn records(
 
 fn record_terminals(
     result: &mut PhaseResult,
-    deliveries: Vec<Result<kafkars::RecordMetadata, kafkars::KafkaError>>,
+    deliveries: Vec<Result<kafkars::producer::RecordMetadata, kafkars::Error>>,
     slot: &BatchSlot,
     started: Instant,
     completed: Instant,
