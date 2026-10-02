@@ -9,11 +9,19 @@ broker faults. No public performance or production-support claim is produced.
 import argparse
 import csv
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 from pathlib import Path
 import re
 import sys
 import tomllib
+
+sys.dont_write_bytecode = True
+loader = importlib.machinery.SourceFileLoader("qualified_candidate", str(Path(__file__).with_name("prepare-qualified-candidate")))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+candidate = importlib.util.module_from_spec(spec)
+loader.exec_module(candidate)
 
 
 def read_json(path):
@@ -101,6 +109,9 @@ def check_storage(directory, duration):
 def grade(directory):
     inventory(directory)
     plan = tomllib.loads((directory / "plan.toml").read_text())
+    qualified = plan.pop("qualified_candidate", 0)
+    if type(qualified) is not int or qualified not in [0, 1]:
+        raise ValueError("invalid candidate provenance requirement")
     required = {"duration_seconds", "rate", "sample_interval_seconds", "fault_interval_seconds",
                 "rss_limit_bytes", "rss_growth_bytes", "fd_growth", "thread_growth",
                 "post_warmup_seconds", "max_sample_gap_seconds"}
@@ -116,6 +127,12 @@ def grade(directory):
     if len(bundles) != 1:
         raise ValueError("expected exactly one sealed native attempt")
     bundle = bundles[0].parent
+    candidate_revision = None
+    if qualified:
+        proof = candidate.verify_observed(directory, bundle)
+        candidate_revision = proof["source_revision"]
+    elif (directory / "candidate-provenance.json").exists():
+        raise ValueError("candidate proof was not required by the declared campaign")
     classification = read_json(bundles[0])
     if classification["run_valid"] is not True or read_json(bundle / "status.json")["execution_status"] != "complete":
         raise ValueError("native benchmark or independent broker read-back failed")
@@ -190,6 +207,7 @@ def grade(directory):
             "sample_count": len(samples), "recovered_broker_restarts": len(faults), "peak_rss_bytes": peak_rss,
             "produce_request_record_attempts": native["delta"]["records"],
             "broker_storage_readiness_recorded": storage_recorded,
+            "qualified_candidate_revision": candidate_revision,
             "performance_claim_eligible": False, "production_supported": False}
 
 

@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""Bind a detached adapter to the exact packaged, qualified source preview.
+
+Registry mode is untouched. Candidate preparation never changes a tracked
+manifest or lock, publishes a package, or makes a performance/support claim.
+Its package pins come from the sealed 21-cell qualification, not a build result.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import time
+import tomllib
+
+ROOT = Path(__file__).resolve().parent.parent
+REVISION = "dda2545701ae016544c2eb170cc28b5b86204391"
+DRIVER_REVISION = "f538d3e52a423be3b06a80cd836d8b6e7fa812e5"
+WIRE_REVISION = "3a2a93a706cdd2d4b65b248cddde1b35a1b76dab"
+SOURCE_LOCK_SHA256 = "39c2610c2490038cb18435dc551261220c70aae205584f32699a6be5c0eafed0"
+PACKAGES = {
+    "kafka-client-core": "e8871864658adc561479625e84185c541d43d115cd7d6de7f732a952ef5ab1c8",
+    "kafka-client-engine": "bc2b14f0bd727990188bba774806cfae4411e03eea0d1f767a04053ac0d7c267",
+    "kafkars": "b1428e731ee07d96306439da1849ca2b3e2777299deb925be0d9e1d624b5e95f",
+}
+VERSION = "0.0.2-rc.2"
+REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def read_json(path):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+    if path.stat().st_size > 4 * 1024 * 1024:
+        raise ValueError("oversized candidate document")
+    return json.loads(path.read_text(), object_pairs_hook=unique)
+
+
+def source_identity(source):
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(source), *args], text=True, timeout=30).strip()
+    if git("rev-parse", "HEAD") != REVISION:
+        raise ValueError("source is not the exact qualified revision")
+    if git("status", "--porcelain=v1", "--untracked-files=all"):
+        raise ValueError("qualified source has working-tree changes")
+    if any(not line.startswith("H ") for line in git("ls-files", "-v", "-f").splitlines()):
+        raise ValueError("qualified source has noncanonical index flags")
+    if digest(source / "Cargo.lock") != SOURCE_LOCK_SHA256:
+        raise ValueError("qualified source lock differs from its reviewed bytes")
+
+
+def closure(lock):
+    packages = lock["package"]
+    def resolve(dependency):
+        parts = dependency.split()
+        found = [item for item in packages if item["name"] == parts[0]
+                 and (len(parts) == 1 or item["version"] == parts[1])]
+        if len(found) != 1:
+            raise ValueError(f"ambiguous or missing dependency: {dependency}")
+        return found[0]
+    pending = [resolve("kafkars")]
+    reached = {}
+    while pending:
+        package = pending.pop()
+        identity = (package["name"], package["version"])
+        if identity in reached:
+            continue
+        if len(reached) >= 512:
+            raise ValueError("candidate dependency budget exceeded")
+        reached[identity] = {key: package[key] for key in ["name", "version", "source", "checksum"] if key in package}
+        pending.extend(resolve(dependency) for dependency in package.get("dependencies", []))
+    return reached
+
+
+def compare_locks(source_lock, adapter_lock):
+    expected = closure(tomllib.loads(source_lock.read_text()))
+    actual = closure(tomllib.loads(adapter_lock.read_text()))
+    if set(actual) != set(expected):
+        raise ValueError("candidate dependency closure membership differs")
+    for identity, package in actual.items():
+        if expected.get(identity) != package:
+            raise ValueError(f"candidate dependency closure differs: {identity}")
+        if package["name"] in PACKAGES:
+            if package != {"name": package["name"], "version": VERSION}:
+                raise ValueError("candidate native package is not an extracted path")
+        elif package.get("source") != REGISTRY or re.fullmatch(r"[0-9a-f]{64}", package.get("checksum", "")) is None:
+            raise ValueError("candidate transitive dependency is not checksum-bound registry data")
+    if not set(PACKAGES) <= {package["name"] for package in actual.values()}:
+        raise ValueError("candidate native package set is incomplete")
+    return sorted(actual.values(), key=lambda item: (item["name"], item["version"]))
+
+
+def unpack(archive, destination, name):
+    if digest(archive) != PACKAGES[name]:
+        raise ValueError(f"qualified package checksum mismatch: {name}")
+    stem = f"{name}-{VERSION}"
+    with tarfile.open(archive, "r:gz") as contents:
+        members = contents.getmembers()
+        if len(members) > 10000:
+            raise ValueError("candidate archive member budget exceeded")
+        for member in members:
+            path = Path(member.name)
+            if not path.parts or path.parts[0] != stem or path.is_absolute() or ".." in path.parts or not (member.isfile() or member.isdir()):
+                raise ValueError("escaping or nonregular candidate archive member")
+        contents.extractall(destination, members=members, filter="data")
+    vcs = read_json(destination / stem / ".cargo_vcs_info.json")
+    if vcs["git"]["sha1"] != REVISION or vcs["git"].get("dirty", False):
+        raise ValueError("candidate archive does not have the clean qualified identity")
+    return destination / stem
+
+
+def tree_digest(root):
+    result = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise ValueError("nonregular prepared candidate source")
+        if path.is_file():
+            result.update(path.relative_to(root).as_posix().encode() + b"\0" + digest(path).encode() + b"\0")
+    return result.hexdigest()
+
+
+def prepare(source, output):
+    source = source.resolve()
+    source_identity(source)
+    output = output.resolve()
+    if not output.is_relative_to(ROOT / "target/benchmarks"):
+        raise ValueError("candidate output must stay in the lab's ignored build directory")
+    deadline = time.monotonic() + 600
+    def run(argv, quiet=False):
+        subprocess.run(argv, check=True, stdout=subprocess.DEVNULL if quiet else sys.stderr,
+                       timeout=max(0.001, deadline - time.monotonic()))
+    output.mkdir(parents=True, exist_ok=False)
+    target = output / "package-target"
+    run(["rustup", "run", "1.90.0", "cargo", "package", "--manifest-path", str(source / "Cargo.toml"),
+         "--target-dir", str(target), "--locked", "--no-verify",
+         *[argument for name in PACKAGES for argument in ["-p", name]]])
+    sources = output / "sources"
+    sources.mkdir()
+    paths = {name: unpack(target / f"package/{name}-{VERSION}.crate", sources, name) for name in PACKAGES}
+    adapter = output / "adapter"
+    adapter.mkdir()
+    shutil.copytree(ROOT / "adapters/kafkars/src", adapter / "src")
+    manifest = (ROOT / "adapters/kafkars/Cargo.toml").read_text()
+    parsed = tomllib.loads(manifest)
+    if parsed["dependencies"]["kafkars"] != "=" + VERSION or parsed.get("patch") or parsed.get("replace"):
+        raise ValueError("candidate adapter must start from the unchanged registry manifest")
+    old = 'path = "../../crates/bench-schema"'
+    if manifest.count(old) != 1:
+        raise ValueError("detached schema path changed")
+    manifest = manifest.replace(old, "path = " + json.dumps(str(ROOT / "crates/bench-schema")))
+    manifest += "\n[patch.crates-io]\n" + "".join(f'{name} = {{ path = {json.dumps(str(path))} }}\n' for name, path in paths.items())
+    (adapter / "Cargo.toml").write_text(manifest)
+    shutil.copy2(source / "Cargo.lock", output / "source-Cargo.lock")
+    shutil.copy2(source / "Cargo.lock", adapter / "Cargo.lock")
+    run(["cargo", "metadata", "--manifest-path", str(adapter / "Cargo.toml"), "--format-version", "1"], quiet=True)
+    compare_locks(output / "source-Cargo.lock", adapter / "Cargo.lock")
+    source_identity(source)
+    document = {"format_version": 1, "mode": "qualified-packages", "source_revision": REVISION,
+                "qualification_run": 36941212667, "package_sha256": PACKAGES,
+                "source_lock_sha256": SOURCE_LOCK_SHA256, "adapter_lock_sha256": digest(adapter / "Cargo.lock"),
+                "sources_tree_sha256": tree_digest(sources), "adapter_tree_sha256": tree_digest(adapter / "src"),
+                "adapter_manifest_sha256": digest(adapter / "Cargo.toml"),
+                "performance_claim_eligible": False, "production_supported": False}
+    (output / "preparation.json").write_text(json.dumps(document, sort_keys=True) + "\n")
+    return adapter / "Cargo.toml"
+
+
+def attest(prepared, binary, output):
+    document = read_json(prepared / "preparation.json")
+    if tree_digest(prepared / "sources") != document["sources_tree_sha256"] or tree_digest(prepared / "adapter/src") != document["adapter_tree_sha256"]:
+        raise ValueError("prepared source was changed after qualification binding")
+    if digest(prepared / "adapter/Cargo.toml") != document["adapter_manifest_sha256"] or digest(prepared / "adapter/Cargo.lock") != document["adapter_lock_sha256"]:
+        raise ValueError("prepared manifest or lock changed before build attestation")
+    document["binary_sha256"] = digest(binary)
+    document["adapter_manifest_path"] = str((prepared / "adapter/Cargo.toml").resolve())
+    shutil.copy2(prepared / "source-Cargo.lock", output.parent / "candidate-source-Cargo.lock")
+    shutil.copy2(prepared / "adapter/Cargo.lock", output.parent / "candidate-adapter-Cargo.lock")
+    output.write_text(json.dumps(document, sort_keys=True) + "\n")
+    verify(output.parent, document["binary_sha256"])
+
+
+def verify(directory, binary_digest):
+    document = read_json(directory / "candidate-provenance.json")
+    if type(document.get("format_version")) is not int or document.get("format_version") != 1 or document.get("mode") != "qualified-packages" or document.get("source_revision") != REVISION or type(document.get("qualification_run")) is not int or document.get("qualification_run") != 36941212667 or document.get("package_sha256") != PACKAGES:
+        raise ValueError("not the exact qualified packaged candidate")
+    if document.get("performance_claim_eligible") is not False or document.get("production_supported") is not False:
+        raise ValueError("candidate proof cannot widen support or performance claims")
+    if not isinstance(binary_digest, str) or document.get("binary_sha256") != binary_digest or re.fullmatch(r"[0-9a-f]{64}", binary_digest) is None:
+        raise ValueError("candidate proof does not bind the observed subject binary")
+    source_lock = directory / "candidate-source-Cargo.lock"
+    adapter_lock = directory / "candidate-adapter-Cargo.lock"
+    if digest(source_lock) != SOURCE_LOCK_SHA256 or document.get("source_lock_sha256") != SOURCE_LOCK_SHA256 or digest(adapter_lock) != document.get("adapter_lock_sha256"):
+        raise ValueError("candidate proof has altered source or adapter lock bytes")
+    compare_locks(source_lock, adapter_lock)
+    return document
+
+
+def verify_observed(directory, bundle, paired=False):
+    subjects = read_json(bundle / "subjects.lock.json")["subjects"]
+    expected = {"kafkars", "librdkafka-c"} if paired else {"kafkars"}
+    if len(subjects) != len(expected) or {subject["name"] for subject in subjects} != expected:
+        raise ValueError("candidate proof does not have the exact observed subject set")
+    native = next(subject for subject in subjects if subject["name"] == "kafkars")
+    proof = verify(directory, native.get("binary_sha256"))
+    sources = read_json(bundle / "environment.json")["source"]
+    for name, revision in [("kafkars", REVISION), ("kafka_driver", DRIVER_REVISION), ("kafka_wire", WIRE_REVISION)]:
+        source = sources.get(name, {})
+        if source.get("commit") != revision or source.get("dirty") is not False:
+            raise ValueError(f"candidate source observation is missing, dirty or stale: {name}")
+    return proof
+
+
+def verify_bundles(directory, results, expected, seal=False):
+    if directory.is_symlink() or results.is_symlink() or not results.resolve().is_relative_to(directory.resolve()):
+        raise ValueError("paired candidate results must remain inside their evidence directory")
+    if not 1 <= expected <= 9:
+        raise ValueError("paired candidate suite must have 1..9 attempts")
+    locks = list(results.glob("*/*/subjects.lock.json"))
+    if len(locks) != expected:
+        raise ValueError("paired candidate suite has missing or extra sealed attempts")
+    for path in locks:
+        verify_observed(directory, path.parent, paired=True)
+        status = read_json(path.parent / "status.json")
+        classification = read_json(path.parent / "classification.json")
+        if status["execution_status"] != "complete" or classification["run_valid"] is not True:
+            raise ValueError("paired candidate attempt is incomplete or independently invalid")
+    entries = []
+    checksum_path = directory / "candidate-checksums.txt"
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise ValueError("nonregular paired candidate evidence")
+        if path.is_file() and path != checksum_path:
+            entries.append(f"{digest(path)}  {path.relative_to(directory).as_posix()}\n")
+            if len(entries) > 1024:
+                raise ValueError("paired candidate evidence exceeds its file budget")
+    content = "".join(entries)
+    if seal:
+        with checksum_path.open("x") as stream:
+            stream.write(content)
+    elif checksum_path.read_text() != content:
+        raise ValueError("altered or incomplete paired candidate evidence inventory")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("revisions")
+    check = commands.add_parser("source")
+    check.add_argument("--source", type=Path, required=True)
+    build = commands.add_parser("prepare")
+    build.add_argument("--source", type=Path, required=True)
+    build.add_argument("--output", type=Path, required=True)
+    record = commands.add_parser("attest")
+    record.add_argument("--prepared", type=Path, required=True)
+    record.add_argument("--binary", type=Path, required=True)
+    record.add_argument("--output", type=Path, required=True)
+    suite = commands.add_parser("verify-bundles")
+    suite.add_argument("--directory", type=Path, required=True)
+    suite.add_argument("--results", type=Path, required=True)
+    suite.add_argument("--expected", type=int, required=True)
+    suite.add_argument("--seal", action="store_true")
+    args = parser.parse_args()
+    try:
+        if args.command == "revisions":
+            print(f"KAFKARS_REVISION={REVISION}\nKAFKA_DRIVER_REVISION={DRIVER_REVISION}\nKAFKA_PROTOCOL_REVISION={WIRE_REVISION}")
+        elif args.command == "source":
+            source_identity(args.source)
+        elif args.command == "prepare":
+            print(prepare(args.source, args.output))
+        elif args.command == "attest":
+            attest(args.prepared, args.binary, args.output)
+        else:
+            verify_bundles(args.directory, args.results, args.expected, args.seal)
+    except (OSError, ValueError, KeyError, tarfile.TarError, subprocess.SubprocessError) as error:
+        parser.exit(1, f"qualified candidate refusal: {error}\n")
+
+
+if __name__ == "__main__":
+    main()

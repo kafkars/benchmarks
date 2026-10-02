@@ -13,12 +13,17 @@
 # case. A workflow that forgets `path: kafka-benchmarks` on its own checkout
 # gets a hard provenance failure rather than a subtly wrong measurement.
 #
-# The pins are re-parsed here rather than passed in, because the env file is
-# the single source of truth; anything that could drift from it is a second
-# source of truth. Provenance runs last and runs STRICT: in CI a stale sibling
-# is a build error, not a warning.
+# The pins are re-parsed from the registry env file or the explicit candidate
+# preparer's reviewed constants, never supplied by a caller. Provenance runs
+# last and runs STRICT: in CI a stale sibling is a build error, not a warning.
 name: Check out sibling dependencies
 description: Materialize the reviewed public Kafkars, Kafka Driver, and Kafka Wire commits.
+
+inputs:
+  subject:
+    description: Registry RC.2 or the exact qualified packaged candidate.
+    required: false
+    default: registry
 
 runs:
   using: composite
@@ -26,6 +31,8 @@ runs:
     - name: Read reviewed revisions
       id: revisions
       shell: bash
+      env:
+        SUBJECT_MODE: ${{ inputs.subject }}
       run: |
         set -euo pipefail
         revision_file="$GITHUB_ACTION_PATH/../../../dependencies/sibling-revisions.env"
@@ -35,7 +42,16 @@ runs:
             continue
           fi
           revision_lines+=("$line")
-        done < "$revision_file"
+        done < <(
+          if [[ "$SUBJECT_MODE" == qualified-candidate ]]; then
+            python3 "$GITHUB_ACTION_PATH/../../../scripts/prepare-qualified-candidate" revisions
+          elif [[ "$SUBJECT_MODE" == registry ]]; then
+            sed -n '/^[^#]/p' "$revision_file"
+          else
+            echo "unsupported benchmark subject mode" >&2
+            exit 1
+          fi
+        )
         if [[ "${#revision_lines[@]}" -ne 3 ]]; then
           echo "revision file must contain exactly three assignments" >&2
           exit 1
@@ -88,4 +104,11 @@ runs:
       shell: bash
       env:
         CI: "true"
-      run: "$GITHUB_ACTION_PATH/../../../scripts/check-dependency-provenance"
+        SUBJECT_MODE: ${{ inputs.subject }}
+      run: |
+        if [[ "$SUBJECT_MODE" == qualified-candidate ]]; then
+          python3 "$GITHUB_ACTION_PATH/../../../scripts/prepare-qualified-candidate" source \
+            --source "$GITHUB_ACTION_PATH/../../../../kafkars"
+        else
+          "$GITHUB_ACTION_PATH/../../../scripts/check-dependency-provenance"
+        fi

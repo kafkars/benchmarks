@@ -74,13 +74,14 @@ inputs = [
 ]
 
 [tasks.provenance]
-description = "Validate the exact registry closure and reviewed source correspondence."
+description = "Validate exact registry and qualified-package provenance without replacing either mode."
 run = ["bash", "-c", "scripts/check-dependency-provenance-test && scripts/check-dependency-provenance"]
 tools = ["bash", "python3", "git"]
 inputs = [
   "dependencies/sibling-revisions.env",
   "scripts/check-dependency-provenance",
   "scripts/check-dependency-provenance-test",
+  "scripts/prepare-qualified-candidate",
   "adapters/kafkars/Cargo.toml",
   "adapters/kafkars/Cargo.lock",
 ]
@@ -99,6 +100,7 @@ inputs = [
   "dependencies/sibling-revisions.env",
   "scripts/bootstrap-librdkafka",
   "scripts/build-benchmark-adapters",
+  "scripts/prepare-qualified-candidate",
   "scripts/check-benchmarks",
 ]
 
@@ -110,6 +112,7 @@ inputs = [
   "scripts/run-producer-endurance",
   "scripts/verify-producer-endurance",
   "scripts/check-producer-endurance-test",
+  "scripts/prepare-qualified-candidate",
 ]
 
 [tasks.ci-workspace]

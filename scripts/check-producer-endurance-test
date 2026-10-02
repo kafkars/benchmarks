@@ -81,6 +81,36 @@ class EnduranceTest(unittest.TestCase):
         self.assertFalse(verdict["production_supported"])
         self.assertFalse(verdict["performance_claim_eligible"])
 
+    def test_candidate_flag_requires_observed_binary_and_clean_source_proof(self):
+        with (self.root / "plan.toml").open("a") as plan:
+            plan.write("qualified_candidate = 1\n")
+        with self.assertRaises(FileNotFoundError):
+            self.grade()
+        with patch.object(verifier.candidate, "verify_observed", return_value={"source_revision": verifier.candidate.REVISION}) as proof:
+            verdict = self.grade()
+        proof.assert_called_once_with(self.root, self.bundle)
+        self.assertEqual(verdict["qualified_candidate_revision"], verifier.candidate.REVISION)
+        self.assertFalse(verdict["production_supported"])
+        self.assertFalse(verdict["performance_claim_eligible"])
+        with patch.object(verifier.candidate, "verify_observed", side_effect=ValueError("wrong observed binary")):
+            with self.assertRaisesRegex(ValueError, "wrong observed binary"):
+                self.grade()
+
+    def test_candidate_proof_cannot_be_silently_relabelled_as_registry(self):
+        (self.root / "candidate-provenance.json").write_text("{}")
+        with self.assertRaisesRegex(ValueError, "not required"):
+            self.grade()
+
+    def test_candidate_requirement_is_a_strict_versioned_integer_flag(self):
+        for flag in ["true", "2", '"1"']:
+            with self.subTest(flag=flag):
+                path = self.root / "plan.toml"
+                original = path.read_text()
+                path.write_text(original + f"qualified_candidate = {flag}\n")
+                with self.assertRaisesRegex(ValueError, "provenance requirement"):
+                    self.grade()
+                path.write_text(original)
+
     def test_both_restarted_pid_and_reused_pid_are_rejected(self):
         for field, value in [(1, 456), (2, "b" * 64)]:
             with self.subTest(field=field):

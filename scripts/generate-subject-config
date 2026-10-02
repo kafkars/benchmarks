@@ -23,8 +23,8 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 
-if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
-  echo "usage: scripts/generate-subject-config <outdir> [bootstrap]" >&2
+if [ "$#" -lt 1 ] || [ "$#" -gt 3 ]; then
+  echo "usage: scripts/generate-subject-config <outdir> [bootstrap] [qualified-candidate-checkout]" >&2
   exit 64
 fi
 
@@ -33,7 +33,11 @@ bootstrap=${2:-127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094}
 mkdir -p "$outdir"
 
 echo "==> building the adapters"
-binary_root=$("$repo_root/scripts/build-benchmark-adapters")
+build_arguments=()
+if [[ "$#" -eq 3 ]]; then
+  build_arguments=(--qualified-candidate "$3")
+fi
+binary_root=$("$repo_root/scripts/build-benchmark-adapters" "${build_arguments[@]}")
 kafkars_adapter="$binary_root/kafkars-benchmark-adapter"
 librdkafka_producer="$binary_root/librdkafka-producer-benchmark"
 verifier="$binary_root/librdkafka-benchmark-verifier"
@@ -43,6 +47,11 @@ for binary in "$kafkars_adapter" "$librdkafka_producer" "$verifier"; do
     exit 70
   fi
 done
+if [[ "$#" -eq 3 ]]; then
+  for name in candidate-provenance.json candidate-source-Cargo.lock candidate-adapter-Cargo.lock; do
+    cp "$binary_root/$name" "$outdir/$name"
+  done
+fi
 
 echo "==> building the control plane"
 cargo build --locked -p benchctl -p bench-adapter-librdkafka --release

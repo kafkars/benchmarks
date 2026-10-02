@@ -8,6 +8,15 @@ on:
         type: choice
         options: [smoke-1h, segment-4h]
         default: smoke-1h
+      subject:
+        description: Published RC.2 or the exact qualified packaged source preview
+        type: choice
+        options: [registry, qualified-candidate]
+        default: registry
+      paired-suite:
+        description: Also run five diagnostic paired producer attempts after endurance passes
+        type: boolean
+        default: false
 
 # Opt-in, one hosted job at a time. A four-hour phase leaves build, independent
 # read-back, seal and upload headroom below GitHub's six-hour hosted-job ceiling.
@@ -35,14 +44,30 @@ jobs:
           persist-credentials: false
       - name: Check out reviewed archive source identities
         uses: ./kafka-benchmarks/.github/actions/checkout-siblings
+        with:
+          subject: ${{ inputs.subject }}
       - name: Install pinned Rust
         uses: ./kafka-benchmarks/.github/actions/setup-rust
+      - name: Install pinned Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24.19.0"
+          package-manager-cache: false
+      - name: Install the qualified packaging toolchain
+        if: ${{ inputs.subject == 'qualified-candidate' }}
+        run: rustup toolchain install 1.90.0 --profile minimal
       - name: Build and check endurance tools
         id: build
         timeout-minutes: 45
+        env:
+          SUBJECT_MODE: ${{ inputs.subject }}
         run: |
           scripts/check-producer-endurance-test
-          scripts/build-benchmark-adapters
+          arguments=()
+          if [[ "$SUBJECT_MODE" == qualified-candidate ]]; then
+            arguments=(--qualified-candidate "$GITHUB_WORKSPACE/kafkars")
+          fi
+          scripts/check-benchmarks "${arguments[@]}"
           cargo build --locked --release -p benchctl -p bench-adapter-librdkafka
       - name: Start isolated disposable brokers
         run: |
@@ -54,24 +79,39 @@ jobs:
         timeout-minutes: 260
         env:
           ENDURANCE_WINDOW: ${{ inputs.window }}
+          SUBJECT_MODE: ${{ inputs.subject }}
         run: |
           seconds=3600
           if [[ "$ENDURANCE_WINDOW" == segment-4h ]]; then seconds=14400; fi
+          arguments=()
+          if [[ "$SUBJECT_MODE" == qualified-candidate ]]; then arguments=(--qualified-candidate); fi
           scripts/run-producer-endurance \
             --seconds "$seconds" \
             --compose-project "kafkars-endurance-$GITHUB_RUN_ID" \
-            --output "target/endurance/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            --output "target/endurance/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" "${arguments[@]}"
       - name: Independently verify sealed lifetime, resources, and broker records
         if: ${{ !cancelled() && steps.campaign.outcome != 'skipped' }}
         run: >-
           scripts/verify-producer-endurance
           "target/endurance/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+      - name: Run a small diagnostic paired suite on the same stack
+        if: ${{ inputs.paired-suite }}
+        timeout-minutes: 20
+        env:
+          SUBJECT_MODE: ${{ inputs.subject }}
+        run: |
+          arguments=()
+          if [[ "$SUBJECT_MODE" == qualified-candidate ]]; then arguments=("$GITHUB_WORKSPACE/kafkars"); fi
+          scripts/bench-suite-acceptance \
+            127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094 5 "${arguments[@]}"
       - name: Retain only the bounded external evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: producer-endurance-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: kafka-benchmarks/target/endurance/
+          path: |
+            kafka-benchmarks/target/endurance/
+            kafka-benchmarks/target/suite-acceptance.*/
           if-no-files-found: warn
           retention-days: 7
       - name: Remove only this run's synthetic broker cluster

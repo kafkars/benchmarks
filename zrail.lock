@@ -284,7 +284,7 @@ sha256 = "24866c5a65e6a06289cfb5d438f39cbad6b1af6d376a52be14c1708669a7ce6d"
 
 [[gate.input]]
 path = "zcheck.toml"
-sha256 = "d5251b820c25d90f1d41ae0c2d346769a1b397178359c22bbfbf679ba79631fe"
+sha256 = "5d24f5877ff3be1a76465f6d2cafc30d33f078c482a286ee12044ade5675d8b3"
 
 [[ratchet]]
 rule = "rust.file-size"

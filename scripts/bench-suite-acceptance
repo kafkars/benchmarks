@@ -23,7 +23,8 @@ repetitions=${2:-3}
 # ./target looks for binaries cargo never put there. Everything below derives
 # from this one variable for that reason.
 target_dir=${CARGO_TARGET_DIR:-$repo_root/target}
-work="$target_dir/suite-acceptance"
+mkdir -p "$target_dir"
+work=$(mktemp -d "$target_dir/suite-acceptance.XXXXXX")
 results_root="$work/results"
 reports_root="$work/reports"
 scenario="$repo_root/scenarios/producer/legacy-balanced-1k.toml"
@@ -42,8 +43,14 @@ fi
 # The subject list and cluster profile are written by the shared generator, so
 # that this script and the nightly workflow measure the same pair of subjects
 # against the same tools rather than two copies of one heredoc.
-rm -rf "$work"
-"$repo_root/scripts/generate-subject-config" "$work" "$bootstrap"
+if [[ "$#" -gt 3 ]]; then
+  echo "usage: scripts/bench-suite-acceptance [bootstrap] [repetitions] [qualified-candidate-checkout]" >&2
+  exit 64
+elif [[ "$#" -eq 3 ]]; then
+  "$repo_root/scripts/generate-subject-config" "$work" "$bootstrap" "$3"
+else
+  "$repo_root/scripts/generate-subject-config" "$work" "$bootstrap"
+fi
 benchctl="$target_dir/release/benchctl"
 
 echo "==> running $repetitions repetitions"
@@ -191,6 +198,13 @@ while IFS= read -r -d '' status_json; do
     exit 70
   fi
 done < <(find "$results_root" -mindepth 3 -maxdepth 3 -type f -name status.json -print0)
+
+if [[ "$#" -eq 3 ]]; then
+  python3 "$repo_root/scripts/prepare-qualified-candidate" verify-bundles \
+    --directory "$work" --results "$results_root" --expected "$repetitions" --seal
+  python3 "$repo_root/scripts/prepare-qualified-candidate" verify-bundles \
+    --directory "$work" --results "$results_root" --expected "$repetitions"
+fi
 
 echo "bench-suite-acceptance: ok"
 printf '%s\n' "$report_dir"

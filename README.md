@@ -85,6 +85,13 @@ After that gate passes, use `--seconds 86400` and a new output directory locally
 The opt-in Actions workflow permits only one- or four-hour lifetimes, one job
 at a time; segmented runs do not establish continuous 24-hour endurance.
 
+For the qualified source preview, select `subject: qualified-candidate` in that
+existing workflow; `paired-suite: true` adds five diagnostic paired attempts
+after the smoke passes. The lab rebuilds and checks the three exact package
+hashes from `dda2545` qualification, leaves registry mode unchanged, and seals
+the source/adapter locks and observed binary proof externally. This does not
+describe the older published RC.2 or establish production/performance support.
+
 ## Read the results
 
 Suite reports lead with the conclusion:

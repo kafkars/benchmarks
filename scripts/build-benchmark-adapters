@@ -8,10 +8,24 @@ binary_root="$repo_root/target/benchmarks/bin"
 c_root="$repo_root/adapters/librdkafka-c"
 compiler=${CC:-cc}
 
+prepared=""
+mkdir -p "$binary_root"
+if [[ "$#" -eq 2 && "$1" == "--qualified-candidate" ]]; then
+  candidate_root=$(mktemp -d "$repo_root/target/benchmarks/candidate.XXXXXX")
+  prepared="$candidate_root/prepared"
+  rust_manifest=$(python3 "$repo_root/scripts/prepare-qualified-candidate" prepare \
+    --source "$2" --output "$prepared")
+elif [[ "$#" -ne 0 ]]; then
+  echo "usage: scripts/build-benchmark-adapters [--qualified-candidate <clean-checkout>]" >&2
+  exit 64
+fi
+
 "$repo_root/scripts/check-dependency-provenance-test"
 cargo fetch --manifest-path "$rust_manifest" --locked
-"$repo_root/scripts/check-dependency-provenance" \
-  --archives "${CARGO_HOME:-$HOME/.cargo}/registry/cache" >&2
+if [[ -z "$prepared" ]]; then
+  "$repo_root/scripts/check-dependency-provenance" \
+    --archives "${CARGO_HOME:-$HOME/.cargo}/registry/cache" >&2
+fi
 librdkafka_root=$("$repo_root/scripts/bootstrap-librdkafka")
 mkdir -p "$binary_root"
 CARGO_TARGET_DIR="$rust_target" \
@@ -23,6 +37,16 @@ CARGO_TARGET_DIR="$rust_target" \
 install -m 755 \
   "$rust_target/release/kafkars-benchmark-adapter" \
   "$binary_root/kafkars-benchmark-adapter"
+if [[ -n "$prepared" ]]; then
+  python3 "$repo_root/scripts/prepare-qualified-candidate" attest \
+    --prepared "$prepared" --binary "$binary_root/kafkars-benchmark-adapter" \
+    --output "$binary_root/candidate-provenance.json"
+else
+  # Build receipts are unsealed cache outputs, never retained evidence. An old
+  # candidate receipt must not survive replacement with a registry binary.
+  rm -f "$binary_root/candidate-provenance.json" \
+    "$binary_root/candidate-source-Cargo.lock" "$binary_root/candidate-adapter-Cargo.lock"
+fi
 
 common_c_flags=(
   -std=c11

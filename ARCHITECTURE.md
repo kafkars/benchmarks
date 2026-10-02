@@ -207,6 +207,15 @@ checking is strict in CI and advisory locally, because a developer's checkout is
 routinely dirty and a bundle sealed from a dirty tree is diagnostic rather than
 claimable — which the bundle itself records.
 
+An explicit qualified-candidate mode instead rebuilds the three native archives
+from frozen `dda2545`, checks their hashes against its passing Testlab evidence,
+and prepares a detached adapter from those extracted package bytes. The actual
+resolved client closure must match that source lock exactly. Its ephemeral
+manifest, locks, and build receipt stay under `target/`; continuous and paired
+evidence binds the measured binary to that receipt. Registry mode is unchanged,
+and candidate evidence does not describe the older published RC.2 or widen
+production or performance claims.
+
 ## The legacy plane
 
 `legacy/benchctl/` is the Node control plane this repository was extracted from,

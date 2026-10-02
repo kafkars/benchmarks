@@ -11,16 +11,24 @@ from concurrent.futures import ThreadPoolExecutor
 import argparse
 import csv
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import signal
+import shutil
 import subprocess
 import sys
 import time
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.dont_write_bytecode = True
+loader = importlib.machinery.SourceFileLoader("qualified_candidate", str(ROOT / "scripts/prepare-qualified-candidate"))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+candidate = importlib.util.module_from_spec(spec)
+loader.exec_module(candidate)
 SAMPLE_HEADER = ["elapsed_ns", "pid", "birth_identity", "rss_bytes", "threads", "fds"]
 FAULT_HEADER = ["elapsed_ns", "broker", "recovered"]
 
@@ -169,7 +177,13 @@ def prepare(args, directory):
     for path in [binary, verifier, ctl]:
         if not path.is_file() or not os.access(path, os.X_OK):
             raise ValueError(f"missing built binary: {path}")
+    qualified = getattr(args, "qualified_candidate", False)
+    if qualified:
+        candidate.verify(binary.parent, candidate.digest(binary))
     directory.mkdir(parents=True, exist_ok=False)
+    if qualified:
+        for name in ["candidate-provenance.json", "candidate-source-Cargo.lock", "candidate-adapter-Cargo.lock"]:
+            shutil.copy2(binary.parent / name, directory / name)
     (directory / "experiment.toml").write_text(template)
     (directory / "subjects.toml").write_text(f'[[subjects]]\nname = "kafkars"\ncommand = ["{binary}"]\n')
     (directory / "cluster.toml").write_text(f'name = "endurance-compose"\nbootstrap = "{args.bootstrap}"\nbroker_version = "apache/kafka:4.3.1"\nsecurity = "plaintext"\nbrokers = 3\nlifecycle = "externally managed by the caller"\n[tools]\ntopic_create = ["{binary}", "topics-create"]\ntopic_delete = ["{binary}", "topics-delete"]\nverify = ["{verifier}"]\n')
@@ -177,6 +191,8 @@ def prepare(args, directory):
             "fault_interval_seconds": args.fault_interval, "rss_limit_bytes": 512 * 1024 * 1024,
             "rss_growth_bytes": 64 * 1024 * 1024, "fd_growth": 32, "thread_growth": 8,
             "post_warmup_seconds": 60, "max_sample_gap_seconds": 35}
+    if qualified:
+        plan["qualified_candidate"] = 1
     (directory / "plan.toml").write_text("".join(f"{key} = {value}\n" for key, value in plan.items()))
     return binary, ctl
 
@@ -264,6 +280,7 @@ if __name__ == "__main__":
     parser.add_argument("--fault-interval", type=int, default=900)
     parser.add_argument("--bootstrap", default="127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--qualified-candidate", action="store_true", help="require the exact qualified package and observed-binary proof")
     try:
         raise SystemExit(run(parser.parse_args()))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:

@@ -3,7 +3,15 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 manifest="$repo_root/adapters/kafkars/Cargo.toml"
-binary_root=$("$repo_root/scripts/build-benchmark-adapters")
+binary_root=$("$repo_root/scripts/build-benchmark-adapters" "$@")
+if [[ "$#" -ne 0 ]]; then
+  manifest=$(python3 - "$binary_root/candidate-provenance.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as source:
+    print(json.load(source)["adapter_manifest_path"])
+PY
+  )
+fi
 run_id=0123456789abcdef
 export CARGO_TARGET_DIR="$repo_root/target/benchmarks/kafkars-check"
 

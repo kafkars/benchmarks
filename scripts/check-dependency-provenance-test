@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 
@@ -20,6 +21,11 @@ loader = importlib.machinery.SourceFileLoader("provenance", str(path))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 module = importlib.util.module_from_spec(spec)
 loader.exec_module(module)
+
+candidate_loader = importlib.machinery.SourceFileLoader("candidate", str(path.with_name("prepare-qualified-candidate")))
+candidate_spec = importlib.util.spec_from_loader(candidate_loader.name, candidate_loader)
+candidate = importlib.util.module_from_spec(candidate_spec)
+candidate_loader.exec_module(candidate)
 
 
 class ProvenanceTest(unittest.TestCase):
@@ -101,6 +107,181 @@ class ProvenanceTest(unittest.TestCase):
                 packages = self.archives(cache, dirty=dirty, revision=revision)
                 with self.assertRaises(ValueError):
                     module.check_archives(cache, self.pins, packages)
+
+
+class CandidateTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source_lock = self.root / "candidate-source-Cargo.lock"
+        self.adapter_lock = self.root / "candidate-adapter-Cargo.lock"
+        self.lock = [
+            {"name": "kafkars", "version": candidate.VERSION, "dependencies": ["kafka-client-engine"]},
+            {"name": "kafka-client-engine", "version": candidate.VERSION, "dependencies": ["kafka-client-core", "kafka-driver"]},
+            {"name": "kafka-client-core", "version": candidate.VERSION},
+            {"name": "kafka-driver", "version": "0.1.0-rc.8", "source": candidate.REGISTRY, "checksum": "a" * 64},
+        ]
+        self.write_lock(self.source_lock, self.lock)
+        self.write_lock(self.adapter_lock, self.lock)
+
+    def write_lock(self, path, packages):
+        path.write_text("\n".join("[[package]]\n" + "\n".join(f"{key} = {json.dumps(value)}" for key, value in package.items()) for package in packages))
+
+    def proof(self):
+        document = {"format_version": 1, "mode": "qualified-packages", "source_revision": candidate.REVISION,
+                    "qualification_run": 36941212667, "package_sha256": candidate.PACKAGES,
+                    "binary_sha256": "b" * 64, "source_lock_sha256": candidate.digest(self.source_lock),
+                    "adapter_lock_sha256": candidate.digest(self.adapter_lock),
+                    "performance_claim_eligible": False, "production_supported": False}
+        (self.root / "candidate-provenance.json").write_text(json.dumps(document))
+        return document
+
+    def verify(self):
+        with patch.object(candidate, "SOURCE_LOCK_SHA256", candidate.digest(self.source_lock)):
+            return candidate.verify(self.root, "b" * 64)
+
+    def test_exact_candidate_proof_and_complete_dependency_closure_are_accepted(self):
+        self.proof()
+        self.assertEqual(self.verify()["source_revision"], candidate.REVISION)
+        self.assertEqual(len(candidate.compare_locks(self.source_lock, self.adapter_lock)), 4)
+
+    def test_wrong_sha_dirty_source_or_hidden_index_flags_fail_before_output(self):
+        for replies in [["c" * 40], [candidate.REVISION, " M Cargo.toml"], [candidate.REVISION, "", "S src/lib.rs"]]:
+            with self.subTest(replies=replies), patch.object(candidate.subprocess, "check_output", side_effect=replies):
+                with self.assertRaises(ValueError):
+                    candidate.prepare(self.root, self.root / "not-created")
+                self.assertFalse((self.root / "not-created").exists())
+
+    def test_version_checksum_source_and_missing_dependencies_are_refused(self):
+        for key, value in [("version", "0.1.0-rc.7"), ("checksum", "c" * 64), ("source", "git+fake")]:
+            packages = copy.deepcopy(self.lock)
+            packages[-1][key] = value
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.write_lock(self.adapter_lock, packages)
+                candidate.compare_locks(self.source_lock, self.adapter_lock)
+        self.write_lock(self.adapter_lock, self.lock[:-1])
+        with self.assertRaises(ValueError):
+            candidate.compare_locks(self.source_lock, self.adapter_lock)
+
+    def test_native_registry_fallback_and_duplicate_packages_are_refused(self):
+        for packages in [copy.deepcopy(self.lock), self.lock * 2]:
+            if len(packages) == len(self.lock):
+                packages[0].update(source=candidate.REGISTRY, checksum="a" * 64)
+            self.write_lock(self.adapter_lock, packages)
+            with self.assertRaises(ValueError):
+                candidate.compare_locks(self.source_lock, self.adapter_lock)
+
+    def test_proof_cannot_relabel_source_package_binary_or_support(self):
+        for key, value in [("source_revision", "c" * 40), ("mode", "registry"), ("package_sha256", {}),
+                           ("binary_sha256", "c" * 64), ("performance_claim_eligible", True),
+                           ("production_supported", True), ("qualification_run", 1), ("format_version", True)]:
+            document = self.proof()
+            document[key] = value
+            (self.root / "candidate-provenance.json").write_text(json.dumps(document))
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.verify()
+
+    def test_altered_lock_and_duplicate_json_proof_are_refused(self):
+        self.proof()
+        self.adapter_lock.write_text(self.adapter_lock.read_text() + "\n")
+        with self.assertRaises(ValueError):
+            self.verify()
+        (self.root / "candidate-provenance.json").write_text('{"mode":"registry","mode":"qualified-packages"}')
+        with self.assertRaisesRegex(ValueError, "duplicate JSON"):
+            self.verify()
+
+    def test_unreviewed_package_is_refused_before_extraction(self):
+        archive = self.root / "unreviewed.crate"
+        archive.write_bytes(b"not the qualified package")
+        with self.assertRaisesRegex(ValueError, "checksum"):
+            candidate.unpack(archive, self.root / "not-created", "kafkars")
+        self.assertFalse((self.root / "not-created").exists())
+
+    def test_archive_links_absolute_and_parent_paths_are_refused(self):
+        for path, kind in [("/escape", tarfile.REGTYPE), ("kafkars-0.0.2-rc.2/../escape", tarfile.REGTYPE),
+                           ("kafkars-0.0.2-rc.2/link", tarfile.SYMTYPE), ("kafkars-0.0.2-rc.2/link", tarfile.LNKTYPE)]:
+            archive = self.root / "hostile.crate"
+            with tarfile.open(archive, "w:gz") as contents:
+                member = tarfile.TarInfo(path)
+                member.type = kind
+                contents.addfile(member)
+            with self.subTest(path=path, kind=kind), patch.dict(candidate.PACKAGES, {"kafkars": candidate.digest(archive)}):
+                with self.assertRaisesRegex(ValueError, "archive member"):
+                    candidate.unpack(archive, self.root / "not-created", "kafkars")
+                self.assertFalse((self.root / "not-created").exists())
+
+    def test_prepared_source_tree_cannot_hide_symlinks(self):
+        (self.root / "link").symlink_to(self.source_lock)
+        with self.assertRaisesRegex(ValueError, "nonregular"):
+            candidate.tree_digest(self.root)
+
+    def bundle(self):
+        bundle = self.root / "results/experiment/attempt"
+        bundle.mkdir(parents=True)
+        (bundle / "subjects.lock.json").write_text(json.dumps({"subjects": [
+            {"name": "kafkars", "binary_sha256": "b" * 64}, {"name": "librdkafka-c", "binary_sha256": "c" * 64}]}))
+        (bundle / "environment.json").write_text(json.dumps({"source": {
+            "kafkars": {"commit": candidate.REVISION, "dirty": False},
+            "kafka_driver": {"commit": candidate.DRIVER_REVISION, "dirty": False},
+            "kafka_wire": {"commit": candidate.WIRE_REVISION, "dirty": False}}}))
+        (bundle / "status.json").write_text('{"execution_status":"complete"}')
+        (bundle / "classification.json").write_text('{"run_valid":true}')
+        self.proof()
+        return bundle
+
+    def test_paired_proof_is_sealed_once_and_all_observed_binary_identities_match(self):
+        self.bundle()
+        with patch.object(candidate, "SOURCE_LOCK_SHA256", candidate.digest(self.source_lock)):
+            candidate.verify_bundles(self.root, self.root / "results", 1, seal=True)
+            candidate.verify_bundles(self.root, self.root / "results", 1)
+            with self.assertRaises(FileExistsError):
+                candidate.verify_bundles(self.root, self.root / "results", 1, seal=True)
+            with self.assertRaises(ValueError):
+                candidate.verify_bundles(self.root, self.root / "results", 2)
+
+    def test_pair_requires_both_clients_and_complete_independently_valid_results(self):
+        bundle = self.bundle()
+        with patch.object(candidate, "SOURCE_LOCK_SHA256", candidate.digest(self.source_lock)):
+            for name, content in [("classification.json", '{"run_valid":false}'),
+                                  ("status.json", '{"execution_status":"partial"}'),
+                                  ("subjects.lock.json", '{"subjects":[{"name":"kafkars","binary_sha256":"' + 'b' * 64 + '"}]}')]:
+                path = bundle / name
+                before = path.read_text()
+                path.write_text(content)
+                with self.subTest(name=name), self.assertRaises(ValueError):
+                    candidate.verify_bundles(self.root, self.root / "results", 1, seal=True)
+                self.assertFalse((self.root / "candidate-checksums.txt").exists())
+                path.write_text(before)
+
+    def test_pair_cannot_substitute_a_dirty_or_stale_source_observation(self):
+        bundle = self.bundle()
+        path = bundle / "environment.json"
+        observed = json.loads(path.read_text())
+        with patch.object(candidate, "SOURCE_LOCK_SHA256", candidate.digest(self.source_lock)):
+            for name in ["kafkars", "kafka_driver", "kafka_wire"]:
+                for key, value in [("dirty", True), ("commit", "c" * 40)]:
+                    changed = copy.deepcopy(observed)
+                    changed["source"][name][key] = value
+                    path.write_text(json.dumps(changed))
+                    with self.subTest(name=name, key=key), self.assertRaises(ValueError):
+                        candidate.verify_bundles(self.root, self.root / "results", 1, seal=True)
+
+    def test_pair_inventory_refuses_altered_or_extra_evidence(self):
+        self.bundle()
+        with patch.object(candidate, "SOURCE_LOCK_SHA256", candidate.digest(self.source_lock)):
+            candidate.verify_bundles(self.root, self.root / "results", 1, seal=True)
+            (self.root / "unexpected").write_text("unsealed")
+            with self.assertRaisesRegex(ValueError, "inventory"):
+                candidate.verify_bundles(self.root, self.root / "results", 1)
+
+    def test_pair_results_cannot_escape_the_sealed_directory(self):
+        for results in [self.root.parent, self.root / "link"]:
+            if results.name == "link":
+                results.symlink_to(self.root.parent)
+            with self.subTest(results=results), self.assertRaisesRegex(ValueError, "inside"):
+                candidate.verify_bundles(self.root, results, 1, seal=True)
+            self.assertFalse((self.root / "candidate-checksums.txt").exists())
 
 
 if __name__ == "__main__":
