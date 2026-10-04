@@ -157,7 +157,7 @@ jobs:
       # package-manager-cache is off deliberately: this repository has no
       # lockfile to key a cache on, and the control plane has no dependencies.
       - name: Install pinned Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.19.0"
           package-manager-cache: false
@@ -202,7 +202,7 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: ./kafka-benchmarks/.github/actions/setup-rust
       - name: Install pinned Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.19.0"
           package-manager-cache: false
@@ -223,7 +223,7 @@ jobs:
       # the script but not this line fails the workspace lane instead of
       # silently serving a build of the previous source.
       - name: Restore the reviewed librdkafka build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             kafka-benchmarks/target/benchmarks/downloads
@@ -297,7 +297,7 @@ jobs:
       - name: Install pinned Rust toolchain
         uses: ./kafka-benchmarks/.github/actions/setup-rust
       - name: Install pinned Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.19.0"
           package-manager-cache: false
@@ -311,7 +311,7 @@ jobs:
       # bytes of the reviewed source checksum fully determine the cached bytes,
       # so there are deliberately no restore-keys.
       - name: Restore the reviewed librdkafka build
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             kafka-benchmarks/target/benchmarks/downloads
