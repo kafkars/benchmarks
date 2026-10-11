@@ -49,7 +49,7 @@ jobs:
       - name: Install pinned Rust
         uses: ./kafka-benchmarks/.github/actions/setup-rust
       - name: Install pinned Node
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.19.0"
           package-manager-cache: false
@@ -106,7 +106,7 @@ jobs:
             127.0.0.1:39092,127.0.0.1:39093,127.0.0.1:39094 5 "${arguments[@]}"
       - name: Retain only the bounded external evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: producer-endurance-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
